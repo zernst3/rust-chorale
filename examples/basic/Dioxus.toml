@@ -1,0 +1,10 @@
+[application]
+name = "basic"
+default_platform = "web"
+
+[web.app]
+title = "chorale — basic example"
+
+[web.watcher]
+reload_html = true
+watch_path = ["src"]

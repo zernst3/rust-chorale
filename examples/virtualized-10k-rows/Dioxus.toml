@@ -1,0 +1,10 @@
+[application]
+name = "virtualized-10k-rows"
+default_platform = "web"
+
+[web.app]
+title = "chorale — 10k rows virtualized"
+
+[web.watcher]
+reload_html = true
+watch_path = ["src"]

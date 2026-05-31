@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = ["chorale-core", "chorale-dioxus", "examples/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+authors = ["Zachary Ernst <zernst3@gmail.com>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/zernst3/rust-chorale"
+homepage = "https://github.com/zernst3/rust-chorale"
+rust-version = "1.78"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"

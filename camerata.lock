@@ -1,0 +1,191 @@
+# camerata.lock — generated. Records installed principles + content hashes.
+# Do not edit by hand; used to detect upstream updates (`camerata outdated`).
+
+[[installed]]
+id = "ARCH-PARALLEL-INDEPENDENT-1"
+hash = "e8bf59611a10ade0"
+
+[[installed]]
+id = "ARCH-TRUNK-SYNC-1"
+hash = "0ac78014bb1a8c5b"
+
+[[installed]]
+id = "ORCH-AUTOCALLS-LEDGER-1"
+hash = "3bea637bbf48c6fa"
+
+[[installed]]
+id = "ORCH-BUDGET-MONITOR-1"
+hash = "3b05453236153db1"
+
+[[installed]]
+id = "ORCH-CLEAR-WINNER-1"
+hash = "fc1c80f2933bed6f"
+
+[[installed]]
+id = "ORCH-CONFLICTING-ROBUSTNESS-1"
+hash = "d68eeb7a323719aa"
+
+[[installed]]
+id = "ORCH-CONFORMANCE-1"
+hash = "dc46c8d844497b17"
+
+[[installed]]
+id = "ORCH-ENV-GATED-QUALITY-1"
+hash = "040d97e05d87a09b"
+
+[[installed]]
+id = "ORCH-MODEL-TIERING-1"
+hash = "d3fb570da9dfe86e"
+
+[[installed]]
+id = "ORCH-NEW-PATH-TESTS-1"
+hash = "5aadbebbe69b6c4a"
+
+[[installed]]
+id = "ORCH-NO-NATURAL-BREAK-1"
+hash = "0e38757e3037cfef"
+
+[[installed]]
+id = "ORCH-NOVELTY-1"
+hash = "1b8001686a083865"
+
+[[installed]]
+id = "ORCH-ONE-WAY-DOOR-1"
+hash = "7eb543d2d7081ade"
+
+[[installed]]
+id = "ORCH-OUTPUT-DIGEST-1"
+hash = "3ea3ef714285dca4"
+
+[[installed]]
+id = "ORCH-PRECISION-RECALL-1"
+hash = "2bee86403ac3520c"
+
+[[installed]]
+id = "ORCH-PREREVIEW-1"
+hash = "ae30e0fd1787b663"
+
+[[installed]]
+id = "ORCH-REVIEWER-SPLIT-1"
+hash = "5a9ffd9df8ff3935"
+
+[[installed]]
+id = "ORCH-TIERED-ESCALATION-1"
+hash = "9f7f163dfd28d819"
+
+[[installed]]
+id = "PROC-AUTO-MERGE-1"
+hash = "9a4146f156c03a05"
+
+[[installed]]
+id = "PROC-CITE-CONVENTION-ID-1"
+hash = "99b373d3b101dc4f"
+
+[[installed]]
+id = "PROC-FEATURE-FLAGS-1"
+hash = "df9b9112bd9af11d"
+
+[[installed]]
+id = "SPIRIT-DOC-DECISIONS-1"
+hash = "37a78981a5102fe2"
+
+[[installed]]
+id = "SPIRIT-FILE-SIZE-1"
+hash = "3b5c477d532df5ef"
+
+[[installed]]
+id = "SPIRIT-OPTIMIZE-1"
+hash = "088dc575fd7ffab9"
+
+[[installed]]
+id = "SPIRIT-ROBUSTNESS-1"
+hash = "242cbf0815710d76"
+
+[[installed]]
+id = "UI-QUERY-LIBRARY-1"
+hash = "7ac30a213e258d3b"
+
+[[installed]]
+id = "UI-UTC-DATES-1"
+hash = "7ad24cb2079ca4f8"
+
+[[installed]]
+id = "RUST-DOMAIN-1"
+hash = "724ef6f603d9a38d"
+
+[[installed]]
+id = "RUST-DOMAIN-2"
+hash = "7886eabdc4948e26"
+
+[[installed]]
+id = "RUST-DOMAIN-3"
+hash = "475d1fcc5248ede4"
+
+[[installed]]
+id = "RUST-DOMAIN-4"
+hash = "d3f61cb168fdb077"
+
+[[installed]]
+id = "RUST-DOMAIN-5"
+hash = "61f58df5e6cd3c2f"
+
+[[installed]]
+id = "RUST-DOMAIN-6"
+hash = "12121c7e30b93fbd"
+
+[[installed]]
+id = "RUST-DIOXUS-1"
+hash = "3904d59595f10efe"
+
+[[installed]]
+id = "RUST-DIOXUS-10"
+hash = "6f9c6aedf57a3a75"
+
+[[installed]]
+id = "RUST-DIOXUS-11"
+hash = "d7f9b02ec6333c0a"
+
+[[installed]]
+id = "RUST-DIOXUS-12"
+hash = "929f845fbeacdd0a"
+
+[[installed]]
+id = "RUST-DIOXUS-13"
+hash = "00f17df6445cb025"
+
+[[installed]]
+id = "RUST-DIOXUS-14"
+hash = "fb803a798888f27e"
+
+[[installed]]
+id = "RUST-DIOXUS-2"
+hash = "e4e5c8af08fc3020"
+
+[[installed]]
+id = "RUST-DIOXUS-3"
+hash = "1fef0fb2aeca29af"
+
+[[installed]]
+id = "RUST-DIOXUS-4"
+hash = "23fc1eb99b21ca30"
+
+[[installed]]
+id = "RUST-DIOXUS-5"
+hash = "fa252bf8f3925b5e"
+
+[[installed]]
+id = "RUST-DIOXUS-6"
+hash = "b89e2d2f3180cff9"
+
+[[installed]]
+id = "RUST-DIOXUS-7"
+hash = "c44325882f160ed7"
+
+[[installed]]
+id = "RUST-DIOXUS-8"
+hash = "e974f068a481036f"
+
+[[installed]]
+id = "RUST-DIOXUS-9"
+hash = "1d512f20ff037c2e"
+

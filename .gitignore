@@ -1,0 +1,14 @@
+/target
+Cargo.lock
+**/*.rs.bk
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Bot-orchestration artifacts. The overnight-chorale routine writes these
+# locally; they hold raw decision ledgers, work-queue state, and pre-launch
+# competitive recon. Belong in the maintainer's environment, not the public
+# repo.
+.overnight-chorale-*
+docs/recon/

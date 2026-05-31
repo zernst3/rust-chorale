@@ -1,0 +1,10 @@
+[application]
+name = "with-selection"
+default_platform = "web"
+
+[web.app]
+title = "chorale — selection example"
+
+[web.watcher]
+reload_html = true
+watch_path = ["src"]

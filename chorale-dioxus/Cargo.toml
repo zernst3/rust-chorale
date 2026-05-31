@@ -1,0 +1,19 @@
+[package]
+name = "chorale-dioxus"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Dioxus adapter for the chorale table library. Renders `chorale-core::TableState` with virtualization, selection, and inline cell renderers."
+readme = "../README.md"
+keywords = ["table", "grid", "dioxus", "headless", "virtualization"]
+categories = ["gui"]
+
+[lints]
+workspace = true
+
+[dependencies]
+chorale-core = { path = "../chorale-core", version = "0.0.1" }
+dioxus = { version = "0.7", default-features = false, features = ["macro", "html", "hooks", "signals", "document"] }

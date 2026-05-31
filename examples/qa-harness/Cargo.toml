@@ -1,0 +1,20 @@
+[package]
+name = "qa-harness"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Web app: run via `dx serve --package qa-harness` (requires dioxus-cli).
+# `cargo clippy --all-targets` uses the web renderer, which compiles on
+# native via wasm-bindgen/web-sys stubs (runtime-only failure on non-WASM).
+
+[lints]
+workspace = true
+
+[dependencies]
+chorale-core = { path = "../../chorale-core", version = "0.0.1" }
+chorale-dioxus = { path = "../../chorale-dioxus", version = "0.0.1" }
+dioxus = { version = "0.7", features = ["web"] }
+getrandom = { version = "0.2", features = ["js"] }
+rand = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["std"] }

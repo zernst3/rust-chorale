@@ -1,0 +1,17 @@
+[package]
+name = "virtualized-10k-rows"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Run with: dx serve --package virtualized-10k-rows
+
+[lints]
+workspace = true
+
+[dependencies]
+chorale-core = { path = "../../chorale-core", version = "0.0.1" }
+chorale-dioxus = { path = "../../chorale-dioxus", version = "0.0.1" }
+dioxus = { version = "0.7", features = ["web"] }
+getrandom = { version = "0.2", features = ["js"] }
+rand = "0.8"

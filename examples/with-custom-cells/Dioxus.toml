@@ -1,0 +1,10 @@
+[application]
+name = "with-custom-cells"
+default_platform = "web"
+
+[web.app]
+title = "chorale — custom cells example"
+
+[web.watcher]
+reload_html = true
+watch_path = ["src"]

@@ -1,0 +1,20 @@
+[package]
+name = "chorale-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Framework-agnostic core for the chorale table library: state, sort, filter, pagination, selection, virtualization. Zero UI deps. Inspired by TanStack Table."
+readme = "../README.md"
+keywords = ["table", "grid", "data-table", "headless", "virtualization"]
+categories = ["gui", "data-structures"]
+
+[lints]
+workspace = true
+
+[dependencies]
+uuid = { version = "1", features = ["v4", "js"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+thiserror = "2"
