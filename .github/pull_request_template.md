@@ -43,6 +43,8 @@
 
 ## Notes for the reviewer
 
-<!-- Anything the AI reviewer or Zach needs to know that isn't obvious
-     from the diff: a non-obvious design choice, a tradeoff considered, a
-     follow-up tracked elsewhere. -->
+<!-- Anything the reviewer needs to know that isn't obvious from the diff:
+     a non-obvious design choice, a tradeoff considered, a follow-up tracked
+     elsewhere. The reviewer is Zach running a Claude review locally on each
+     PR (the .github/workflows/claude-review.yml workflow is currently
+     manual-fire only — see its header for re-enable steps). -->

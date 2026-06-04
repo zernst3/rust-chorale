@@ -1,22 +1,40 @@
-name: Claude code review
+name: Claude code review (manual fire only)
 
 # Implements ORCH-PREREVIEW-1 (every change carries an AI reviewer's verdict
 # into the human review queue) and ORCH-REVIEWER-SPLIT-1 (the reviewer agent
 # is distinct from the author agent: a different prompt, a different model,
 # pointed at the codified architectural commitments).
 #
-# Triggers on every PR open / synchronize / reopen against main. The reviewer
-# reads the diff plus the two CONVENTIONS files at the repo root and posts
-# either an approval, change requests, or an out-of-scope escalation.
+# STATUS (2026-06-03): DISABLED on the automatic PR-trigger. The Anthropic
+# API is metered usage paid against a separate API account from Zach's
+# Claude.ai / Claude Code CLI subscription, and the chorale-orchestration
+# project does not warrant a recurring API spend right now. ORCH-PREREVIEW-1
+# is currently satisfied by Zach running a Claude review locally on each PR
+# using his existing Claude Code subscription (the rule's intent is
+# "AI-reviewed before merge," not specifically "this workflow ran").
 #
-# Prerequisite (one-time setup): the repo needs a secret named
-# ANTHROPIC_API_KEY. Add it at
-# https://github.com/zernst3/rust-chorale/settings/secrets/actions.
+# To re-enable as an automatic gate:
+#   1. Add the `ANTHROPIC_API_KEY` secret at
+#      https://github.com/zernst3/rust-chorale/settings/secrets/actions.
+#   2. Restore the `pull_request` trigger by replacing the
+#      `workflow_dispatch:` block below with:
+#        pull_request:
+#          types: [opened, synchronize, reopened, ready_for_review]
+#          branches: [main]
+#   3. Add `AI architectural review` back to the required status checks in
+#      branch protection (see docs/BRANCH_PROTECTION_SETUP.md).
+#
+# Until then, this file documents the intended reviewer configuration and
+# can be fired manually from the Actions tab via the "Run workflow" button
+# when Zach wants to test it (and is willing to pay the per-run cost).
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to review"
+        required: true
+        type: number
 
 # Skip if the PR is a draft — the bot finishes its work and explicitly marks
 # the PR ready_for_review when it wants the gate to run.
