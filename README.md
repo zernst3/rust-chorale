@@ -1,7 +1,8 @@
 # chorale
 
-A complete Dioxus table component, built on a headless, type-safe table
-core that's portable to other frameworks. Inspired by
+A framework-agnostic, type-safe table library for Rust. Currently ships
+with a Dioxus adapter; adapters for Leptos, Yew, and Sycamore are
+planned for future releases. Inspired by
 [TanStack Table](https://tanstack.com/table).
 
 **On Dioxus today:** `chorale-dioxus` is a working table component you
@@ -10,20 +11,24 @@ range, date range, boolean), pagination, fixed-row-height
 virtualization, selection, custom cells, column resize, CSV export. All
 the v0.1 features ship ready, no separate rendering work.
 
-**On Leptos, Yew, egui, or somewhere else:** `chorale-core` is the same
-table logic without any rendering. Pair it with a thin per-framework
-adapter and you have a working table without reimplementing the state
-machine.
+**Other frameworks (planned, not shipping yet):** `chorale-leptos`,
+`chorale-yew`, and `chorale-sycamore` are reserved on crates.io as
+`0.0.0` placeholders. The Leptos adapter is on the v0.2 roadmap; Yew
+and Sycamore adapters are planned for later releases. Until each
+adapter ships, `chorale-core` (the framework-agnostic logic crate) can
+be depended on directly if you want to write the rendering layer
+yourself, but no framework other than Dioxus has a ready table
+component today.
 
 > **A note on "headless":** chorale uses the term in the
 > [TanStack](https://tanstack.com/table) /
 > [Radix UI](https://www.radix-ui.com/) sense, where it means the
 > library's logic (sort, filter, paginate, virtualize, select) lives in
-> a separate crate from any rendering, so the logic stays reusable
-> across UI frameworks. This is a different meaning from the Rust infra
-> / web-scraping world where "headless" means "no display server."
-> Sorry for the collision; if you're here from infra, you're in the
-> right place anyway.
+> a separate crate from any rendering, so the same logic can power
+> adapters for different UI frameworks as those adapters get written.
+> This is a different meaning from the Rust infra / web-scraping world
+> where "headless" means "no display server." Sorry for the collision;
+> if you're here from infra, you're in the right place anyway.
 
 ## Status
 
