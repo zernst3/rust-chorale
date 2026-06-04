@@ -107,6 +107,34 @@ Variable-row-height virtualization (measure-and-cache) is **deferred to v0.2** p
 
 ---
 
+## PERF-1: fine-grained reactivity for the filter/sort/paginate pipeline
+
+The `view` memo in `chorale-dioxus` subscribes to a `view_key` intermediate
+memo (page, page_size, sort, filters, rows.len()) rather than the full
+`Signal<TableState>`. Scroll events, column resizes, and selection changes
+do NOT trigger the expensive filter+sort+paginate pipeline.
+
+**Why:** at 1M rows, a full pipeline re-run on each scroll event allocates ~30 MB
+per tick and runs O(n log n) sort work unnecessarily. The two-level memo pattern
+keeps the common scroll path at O(1) (only the virtual-window geometry changes).
+See `docs/perf-2026-06-04-fine-grained-reactivity.md` for full rationale.
+
+**How to apply:** when adding new fields to `TableState`, update the `view_key`
+memo in `components.rs` if the field affects `visible_view` output. Do NOT add
+fields that only affect rendering or virtualization geometry (e.g. `scroll_top`,
+`viewport_height`, `column_widths`).
+
+**Known limitation:** `update_row` transitions that change a row's value without
+changing `rows.len()` do not trigger an immediate view recompute via `view_key`.
+The view re-syncs on the next sort/filter/page change. Acceptable tradeoff for
+the common-case scroll performance gain.
+
+Established 2026-06-04, v0.2.0 Item 5. Auto-call under clear-winner test
+(Strategy 2 beats Strategy 1 on DEPS-1 and CHORALE-CORE-2; no public API
+surface change).
+
+---
+
 ## Adding new rules
 
 New rule IDs follow the pattern `<SCOPE>-<TOPIC>-<NUMBER>` (e.g. `CHORALE-CORE-3`, `CHORALE-DIOXUS-2`, `ROBUSTNESS-2`). Append the rule to the appropriate section, write the auto-calls ledger entry, cite the ID in the commit that first applies it.

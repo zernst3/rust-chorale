@@ -88,23 +88,31 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
         )
     });
 
-    // PERF: Single-pass filtered+sorted+paginated view, memoized so multiple
-    // consumers (window math + row/id slicing + select-all check) share the
-    // same Vec. Before this memo existed, the component called
-    // visible_window_for_state and visible_row_ids independently per render,
-    // each running the full filter-sort-paginate pipeline — so on every
-    // scroll event the 10k-row harness re-sorted 10,000 rows TWICE per tick.
-    // Now the pipeline runs at most once per render and the cheap O(1)
-    // window math is the only thing that runs scroll-after-scroll.
+    // PERF-1: Two-level memo to decouple the expensive pipeline from scroll.
     //
-    // Note: this memo's body still re-runs on every state change (including
-    // scroll) because sig.read() subscribes to the whole TableState signal.
-    // Further optimization — skipping the recompute when only scroll_top
-    // changed — would require either dioxus-stores fine-grained field
-    // reactivity or a peek+manual-key tracking pattern. Tracked for a v0.2
-    // perf pass. The current fix already eliminates the double-pass which
-    // was the dominant cost.
-    let view = use_memo(move || visible_view(&*sig.read()));
+    // view_key tracks only the fields that affect visible_view output:
+    // page, page_size, sort, filters, and row count. When scroll_top (or
+    // viewport_height, row_height, column_widths, selection) changes, this
+    // key runs but returns the same tuple → Dioxus PartialEq short-circuits
+    // → the view memo does NOT re-run the filter+sort+paginate pipeline.
+    //
+    // At 1M rows this eliminates ~30 MB of allocation per scroll tick.
+    // See docs/perf-2026-06-04-fine-grained-reactivity.md for rationale.
+    //
+    // Known limitation: update_row changes a row's value without changing
+    // rows.len(), so view won't recompute immediately. The view re-syncs on
+    // the next sort/filter/page transition. Cell editing is at most one
+    // transition per user interaction, so this tradeoff is acceptable.
+    let view_key = use_memo(move || {
+        let s = sig.read();
+        (s.page, s.page_size, s.sort, s.filters.clone(), s.rows.len())
+    });
+    // sig.peek() reads without subscribing this memo to sig directly;
+    // the dependency flows through view_key only.
+    let view = use_memo(move || {
+        let _key = view_key.read();
+        visible_view(&*sig.peek())
+    });
 
     // Memo over just the page index so `use_effect` re-runs only on page
     // transitions, not on every state change. set_page resets
