@@ -7,6 +7,7 @@ use crate::types::{ColumnId, FilterValue, RowId, SortState};
 /// top/bottom spacer divs should be so the scrollbar reflects the full list.
 ///
 /// Defined in recon-2 § 2.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VirtualWindow {
     /// First row index to render (inclusive), within the post-sort/post-filter

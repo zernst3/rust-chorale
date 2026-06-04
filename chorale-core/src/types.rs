@@ -79,6 +79,7 @@ pub struct SortState {
 /// The variant is paired with a [`crate::column::FilterKind`] on the column
 /// definition: the column declares which UI to render and how to interpret
 /// the filter; the `FilterValue` carries the user's current selection.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub enum FilterValue {
     /// Free-text substring match (case-insensitive). Paired with `FilterKind::Text`.
@@ -105,6 +106,7 @@ pub enum FilterValue {
 }
 
 /// Horizontal alignment for a column's cells and header.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Alignment {
     /// Left-align cell content (the default).
@@ -136,6 +138,7 @@ impl CurrencyCode {
 /// matching, and CSV serialization.
 ///
 /// Defined in recon-2 § 7a.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub enum CellValue {
     /// UTF-8 text.

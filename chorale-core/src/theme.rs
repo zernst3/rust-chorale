@@ -10,6 +10,7 @@ use crate::types::{ColumnId, RowId};
 /// `chorale-cell`).
 ///
 /// Defined in recon-2 § 8a.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Theme {
     /// Injects the built-in light stylesheet on first mount.
@@ -24,6 +25,7 @@ pub enum Theme {
 /// Row metadata passed to `RowClassFn` resolvers.
 ///
 /// Defined in recon-2 § 8b.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct Row<TRow> {
     /// Stable identifier for this row across sort, filter, and pagination.
@@ -43,6 +45,7 @@ pub struct Row<TRow> {
 /// `chorale-core` per CHORALE-CORE-1. This differs from the `CellContext`
 /// shape in recon-2 § 7c (which included `EventHandler<TRow>` and belongs
 /// in `chorale-dioxus`). See auto-call ledger entry 2026-06-03-B.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct CellInfo<'a, TRow> {
     /// Stable identifier for the row containing this cell.

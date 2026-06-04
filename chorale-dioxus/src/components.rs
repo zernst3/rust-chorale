@@ -604,6 +604,7 @@ fn filter_th<TRow: Clone + PartialEq + 'static>(
                 }
             }
         }
+        _ => rsx! { th { style: "{empty_th_style}" } },
     }
 }
 
@@ -1134,6 +1135,7 @@ fn alignment_css(alignment: Alignment) -> &'static str {
         Alignment::Left => "left",
         Alignment::Center => "center",
         Alignment::Right => "right",
+        _ => "left",
     }
 }
 

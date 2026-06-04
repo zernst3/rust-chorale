@@ -1,6 +1,7 @@
 /// Errors that can occur during fallible state transitions.
 ///
 /// Per ROBUSTNESS-1: one variant per distinct failure mode, no catch-all.
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum StateError {
     /// The requested page index exceeds the number of available pages.

@@ -8,6 +8,7 @@ use crate::types::{Alignment, CellValue, ColumnId, CurrencyCode};
 ///
 /// The map key is the string the cell value carries when it is `CellValue::Text`.
 /// `Empty` cells use the `empty_label` / `empty_color` fallback.
+#[non_exhaustive]
 #[derive(Clone, Debug, Default)]
 pub struct BadgeVariantMap {
     /// Map from cell text value to badge display configuration.
@@ -48,6 +49,7 @@ impl BadgeVariantMap {
 ///
 /// `color` is a short token (e.g. `"green"`, `"yellow"`, `"red"`) that the
 /// adapter maps to a CSS class such as `chorale-badge--green`.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BadgeVariant {
     /// Text displayed inside the badge pill.
@@ -83,6 +85,7 @@ impl BadgeVariant {
 ///
 /// The default is `None` so adding a `ColumnDef` without specifying a filter
 /// produces a non-filterable column.
+#[non_exhaustive]
 #[derive(Clone, Debug, Default)]
 pub enum FilterKind {
     /// Column is not filterable. The filter row (if shown) renders an empty cell.
@@ -119,6 +122,7 @@ pub enum FilterKind {
 /// types (`Element`, `EventHandler`) and lives in `chorale-dioxus`
 /// per CHORALE-CORE-1. See recon-2 § 7b (and the CHORALE-CORE-1
 /// auto-call entry 2026-06-03-B).
+#[non_exhaustive]
 #[derive(Clone, Debug, Default)]
 pub enum RenderKind {
     /// Left-aligned plain text; ellipsis on overflow.
