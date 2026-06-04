@@ -1,0 +1,152 @@
+name: Claude code review (manual fire only)
+
+# Implements ORCH-PREREVIEW-1 (every change carries an AI reviewer's verdict
+# into the human review queue) and ORCH-REVIEWER-SPLIT-1 (the reviewer agent
+# is distinct from the author agent: a different prompt, a different model,
+# pointed at the codified architectural commitments).
+#
+# STATUS (2026-06-03): DISABLED on the automatic PR-trigger. The Anthropic
+# API is metered usage paid against a separate API account from Zach's
+# Claude.ai / Claude Code CLI subscription, and the chorale-orchestration
+# project does not warrant a recurring API spend right now. ORCH-PREREVIEW-1
+# is currently satisfied by Zach running a Claude review locally on each PR
+# using his existing Claude Code subscription (the rule's intent is
+# "AI-reviewed before merge," not specifically "this workflow ran").
+#
+# To re-enable as an automatic gate:
+#   1. Add the `ANTHROPIC_API_KEY` secret at
+#      https://github.com/zernst3/rust-chorale/settings/secrets/actions.
+#   2. Restore the `pull_request` trigger by replacing the
+#      `workflow_dispatch:` block below with:
+#        pull_request:
+#          types: [opened, synchronize, reopened, ready_for_review]
+#          branches: [main]
+#   3. Add `AI architectural review` back to the required status checks in
+#      branch protection (see docs/BRANCH_PROTECTION_SETUP.md).
+#
+# Until then, this file documents the intended reviewer configuration and
+# can be fired manually from the Actions tab via the "Run workflow" button
+# when Zach wants to test it (and is willing to pay the per-run cost).
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to review"
+        required: true
+        type: number
+
+# Skip if the PR is a draft — the bot finishes its work and explicitly marks
+# the PR ready_for_review when it wants the gate to run.
+jobs:
+  review:
+    name: AI architectural review
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Claude review
+        uses: anthropics/claude-code-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # ORCH-REVIEWER-SPLIT-1: reviewer model is intentionally Opus-class
+          # while author work is Sonnet (per the routine prompt). The split
+          # in CAPABILITY (different model tier) plus the split in PROMPT
+          # (this reviewer prompt focuses purely on conformance, not on
+          # producing new code) is the load-bearing separation the rule
+          # requires.
+          model: "claude-opus-4-7"
+          direct_prompt: |
+            You are reviewing a pull request against the chorale headless
+            table library. Your single job is to verify the diff conforms
+            to the architectural commitments codified at the repo root.
+
+            Read these files before the diff:
+            - `AGENTS.md` — prose-tier orchestration and architectural rules.
+            - `CONVENTIONS.md` — structured / mechanical-tier code rules.
+            - `docs/CONVENTIONS.md` — chorale-specific rule library
+              (CHORALE-CORE-1, CHORALE-CORE-2, CHORALE-DIOXUS-1, CC-1,
+              ROBUSTNESS-1, API-1, TESTS-1, DEPS-1, VIRT-1, etc.).
+
+            Then read the PR diff. Evaluate against the following gates,
+            in order:
+
+            1. **CHORALE-CORE-1**: `chorale-core` MUST NOT depend on
+               `dioxus`, `leptos`, `yew`, `egui`, or any rendering
+               framework. If the diff adds any such dep to chorale-core
+               or imports any framework type into chorale-core source,
+               this is a blocking violation.
+
+            2. **CHORALE-CORE-2**: state transitions on `TableState<TRow>`
+               MUST be pure immutable functions. They take
+               `&TableState<TRow>` and return a new `TableState<TRow>`
+               (or `Result<TableState<TRow>, _>`). They MUST NOT mutate
+               the receiver, MUST NOT spawn tasks, MUST NOT take signals,
+               MUST NOT call into a rendering layer. Any `&mut self` on
+               a state transition is a blocking violation.
+
+            3. **API-1**: any change to `pub` re-exports in
+               `chorale-core/src/lib.rs` or `chorale-dioxus/src/lib.rs`
+               (or to a type re-exported from there) is a one-way door.
+               These changes ROUTE to Zach explicitly; flag them in the
+               review and request his attention even if the change looks
+               correct.
+
+            4. **TESTS-1 / ORCH-NEW-PATH-TESTS-1**: every new pure state
+               transition has a unit test in the same crate. Every new
+               code path has at least one test that exercises it. If the
+               diff adds a function whose body is more than a one-line
+               passthrough and the diff does NOT add a test that calls
+               that function, flag it as a blocking violation.
+
+            5. **CC-1 / PROC-CITE-CONVENTION-ID-1**: commits that apply
+               a convention from `docs/CONVENTIONS.md` cite the rule ID
+               in the commit body. If the diff modifies source under
+               `chorale-core/src/` or `chorale-dioxus/src/` and the
+               commit body cites no convention ID, flag as a soft warning
+               (CI's commit-lint workflow already enforces this
+               mechanically; your role is to verify the citation matches
+               what the diff actually does).
+
+            6. **DEPS-1**: any new entry in a `Cargo.toml`'s
+               `[dependencies]` table that did not exist on `main` is a
+               blocking flag. The PR body must justify why standard library
+               is insufficient.
+
+            7. **VIRT-1**: variable-row-height virtualization is deferred
+               to v0.2. If the diff implements variable-height
+               virtualization in any form (measurement caches, binary
+               search across heights, dynamic spacer recompute), flag as
+               out-of-scope for the v0.1.x cycle.
+
+            8. **ROBUSTNESS-1**: when two correct implementations differ,
+               prefer the more explicit one (named struct fields over
+               tuples; distinct error variants over catch-all). Note any
+               opportunity for a robustness improvement, but only block
+               if a clear violation pattern appears (e.g. raw `Uuid`
+               where a `RowId` newtype is the documented form).
+
+            For each finding, format the comment as:
+
+            > **[Rule ID]** — file:line — short summary.
+            >
+            > Explanation in one or two sentences. End with: `Blocking.`
+            > or `Soft warning.`
+
+            At the end of your review, post an overall verdict comment:
+
+            - `Approved` if no blocking findings.
+            - `Changes requested` if any blocking finding.
+            - `Escalated to Zach` if the diff touches public API surface
+              (API-1) or proposes a change to docs/CONVENTIONS.md itself.
+
+            Do NOT propose alternative implementations. Do NOT rewrite
+            code. Your role is verdict + diagnosis, not authorship — that
+            is ORCH-REVIEWER-SPLIT-1.
