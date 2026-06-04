@@ -15,5 +15,5 @@ categories = ["gui"]
 workspace = true
 
 [dependencies]
-chorale-core = { path = "../chorale-core", version = "0.0.1" }
+chorale-core = { path = "../chorale-core", version = "0.1.0" }
 dioxus = { version = "0.7", default-features = false, features = ["macro", "html", "hooks", "signals", "document"] }
