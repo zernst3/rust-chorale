@@ -175,6 +175,77 @@ pub struct ColumnDef<TRow> {
 }
 
 impl<TRow> ColumnDef<TRow> {
+    /// Create a new column with the three required fields. All optional fields
+    /// take sensible defaults; use the builder methods below to override.
+    pub fn new(
+        id: ColumnId,
+        header: impl Into<String>,
+        accessor: impl Fn(&TRow) -> CellValue + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            id,
+            header: header.into(),
+            accessor: Arc::new(accessor),
+            sortable: false,
+            filter: FilterKind::None,
+            initial_width: None,
+            alignment: Alignment::Left,
+            render_kind: RenderKind::Text,
+            header_class: None,
+            cell_class: None,
+        }
+    }
+
+    /// Mark the column as sortable. Headers become clickable in the adapter
+    /// (assuming `sort_enabled` is true on the `Table` component).
+    #[must_use]
+    pub fn sortable(mut self) -> Self {
+        self.sortable = true;
+        self
+    }
+
+    /// Set the column's filter UI / matching kind.
+    #[must_use]
+    pub fn filter(mut self, filter: FilterKind) -> Self {
+        self.filter = filter;
+        self
+    }
+
+    /// Set the column's initial width in pixels. `None` = auto.
+    #[must_use]
+    pub fn initial_width(mut self, width: f64) -> Self {
+        self.initial_width = Some(width);
+        self
+    }
+
+    /// Set the column's text alignment.
+    #[must_use]
+    pub fn alignment(mut self, alignment: Alignment) -> Self {
+        self.alignment = alignment;
+        self
+    }
+
+    /// Set the column's render kind.
+    #[must_use]
+    pub fn render_kind(mut self, render_kind: RenderKind) -> Self {
+        self.render_kind = render_kind;
+        self
+    }
+
+    /// Set a static CSS class applied to every header cell of this column.
+    #[must_use]
+    pub fn header_class(mut self, class: impl Into<String>) -> Self {
+        self.header_class = Some(class.into());
+        self
+    }
+
+    /// Set a dynamic CSS class resolver for body cells of this column.
+    #[must_use]
+    pub fn cell_class(mut self, class_fn: crate::theme::CellClassFn<TRow>) -> Self {
+        self.cell_class = Some(class_fn);
+        self
+    }
+
     /// True if the column has any filter UI configured (anything other than
     /// `FilterKind::None`).
     #[must_use]
