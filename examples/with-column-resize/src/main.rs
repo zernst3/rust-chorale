@@ -11,7 +11,6 @@ use chorale_core::{
 };
 use chorale_dioxus::{use_table, Table};
 use dioxus::prelude::*;
-use std::sync::Arc;
 
 #[derive(Clone, PartialEq)]
 struct Invoice {
@@ -46,54 +45,31 @@ fn invoices() -> Vec<(RowId, Invoice)> {
 
 fn columns() -> Vec<ColumnDef<Invoice>> {
     vec![
-        ColumnDef {
-            id: ColumnId("number"),
-            header: "Invoice #".into(),
-            accessor: Arc::new(|i: &Invoice| CellValue::Text(i.number.clone())),
-            sortable: true,
-            filter: FilterKind::Text,
-            initial_width: Some(110.0),
-            alignment: Alignment::Left,
-            render_kind: RenderKind::Text,
-            header_class: None,
-            cell_class: None,
-        },
-        ColumnDef {
-            id: ColumnId("customer"),
-            header: "Customer".into(),
-            accessor: Arc::new(|i: &Invoice| CellValue::Text(i.customer.clone())),
-            sortable: true,
-            filter: FilterKind::Text,
-            initial_width: Some(160.0),
-            alignment: Alignment::Left,
-            render_kind: RenderKind::Text,
-            header_class: None,
-            cell_class: None,
-        },
-        ColumnDef {
-            id: ColumnId("line_item"),
-            header: "Line item".into(),
-            accessor: Arc::new(|i: &Invoice| CellValue::Text(i.line_item.clone())),
-            sortable: true,
-            filter: FilterKind::Text,
-            initial_width: Some(220.0),
-            alignment: Alignment::Left,
-            render_kind: RenderKind::Text,
-            header_class: None,
-            cell_class: None,
-        },
-        ColumnDef {
-            id: ColumnId("amount"),
-            header: "Amount".into(),
-            accessor: Arc::new(|i: &Invoice| CellValue::Integer(i.amount)),
-            sortable: true,
-            filter: FilterKind::None,
-            initial_width: Some(140.0),
-            alignment: Alignment::Right,
-            render_kind: RenderKind::Currency(CurrencyCode::USD),
-            header_class: None,
-            cell_class: None,
-        },
+        ColumnDef::new(ColumnId("number"), "Invoice #", |i: &Invoice| {
+            CellValue::Text(i.number.clone())
+        })
+        .sortable()
+        .filter(FilterKind::Text)
+        .initial_width(110.0),
+        ColumnDef::new(ColumnId("customer"), "Customer", |i: &Invoice| {
+            CellValue::Text(i.customer.clone())
+        })
+        .sortable()
+        .filter(FilterKind::Text)
+        .initial_width(160.0),
+        ColumnDef::new(ColumnId("line_item"), "Line item", |i: &Invoice| {
+            CellValue::Text(i.line_item.clone())
+        })
+        .sortable()
+        .filter(FilterKind::Text)
+        .initial_width(220.0),
+        ColumnDef::new(ColumnId("amount"), "Amount", |i: &Invoice| {
+            CellValue::Integer(i.amount)
+        })
+        .sortable()
+        .initial_width(140.0)
+        .alignment(Alignment::Right)
+        .render_kind(RenderKind::Currency(CurrencyCode::USD)),
     ]
 }
 

@@ -8,13 +8,17 @@ use crate::types::{Alignment, CellValue, ColumnId, CurrencyCode};
 ///
 /// The map key is the string the cell value carries when it is `CellValue::Text`.
 /// `Empty` cells use the `empty_label` / `empty_color` fallback.
+#[non_exhaustive]
 #[derive(Clone, Debug, Default)]
 pub struct BadgeVariantMap {
+    /// Map from cell text value to badge display configuration.
     pub variants: HashMap<String, BadgeVariant>,
+    /// Variant used when the cell value is not in `variants`.
     pub fallback: Option<BadgeVariant>,
 }
 
 impl BadgeVariantMap {
+    /// Create an empty `BadgeVariantMap`.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -45,13 +49,17 @@ impl BadgeVariantMap {
 ///
 /// `color` is a short token (e.g. `"green"`, `"yellow"`, `"red"`) that the
 /// adapter maps to a CSS class such as `chorale-badge--green`.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BadgeVariant {
+    /// Text displayed inside the badge pill.
     pub label: String,
+    /// CSS color token (e.g. `"green"`, `"red"`) used by the adapter to apply a style.
     pub color: String,
 }
 
 impl BadgeVariant {
+    /// Create a `BadgeVariant` from a label and a color token.
     #[must_use]
     pub fn new(label: impl Into<String>, color: impl Into<String>) -> Self {
         Self {
@@ -77,6 +85,7 @@ impl BadgeVariant {
 ///
 /// The default is `None` so adding a `ColumnDef` without specifying a filter
 /// produces a non-filterable column.
+#[non_exhaustive]
 #[derive(Clone, Debug, Default)]
 pub enum FilterKind {
     /// Column is not filterable. The filter row (if shown) renders an empty cell.
@@ -86,11 +95,21 @@ pub enum FilterKind {
     Text,
     /// User picks zero or more values from a fixed option set. An empty
     /// selection passes all rows.
-    MultiSelect { options: Vec<String> },
+    MultiSelect {
+        /// The list of allowed option strings shown in the filter dropdown.
+        options: Vec<String>,
+    },
     /// Numeric range bounded by `min..=max` with the given UI step.
     /// `min` / `max` configure the slider extents AND the default unset state
     /// (an unset filter equals `NumericRange { min: None, max: None }`).
-    NumericRange { min: f64, max: f64, step: f64 },
+    NumericRange {
+        /// Inclusive lower bound of the slider range.
+        min: f64,
+        /// Inclusive upper bound of the slider range.
+        max: f64,
+        /// Step increment for the range-slider UI control.
+        step: f64,
+    },
     /// Date range picker. No bounds — both endpoints are optional.
     DateRange,
     /// Tri-state filter (All / true / false). "All" = no filter active.
@@ -103,6 +122,7 @@ pub enum FilterKind {
 /// types (`Element`, `EventHandler`) and lives in `chorale-dioxus`
 /// per CHORALE-CORE-1. See recon-2 § 7b (and the CHORALE-CORE-1
 /// auto-call entry 2026-06-03-B).
+#[non_exhaustive]
 #[derive(Clone, Debug, Default)]
 pub enum RenderKind {
     /// Left-aligned plain text; ellipsis on overflow.
@@ -129,18 +149,24 @@ pub enum RenderKind {
 ///
 /// Per CHORALE-CORE-1: `ColumnDef` carries no framework types.
 /// Per ROBUSTNESS-1: named struct fields, not a tuple or builder-only API.
+#[non_exhaustive]
 pub struct ColumnDef<TRow> {
+    /// Unique identifier for this column. Must be unique within a table.
     pub id: ColumnId,
+    /// Text displayed in the column's header cell.
     pub header: String,
     /// Extract the cell value for this column from a row.
     pub accessor: Arc<dyn Fn(&TRow) -> CellValue + Send + Sync>,
+    /// Whether the column header is clickable to sort the table by this column.
     pub sortable: bool,
     /// Filter UI and matching strategy for this column. Defaults to
     /// `FilterKind::None` (not filterable).
     pub filter: FilterKind,
     /// Override the column's starting width in px. `None` = auto.
     pub initial_width: Option<f64>,
+    /// Horizontal text alignment for this column's header and body cells.
     pub alignment: Alignment,
+    /// How the adapter renders cell values for this column by default.
     pub render_kind: RenderKind,
     /// Optional static CSS class applied to every header cell of this column.
     pub header_class: Option<String>,
@@ -150,6 +176,77 @@ pub struct ColumnDef<TRow> {
 }
 
 impl<TRow> ColumnDef<TRow> {
+    /// Create a new column with the three required fields. All optional fields
+    /// take sensible defaults; use the builder methods below to override.
+    pub fn new(
+        id: ColumnId,
+        header: impl Into<String>,
+        accessor: impl Fn(&TRow) -> CellValue + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            id,
+            header: header.into(),
+            accessor: Arc::new(accessor),
+            sortable: false,
+            filter: FilterKind::None,
+            initial_width: None,
+            alignment: Alignment::Left,
+            render_kind: RenderKind::Text,
+            header_class: None,
+            cell_class: None,
+        }
+    }
+
+    /// Mark the column as sortable. Headers become clickable in the adapter
+    /// (assuming `sort_enabled` is true on the `Table` component).
+    #[must_use]
+    pub fn sortable(mut self) -> Self {
+        self.sortable = true;
+        self
+    }
+
+    /// Set the column's filter UI / matching kind.
+    #[must_use]
+    pub fn filter(mut self, filter: FilterKind) -> Self {
+        self.filter = filter;
+        self
+    }
+
+    /// Set the column's initial width in pixels. `None` = auto.
+    #[must_use]
+    pub fn initial_width(mut self, width: f64) -> Self {
+        self.initial_width = Some(width);
+        self
+    }
+
+    /// Set the column's text alignment.
+    #[must_use]
+    pub fn alignment(mut self, alignment: Alignment) -> Self {
+        self.alignment = alignment;
+        self
+    }
+
+    /// Set the column's render kind.
+    #[must_use]
+    pub fn render_kind(mut self, render_kind: RenderKind) -> Self {
+        self.render_kind = render_kind;
+        self
+    }
+
+    /// Set a static CSS class applied to every header cell of this column.
+    #[must_use]
+    pub fn header_class(mut self, class: impl Into<String>) -> Self {
+        self.header_class = Some(class.into());
+        self
+    }
+
+    /// Set a dynamic CSS class resolver for body cells of this column.
+    #[must_use]
+    pub fn cell_class(mut self, class_fn: crate::theme::CellClassFn<TRow>) -> Self {
+        self.cell_class = Some(class_fn);
+        self
+    }
+
     /// True if the column has any filter UI configured (anything other than
     /// `FilterKind::None`).
     #[must_use]

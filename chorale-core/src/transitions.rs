@@ -11,22 +11,32 @@ use crate::types::{ColumnId, FilterValue, RowId, SortDirection, SortState};
 /// Cycle through sort states for `col`: none → ASC → DESC → none.
 ///
 /// If a different column is currently sorted, replaces it with ASC on `col`.
-/// Resets `scroll_top` to 0.0 so virtualization re-anchors after reorder
-/// (recon-2 § 5).
+/// Resets `scroll_top` and `page` to 0 so virtualization re-anchors after
+/// reorder (recon-2 § 5).
+///
+/// # Example
+///
+/// ```rust
+/// use chorale_core::{TableState, ColumnId, toggle_sort};
+///
+/// let state: TableState<String> = TableState::new(vec![], vec![]);
+/// // First toggle: no sort → ASC.
+/// let s1 = toggle_sort(&state, ColumnId("name"));
+/// assert!(!s1.sort.is_empty());
+/// // Second toggle: ASC → DESC.
+/// let s2 = toggle_sort(&s1, ColumnId("name"));
+/// // Third toggle: DESC → none.
+/// let s3 = toggle_sort(&s2, ColumnId("name"));
+/// assert!(s3.sort.is_empty());
+/// ```
 #[must_use]
 pub fn toggle_sort<TRow: Clone>(state: &TableState<TRow>, col: ColumnId) -> TableState<TRow> {
-    let next_sort = match &state.sort {
+    let next_sort = match state.sort.first() {
         Some(s) if s.column == col => match s.direction {
-            SortDirection::Asc => Some(SortState {
-                column: col,
-                direction: SortDirection::Desc,
-            }),
-            SortDirection::Desc => None,
+            SortDirection::Asc => vec![SortState::new(col, SortDirection::Desc)],
+            SortDirection::Desc => vec![],
         },
-        _ => Some(SortState {
-            column: col,
-            direction: SortDirection::Asc,
-        }),
+        _ => vec![SortState::new(col, SortDirection::Asc)],
     };
     TableState {
         sort: next_sort,
@@ -41,6 +51,21 @@ pub fn toggle_sort<TRow: Clone>(state: &TableState<TRow>, col: ColumnId) -> Tabl
 /// `filter = None` removes any existing filter on the column.
 /// Resets `scroll_top` and `page` to 0 because the row count may change
 /// (recon-2 § 5).
+///
+/// # Example
+///
+/// ```rust
+/// use chorale_core::{TableState, ColumnId, FilterValue, set_filter};
+///
+/// let state: TableState<String> = TableState::new(vec![], vec![]);
+/// // Apply a text filter.
+/// let filtered = set_filter(&state, ColumnId("name"), Some(FilterValue::Text("alice".into())));
+/// assert!(filtered.filters.contains_key(&ColumnId("name")));
+/// assert_eq!(filtered.page, 0);
+/// // Clear it.
+/// let cleared = set_filter(&filtered, ColumnId("name"), None);
+/// assert!(cleared.filters.is_empty());
+/// ```
 #[must_use]
 pub fn set_filter<TRow: Clone>(
     state: &TableState<TRow>,
@@ -247,7 +272,6 @@ pub fn update_row<TRow: Clone>(
 )]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     use super::*;
     use crate::column::ColumnDef;
@@ -271,30 +295,18 @@ mod tests {
 
     fn make_columns() -> Vec<ColumnDef<TestRow>> {
         vec![
-            ColumnDef {
-                id: col_name(),
-                header: "Name".into(),
-                accessor: Arc::new(|r: &TestRow| CellValue::Text(r.name.clone())),
-                sortable: true,
-                filter: crate::column::FilterKind::Text,
-                initial_width: None,
-                alignment: Alignment::Left,
-                render_kind: crate::column::RenderKind::Text,
-                header_class: None,
-                cell_class: None,
-            },
-            ColumnDef {
-                id: col_score(),
-                header: "Score".into(),
-                accessor: Arc::new(|r: &TestRow| CellValue::Float(r.score)),
-                sortable: true,
-                filter: crate::column::FilterKind::Text,
-                initial_width: None,
-                alignment: Alignment::Right,
-                render_kind: crate::column::RenderKind::Number,
-                header_class: None,
-                cell_class: None,
-            },
+            ColumnDef::new(col_name(), "Name", |r: &TestRow| {
+                CellValue::Text(r.name.clone())
+            })
+            .sortable()
+            .filter(crate::column::FilterKind::Text),
+            ColumnDef::new(col_score(), "Score", |r: &TestRow| {
+                CellValue::Float(r.score)
+            })
+            .sortable()
+            .filter(crate::column::FilterKind::Text)
+            .alignment(Alignment::Right)
+            .render_kind(crate::column::RenderKind::Number),
         ]
     }
 
@@ -325,7 +337,7 @@ mod tests {
         TableState {
             rows,
             columns: make_columns(),
-            sort: None,
+            sort: vec![],
             filters: HashMap::new(),
             selection: vec![],
             page: 0,
@@ -347,10 +359,7 @@ mod tests {
         let s2 = toggle_sort(&s, col_name());
         assert_eq!(
             s2.sort,
-            Some(SortState {
-                column: col_name(),
-                direction: SortDirection::Asc
-            })
+            vec![SortState::new(col_name(), SortDirection::Asc)]
         );
         assert_eq!(s2.scroll_top, 0.0);
         assert_eq!(s2.page, 0);
@@ -363,10 +372,7 @@ mod tests {
         let s2 = toggle_sort(&s, col_name());
         assert_eq!(
             s2.sort,
-            Some(SortState {
-                column: col_name(),
-                direction: SortDirection::Desc
-            })
+            vec![SortState::new(col_name(), SortDirection::Desc)]
         );
     }
 
@@ -376,7 +382,7 @@ mod tests {
         let s = toggle_sort(&s, col_name());
         let s = toggle_sort(&s, col_name());
         let s2 = toggle_sort(&s, col_name());
-        assert_eq!(s2.sort, None);
+        assert!(s2.sort.is_empty());
     }
 
     #[test]
@@ -386,10 +392,7 @@ mod tests {
         let s2 = toggle_sort(&s, col_score());
         assert_eq!(
             s2.sort,
-            Some(SortState {
-                column: col_score(),
-                direction: SortDirection::Asc
-            })
+            vec![SortState::new(col_score(), SortDirection::Asc)]
         );
     }
 
@@ -556,5 +559,29 @@ mod tests {
         };
         let s2 = update_row(&s, unknown, new_row);
         assert_eq!(s2.rows[0].1, s.rows[0].1);
+    }
+
+    // ---- toggle_select_all with active filter ----------------------------
+
+    #[test]
+    fn toggle_select_all_only_selects_visible_page_rows() {
+        // 3 rows, page_size=2 → page 0 has rows[0] and rows[1], page 1 has rows[2].
+        let s = make_state();
+        let mut s2 = s.clone();
+        s2.page_size = 2;
+        let s3 = toggle_select_all(&s2);
+        // Only the first 2 rows (the visible page) should be selected.
+        assert_eq!(s3.selection.len(), 2);
+        assert!(!s3.selection.contains(&s2.rows[2].0));
+    }
+
+    #[test]
+    fn set_scroll_is_idempotent_at_same_position() {
+        // set_scroll with the same value should return a state equal to
+        // calling it once (the transition is deterministic and pure).
+        let s = make_state();
+        let s1 = set_scroll(&s, 100.0);
+        let s2 = set_scroll(&s1, 100.0);
+        assert!((s2.scroll_top - 100.0).abs() < f64::EPSILON);
     }
 }

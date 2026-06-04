@@ -100,6 +100,32 @@ impl<TRow: Clone + 'static> UseTableHandle<TRow> {
         self.try_dispatch(|s| set_column_width(s, col, width_px))
     }
 
+    /// Returns a clone of the current selection as a `Vec<RowId>`.
+    ///
+    /// Convenience over reading `handle.signal().read().selection.clone()`
+    /// directly. Useful for building bulk-action UI in parent components.
+    ///
+    /// ```rust,ignore
+    /// let selected: Vec<RowId> = handle.selected_ids();
+    /// ```
+    #[must_use]
+    pub fn selected_ids(&self) -> Vec<RowId> {
+        self.inner.read().selection.clone()
+    }
+
+    /// Returns the number of currently selected rows.
+    ///
+    /// Equivalent to `handle.selected_ids().len()` but avoids cloning
+    /// the `Vec<RowId>`.
+    ///
+    /// ```rust,ignore
+    /// let count: usize = handle.selection_count();
+    /// ```
+    #[must_use]
+    pub fn selection_count(&self) -> usize {
+        self.inner.read().selection.len()
+    }
+
     /// Update the scroll offset of the virtualized container (px).
     ///
     /// Skips the dispatch entirely when the incoming `scroll_top` already

@@ -54,42 +54,26 @@ fn columns() -> Vec<ColumnDef<Deploy>> {
         .with("failing", BadgeVariant::new("Failing", "red"));
 
     vec![
-        ColumnDef {
-            id: ColumnId("service"),
-            header: "Service".into(),
-            accessor: Arc::new(|d: &Deploy| CellValue::Text(d.service.clone())),
-            sortable: true,
-            filter: FilterKind::Text,
-            initial_width: Some(140.0),
-            alignment: Alignment::Left,
-            render_kind: RenderKind::Text,
-            header_class: None,
-            cell_class: None,
-        },
-        ColumnDef {
-            id: ColumnId("status"),
-            header: "Status".into(),
-            accessor: Arc::new(|d: &Deploy| CellValue::Text(d.status.clone())),
-            sortable: true,
-            filter: FilterKind::None,
-            initial_width: Some(120.0),
-            alignment: Alignment::Center,
-            render_kind: RenderKind::Badge(badges),
-            header_class: None,
-            cell_class: None,
-        },
-        ColumnDef {
-            id: ColumnId("health"),
-            header: "Health".into(),
-            accessor: Arc::new(|d: &Deploy| CellValue::Float(d.health)),
-            sortable: true,
-            filter: FilterKind::None,
-            initial_width: Some(200.0),
-            alignment: Alignment::Right,
-            render_kind: RenderKind::Number,
-            header_class: None,
-            cell_class: None,
-        },
+        ColumnDef::new(ColumnId("service"), "Service", |d: &Deploy| {
+            CellValue::Text(d.service.clone())
+        })
+        .sortable()
+        .filter(FilterKind::Text)
+        .initial_width(140.0),
+        ColumnDef::new(ColumnId("status"), "Status", |d: &Deploy| {
+            CellValue::Text(d.status.clone())
+        })
+        .sortable()
+        .initial_width(120.0)
+        .alignment(Alignment::Center)
+        .render_kind(RenderKind::Badge(badges)),
+        ColumnDef::new(ColumnId("health"), "Health", |d: &Deploy| {
+            CellValue::Float(d.health)
+        })
+        .sortable()
+        .initial_width(200.0)
+        .alignment(Alignment::Right)
+        .render_kind(RenderKind::Number),
     ]
 }
 

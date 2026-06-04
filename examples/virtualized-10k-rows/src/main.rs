@@ -14,7 +14,6 @@ use chorale_core::{
 use chorale_dioxus::{use_table, Table};
 use dioxus::prelude::*;
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use std::sync::Arc;
 
 const SEED: u64 = 42;
 // Intentionally not a round multiple of the default page_size (50) so the
@@ -57,42 +56,25 @@ fn events() -> Vec<(RowId, Event)> {
 
 fn columns() -> Vec<ColumnDef<Event>> {
     vec![
-        ColumnDef {
-            id: ColumnId("id"),
-            header: "Event #".into(),
-            accessor: Arc::new(|e: &Event| CellValue::Integer(e.id)),
-            sortable: true,
-            filter: FilterKind::None,
-            initial_width: Some(120.0),
-            alignment: Alignment::Right,
-            render_kind: RenderKind::Number,
-            header_class: None,
-            cell_class: None,
-        },
-        ColumnDef {
-            id: ColumnId("kind"),
-            header: "Kind".into(),
-            accessor: Arc::new(|e: &Event| CellValue::Text(e.kind.clone())),
-            sortable: true,
-            filter: FilterKind::Text,
-            initial_width: Some(160.0),
-            alignment: Alignment::Left,
-            render_kind: RenderKind::Text,
-            header_class: None,
-            cell_class: None,
-        },
-        ColumnDef {
-            id: ColumnId("actor"),
-            header: "Actor".into(),
-            accessor: Arc::new(|e: &Event| CellValue::Text(e.actor.clone())),
-            sortable: true,
-            filter: FilterKind::Text,
-            initial_width: Some(160.0),
-            alignment: Alignment::Left,
-            render_kind: RenderKind::Text,
-            header_class: None,
-            cell_class: None,
-        },
+        ColumnDef::new(ColumnId("id"), "Event #", |e: &Event| {
+            CellValue::Integer(e.id)
+        })
+        .sortable()
+        .initial_width(120.0)
+        .alignment(Alignment::Right)
+        .render_kind(RenderKind::Number),
+        ColumnDef::new(ColumnId("kind"), "Kind", |e: &Event| {
+            CellValue::Text(e.kind.clone())
+        })
+        .sortable()
+        .filter(FilterKind::Text)
+        .initial_width(160.0),
+        ColumnDef::new(ColumnId("actor"), "Actor", |e: &Event| {
+            CellValue::Text(e.actor.clone())
+        })
+        .sortable()
+        .filter(FilterKind::Text)
+        .initial_width(160.0),
     ]
 }
 

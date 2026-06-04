@@ -1,25 +1,48 @@
 # chorale
 
-A headless, type-safe table library for Rust. Inspired by
-[TanStack Table](https://tanstack.com/table). State and logic are
-framework-agnostic; rendering ships today as a Dioxus adapter, with the same
-core ready for Leptos, Yew, egui, and others to publish against without
-forking.
+A framework-agnostic, type-safe table library for Rust. Currently ships
+with a Dioxus adapter; adapters for Leptos, Yew, and Sycamore are
+planned for future releases. Inspired by
+[TanStack Table](https://tanstack.com/table).
+
+**On Dioxus today:** `chorale-dioxus` is a working table component you
+add to `Cargo.toml` and use. Sort, filter (text, multi-select, numeric
+range, date range, boolean), pagination, fixed-row-height
+virtualization, selection, custom cells, column resize, CSV export. All
+the v0.1 features ship ready, no separate rendering work.
+
+**Other frameworks (planned, not shipping yet):** `chorale-leptos`,
+`chorale-yew`, and `chorale-sycamore` are reserved on crates.io as
+`0.0.0` placeholders. The Leptos adapter is on the v0.2 roadmap; Yew
+and Sycamore adapters are planned for later releases. Until each
+adapter ships, `chorale-core` (the framework-agnostic logic crate) can
+be depended on directly if you want to write the rendering layer
+yourself, but no framework other than Dioxus has a ready table
+component today.
+
+> **A note on "headless":** chorale uses the term in the
+> [TanStack](https://tanstack.com/table) /
+> [Radix UI](https://www.radix-ui.com/) sense, where it means the
+> library's logic (sort, filter, paginate, virtualize, select) lives in
+> a separate crate from any rendering, so the same logic can power
+> adapters for different UI frameworks as those adapters get written.
+> This is a different meaning from the Rust infra / web-scraping world
+> where "headless" means "no display server." Sorry for the collision;
+> if you're here from infra, you're in the right place anyway.
 
 ## Status
 
-Source-complete for v0.1, in a pre-publish verification window. All six
-`chorale-*` crate names are reserved on crates.io as `0.0.0` placeholders
+`chorale-core` v0.1.0 and `chorale-dioxus` v0.1.0 are published. The
+`draft-release/v0.2.0` branch is active; see `CHANGELOG.md` for what has
+shipped so far. All six `chorale-*` crate names are reserved on crates.io:
 ([chorale](https://crates.io/crates/chorale),
 [chorale-core](https://crates.io/crates/chorale-core),
 [chorale-dioxus](https://crates.io/crates/chorale-dioxus),
 [chorale-leptos](https://crates.io/crates/chorale-leptos),
 [chorale-yew](https://crates.io/crates/chorale-yew),
-[chorale-sycamore](https://crates.io/crates/chorale-sycamore)). The real
-`0.1.0` publish of `chorale-core` and `chorale-dioxus` is held pending
-feedback from developers reading this source. Remaining work before
-`0.1.0`: doc-comments on the public surface, a `CHANGELOG`, and the
-publish pass itself.
+[chorale-sycamore](https://crates.io/crates/chorale-sycamore)). The
+`chorale-leptos` adapter is in design and the placeholder will be replaced
+when it ships in v0.2.0.
 
 ## Quickstart
 
@@ -82,8 +105,8 @@ example:
   Page change resets `scroll_top` and the DOM scroll position so the new
   page lands at the top.
 - **Selection.** Per-row checkbox plus a header select-all that toggles only
-  the visible page. Selection state is a `Vec<RowId>` on `TableState`, which
-  the host app can read directly.
+  the visible page. Selection state is a `Vec<RowId>` on `TableState`, readable
+  directly or via `handle.selected_ids()` / `handle.selection_count()`.
 - **Custom cells.** Two paths: declarative `RenderKind::Badge` driven by a
   `BadgeVariantMap`, or `CellRenderers` (a per-column
   `Arc<dyn Fn(&CellValue) -> Element>`) for arbitrary Dioxus markup.
@@ -184,13 +207,13 @@ total_rows, buffer_rows)` and lives in `chorale-core`. The adapter renders a
 Total tbody height equals `total_rows * row_height` independent of which
 window is rendered, so the scrollbar always reflects the full dataset.
 
-**Known residual, v0.2.** The window math is O(1), but the filter / sort /
-paginate pipeline currently recomputes once per render (memoized within a
-render, not across renders). Scroll-only state changes therefore still
-re-run the pipeline. The bottleneck this implies is bounded (the harness
-hits 10 000 rows comfortably), but the principled fix is fine-grained
-reactivity over the `TableState` fields (via `dioxus-stores` or a manual
-keyed-memo pattern). Tracked for v0.2.
+**Fine-grained reactivity (v0.2.0, PERF-1).** The adapter uses a two-level
+memo pattern: a cheap `view_key` memo tracks only the fields that affect
+`visible_view` output (`page`, `page_size`, `sort`, `filters`, `rows.len()`).
+The expensive filter/sort/paginate pipeline subscribes to `view_key`, not
+to the full signal — so scroll and selection events no longer retrigger
+it. At 1 M rows this eliminates ~30 MB of allocation per scroll tick. See
+`docs/perf-2026-06-04-fine-grained-reactivity.md` for the decision record.
 
 Three non-obvious requirements the Dioxus adapter handles for you, all of
 which would also apply to any future adapter:
