@@ -1,10 +1,29 @@
 # chorale
 
-A headless, type-safe table library for Rust. Inspired by
-[TanStack Table](https://tanstack.com/table). State and logic are
-framework-agnostic; rendering ships today as a Dioxus adapter, with the same
-core ready for Leptos, Yew, egui, and others to publish against without
-forking.
+A complete Dioxus table component, built on a headless, type-safe table
+core that's portable to other frameworks. Inspired by
+[TanStack Table](https://tanstack.com/table).
+
+**On Dioxus today:** `chorale-dioxus` is a working table component you
+add to `Cargo.toml` and use. Sort, filter (text, multi-select, numeric
+range, date range, boolean), pagination, fixed-row-height
+virtualization, selection, custom cells, column resize, CSV export. All
+the v0.1 features ship ready, no separate rendering work.
+
+**On Leptos, Yew, egui, or somewhere else:** `chorale-core` is the same
+table logic without any rendering. Pair it with a thin per-framework
+adapter and you have a working table without reimplementing the state
+machine.
+
+> **A note on "headless":** chorale uses the term in the
+> [TanStack](https://tanstack.com/table) /
+> [Radix UI](https://www.radix-ui.com/) sense, where it means the
+> library's logic (sort, filter, paginate, virtualize, select) lives in
+> a separate crate from any rendering, so the logic stays reusable
+> across UI frameworks. This is a different meaning from the Rust infra
+> / web-scraping world where "headless" means "no display server."
+> Sorry for the collision; if you're here from infra, you're in the
+> right place anyway.
 
 ## Status
 
