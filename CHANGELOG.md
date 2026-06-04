@@ -7,11 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_v0.2.0 entries accumulate here as items ship._
+_v0.2.0 entries accumulate here as items ship. Routing items (variable-row-height, in-cell editing, grouping, column reorder, frozen columns, multi-column sort, infinite scroll, chorale-leptos, chorale-derive) await design-memo sign-off and are not yet listed._
 
 ### Added
-- `UseTableHandle::selected_ids() -> Vec<RowId>` — convenience method to read the current selection without reaching into the signal directly.
-- `UseTableHandle::selection_count() -> usize` — convenience method for the selection length.
+
+**`chorale-core`**
+- `#![warn(missing_docs)]` on the crate root; all 50 public items (struct fields, enum variants, associated fns, struct-variant fields) now carry doc-comments.
+- Unit-test coverage target met: 80 tests across `state`, `types`, `transitions`, `views`. Covers sort comparison, filter matching, CSV output, pagination, column visibility, and virtual-window slicing.
+
+**`chorale-dioxus`**
+- `UseTableHandle::selected_ids() -> Vec<RowId>` — read the current selection without reaching into the signal directly.
+- `UseTableHandle::selection_count() -> usize` — selection length without a signal read.
+- `#![warn(missing_docs)]` on the crate root; `CellRenderers::new` and `Table` props are now documented.
+- Unit-test coverage target met: 50 tests covering `cell_text`, `badge_style`, `format_thousands`, `page_button_range`, `col_width_style`, `compute_window_slice`, date/numeric filter helpers, and `visible_view` edge cases.
+- PERF-1 two-level memo: `view_key` tracks the cheap fields (`page`, `page_size`, `sort`, `filters`, `rows.len()`); the expensive `visible_view` pipeline subscribes only to `view_key`, not to the full `Signal`. Scroll and selection changes no longer retrigger the filter/sort/paginate pipeline.
+
+### Documentation
+- `CHANGELOG.md` created with full v0.1.0 backfill.
+- `docs/QA.md` — manual verification guide with 10 sections covering all v0.1 features.
+- `docs/perf-2026-06-04-fine-grained-reactivity.md` — decision record for the PERF-1 two-level memo strategy.
 
 ---
 
