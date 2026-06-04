@@ -70,6 +70,14 @@ pub struct SortState {
     pub direction: SortDirection,
 }
 
+impl SortState {
+    /// Create a new `SortState` for `column` in `direction`.
+    #[must_use]
+    pub fn new(column: ColumnId, direction: SortDirection) -> Self {
+        Self { column, direction }
+    }
+}
+
 /// A filter value that can be applied to a column.
 ///
 /// The filter type is matched against the `CellValue` returned by the
