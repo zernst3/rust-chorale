@@ -22,27 +22,21 @@ use crate::types::{ColumnId, FilterValue, RowId, SortDirection, SortState};
 /// let state: TableState<String> = TableState::new(vec![], vec![]);
 /// // First toggle: no sort → ASC.
 /// let s1 = toggle_sort(&state, ColumnId("name"));
-/// assert!(s1.sort.is_some());
+/// assert!(!s1.sort.is_empty());
 /// // Second toggle: ASC → DESC.
 /// let s2 = toggle_sort(&s1, ColumnId("name"));
 /// // Third toggle: DESC → none.
 /// let s3 = toggle_sort(&s2, ColumnId("name"));
-/// assert!(s3.sort.is_none());
+/// assert!(s3.sort.is_empty());
 /// ```
 #[must_use]
 pub fn toggle_sort<TRow: Clone>(state: &TableState<TRow>, col: ColumnId) -> TableState<TRow> {
-    let next_sort = match &state.sort {
+    let next_sort = match state.sort.first() {
         Some(s) if s.column == col => match s.direction {
-            SortDirection::Asc => Some(SortState {
-                column: col,
-                direction: SortDirection::Desc,
-            }),
-            SortDirection::Desc => None,
+            SortDirection::Asc => vec![SortState::new(col, SortDirection::Desc)],
+            SortDirection::Desc => vec![],
         },
-        _ => Some(SortState {
-            column: col,
-            direction: SortDirection::Asc,
-        }),
+        _ => vec![SortState::new(col, SortDirection::Asc)],
     };
     TableState {
         sort: next_sort,
@@ -356,7 +350,7 @@ mod tests {
         TableState {
             rows,
             columns: make_columns(),
-            sort: None,
+            sort: vec![],
             filters: HashMap::new(),
             selection: vec![],
             page: 0,
@@ -378,10 +372,7 @@ mod tests {
         let s2 = toggle_sort(&s, col_name());
         assert_eq!(
             s2.sort,
-            Some(SortState {
-                column: col_name(),
-                direction: SortDirection::Asc
-            })
+            vec![SortState::new(col_name(), SortDirection::Asc)]
         );
         assert_eq!(s2.scroll_top, 0.0);
         assert_eq!(s2.page, 0);
@@ -394,10 +385,7 @@ mod tests {
         let s2 = toggle_sort(&s, col_name());
         assert_eq!(
             s2.sort,
-            Some(SortState {
-                column: col_name(),
-                direction: SortDirection::Desc
-            })
+            vec![SortState::new(col_name(), SortDirection::Desc)]
         );
     }
 
@@ -407,7 +395,7 @@ mod tests {
         let s = toggle_sort(&s, col_name());
         let s = toggle_sort(&s, col_name());
         let s2 = toggle_sort(&s, col_name());
-        assert_eq!(s2.sort, None);
+        assert!(s2.sort.is_empty());
     }
 
     #[test]
@@ -417,10 +405,7 @@ mod tests {
         let s2 = toggle_sort(&s, col_score());
         assert_eq!(
             s2.sort,
-            Some(SortState {
-                column: col_score(),
-                direction: SortDirection::Asc
-            })
+            vec![SortState::new(col_score(), SortDirection::Asc)]
         );
     }
 

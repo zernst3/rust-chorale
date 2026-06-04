@@ -106,7 +106,13 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     // transition per user interaction, so this tradeoff is acceptable.
     let view_key = use_memo(move || {
         let s = sig.read();
-        (s.page, s.page_size, s.sort, s.filters.clone(), s.rows.len())
+        (
+            s.page,
+            s.page_size,
+            s.sort.clone(),
+            s.filters.clone(),
+            s.rows.len(),
+        )
     });
     // sig.peek() reads without subscribing this memo to sig directly;
     // the dependency flows through view_key only.
@@ -150,7 +156,7 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     let row_height = state.row_height;
     let viewport_height = state.viewport_height;
     let widths = state.column_widths.clone();
-    let current_sort = state.sort;
+    let current_sort: &[SortState] = &state.sort;
     let filters = state.filters.clone();
 
     let all_col_defs: Vec<(ColumnId, String)> = state
@@ -382,7 +388,7 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
     override_width: Option<f64>,
     handle: UseTableHandle<TRow>,
     sort_enabled: bool,
-    current_sort: Option<SortState>,
+    current_sort: &[SortState],
     resize_enabled: bool,
     mut drag_state: Signal<Option<(ColumnId, f64, f64)>>,
 ) -> Element {
@@ -394,7 +400,7 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
     let initial_width = col.initial_width;
 
     let sort_arrow = if is_sortable {
-        match current_sort {
+        match current_sort.first() {
             Some(s) if s.column == col_id && s.direction == SortDirection::Asc => " \u{2191}",
             Some(s) if s.column == col_id && s.direction == SortDirection::Desc => " \u{2193}",
             _ => "",
@@ -1266,7 +1272,6 @@ fn render_page_btn<TRow: Clone + PartialEq + 'static>(
 #[cfg(test)]
 #[allow(clippy::float_cmp, clippy::unwrap_used)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use chorale_core::{
@@ -1306,24 +1311,14 @@ mod tests {
             header_class: None,
             cell_class: None,
         }];
-        TableState {
-            rows,
-            columns,
-            sort: Some(SortState {
-                column: ColumnId("score"),
-                direction: SortDirection::Asc,
-            }),
-            filters: HashMap::new(),
-            selection: vec![],
-            page: 0,
-            page_size: 100,
-            column_visibility: HashMap::new(),
-            column_widths: HashMap::new(),
-            scroll_top,
-            viewport_height: viewport,
-            row_height,
-            buffer_rows: 2,
-        }
+        let mut s = TableState::new(rows, columns);
+        s.sort = vec![SortState::new(ColumnId("score"), SortDirection::Asc)];
+        s.page_size = 100;
+        s.scroll_top = scroll_top;
+        s.viewport_height = viewport;
+        s.row_height = row_height;
+        s.buffer_rows = 2;
+        s
     }
 
     /// **Wiring-bug regression guard.** Asserts that `compute_window_slice`

@@ -217,7 +217,7 @@ fn filtered_sorted_pairs<TRow: Clone>(state: &TableState<TRow>) -> Vec<(RowId, T
         .cloned()
         .collect();
 
-    if let Some(sort) = &state.sort {
+    if let Some(sort) = state.sort.first() {
         if let Some(col) = state.columns.iter().find(|c| c.id == sort.column) {
             let direction = sort.direction;
             pairs.sort_by(|(_, a), (_, b)| {
@@ -322,7 +322,7 @@ mod tests {
         TableState {
             rows,
             columns,
-            sort: None,
+            sort: vec![],
             filters: HashMap::new(),
             selection: vec![],
             page: 0,
@@ -358,10 +358,7 @@ mod tests {
     #[test]
     fn visible_rows_sorts_asc() {
         let mut s = make_state();
-        s.sort = Some(SortState {
-            column: ColumnId("name"),
-            direction: SortDirection::Asc,
-        });
+        s.sort = vec![SortState::new(ColumnId("name"), SortDirection::Asc)];
         let rows = visible_rows(&s);
         assert_eq!(rows[0].name, "Alice");
         assert_eq!(rows[1].name, "Bob");
@@ -371,10 +368,7 @@ mod tests {
     #[test]
     fn visible_rows_sorts_desc() {
         let mut s = make_state();
-        s.sort = Some(SortState {
-            column: ColumnId("name"),
-            direction: SortDirection::Desc,
-        });
+        s.sort = vec![SortState::new(ColumnId("name"), SortDirection::Desc)];
         let rows = visible_rows(&s);
         assert_eq!(rows[0].name, "Charlie");
         assert_eq!(rows[2].name, "Alice");
@@ -441,10 +435,7 @@ mod tests {
         // migrate from two separate calls to one visible_view call could
         // silently render different rows or mis-attribute selection state.
         let mut s = make_state();
-        s.sort = Some(SortState {
-            column: ColumnId("score"),
-            direction: SortDirection::Desc,
-        });
+        s.sort = vec![SortState::new(ColumnId("score"), SortDirection::Desc)];
         s.filters
             .insert(ColumnId("name"), FilterValue::Text("i".into())); // Alice + Charlie
 
@@ -478,10 +469,7 @@ mod tests {
         let mut s = make_state();
         s.filters
             .insert(ColumnId("name"), FilterValue::Text("i".into())); // Alice + Charlie
-        s.sort = Some(SortState {
-            column: ColumnId("score"),
-            direction: SortDirection::Desc,
-        });
+        s.sort = vec![SortState::new(ColumnId("score"), SortDirection::Desc)];
         let view = visible_view(&s);
         // Alice (90) + Charlie (85), sorted desc by score → Alice first.
         assert_eq!(view.len(), 2);
@@ -601,10 +589,7 @@ mod tests {
     #[test]
     fn filtered_sorted_rows_respects_sort() {
         let mut s = make_state();
-        s.sort = Some(SortState {
-            column: ColumnId("score"),
-            direction: SortDirection::Desc,
-        });
+        s.sort = vec![SortState::new(ColumnId("score"), SortDirection::Desc)];
         let rows = filtered_sorted_rows(&s);
         // Alice=90, Charlie=85, Bob=75 → desc
         assert_eq!(rows[0].name, "Alice");

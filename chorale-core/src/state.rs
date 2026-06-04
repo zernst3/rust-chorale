@@ -27,14 +27,17 @@ pub struct VirtualWindow {
 /// `TableState<TRow>` (CHORALE-CORE-2).  No `&mut self` methods here.
 ///
 /// Per the work-queue spec (v0.1-core § 1).
+#[non_exhaustive]
 pub struct TableState<TRow: Clone> {
     /// The full dataset as `(RowId, row)` pairs. `RowId` is stable across
     /// sort, filter, and pagination so selection + edits survive reordering.
     pub rows: Vec<(RowId, TRow)>,
     /// Column definitions in display order. Accessor closures are stored here.
     pub columns: Vec<ColumnDef<TRow>>,
-    /// Active sort, or `None` for natural (insertion) order.
-    pub sort: Option<SortState>,
+    /// Active sort states. Empty vec = natural (insertion) order. In v0.1.0
+    /// at most one element is used; future multi-column sort will populate
+    /// more than one element without a type-breaking change.
+    pub sort: Vec<SortState>,
     /// Active filters keyed by `ColumnId`. Missing entry = no filter.
     pub filters: HashMap<ColumnId, FilterValue>,
     /// Row IDs that are currently selected.
@@ -83,7 +86,7 @@ impl<TRow: Clone> Clone for TableState<TRow> {
         Self {
             rows: self.rows.clone(),
             columns: self.columns.clone(),
-            sort: self.sort,
+            sort: self.sort.clone(),
             filters: self.filters.clone(),
             selection: self.selection.clone(),
             page: self.page,
@@ -122,7 +125,7 @@ impl<TRow: Clone> TableState<TRow> {
         Self {
             rows,
             columns,
-            sort: None,
+            sort: vec![],
             filters: HashMap::new(),
             selection: Vec::new(),
             page: 0,
@@ -262,7 +265,7 @@ mod tests {
         assert_eq!(s.row_height, 40.0);
         assert_eq!(s.viewport_height, 500.0);
         assert_eq!(s.buffer_rows, 3);
-        assert!(s.sort.is_none());
+        assert!(s.sort.is_empty());
         assert!(s.filters.is_empty());
         assert!(s.selection.is_empty());
     }
