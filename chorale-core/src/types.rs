@@ -197,6 +197,7 @@ impl CellValue {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::approx_constant)]
 mod tests {
     use super::*;
 
@@ -242,5 +243,142 @@ mod tests {
             max: Some(10.0),
         };
         assert!(cell.matches_filter(&filter));
+    }
+
+    // ---- cmp_for_sort -----------------------------------------------------
+
+    #[test]
+    fn cmp_for_sort_text_alphabetical() {
+        assert_eq!(
+            CellValue::Text("alpha".into()).cmp_for_sort(&CellValue::Text("beta".into())),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            CellValue::Text("z".into()).cmp_for_sort(&CellValue::Text("a".into())),
+            std::cmp::Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn cmp_for_sort_integer_numeric() {
+        assert_eq!(
+            CellValue::Integer(1).cmp_for_sort(&CellValue::Integer(2)),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            CellValue::Integer(-5).cmp_for_sort(&CellValue::Integer(-10)),
+            std::cmp::Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn cmp_for_sort_empty_sorts_last() {
+        assert_eq!(
+            CellValue::Empty.cmp_for_sort(&CellValue::Text("anything".into())),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(
+            CellValue::Text("anything".into()).cmp_for_sort(&CellValue::Empty),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            CellValue::Empty.cmp_for_sort(&CellValue::Empty),
+            std::cmp::Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn cmp_for_sort_cross_type_does_not_panic() {
+        // Cross-type comparison uses debug-string fallback; must not panic.
+        let result = CellValue::Integer(42).cmp_for_sort(&CellValue::Text("hello".into()));
+        // We don't assert a specific ordering, just that it doesn't panic.
+        let _ = result;
+    }
+
+    // ---- to_csv_string ----------------------------------------------------
+
+    #[test]
+    fn to_csv_string_text() {
+        assert_eq!(CellValue::Text("hello".into()).to_csv_string(), "hello");
+    }
+
+    #[test]
+    fn to_csv_string_integer() {
+        assert_eq!(CellValue::Integer(42).to_csv_string(), "42");
+        assert_eq!(CellValue::Integer(-7).to_csv_string(), "-7");
+    }
+
+    #[test]
+    fn to_csv_string_float() {
+        assert_eq!(CellValue::Float(3.14).to_csv_string(), "3.14");
+    }
+
+    #[test]
+    fn to_csv_string_boolean() {
+        assert_eq!(CellValue::Boolean(true).to_csv_string(), "true");
+        assert_eq!(CellValue::Boolean(false).to_csv_string(), "false");
+    }
+
+    #[test]
+    fn to_csv_string_empty_is_blank() {
+        assert_eq!(CellValue::Empty.to_csv_string(), "");
+    }
+
+    // ---- date range filter ------------------------------------------------
+
+    #[test]
+    fn date_range_filter_passes_when_in_range() {
+        use chrono::NaiveDate;
+        let d = NaiveDate::from_ymd_opt(2024, 6, 15).unwrap();
+        let cell = CellValue::Date(d);
+        let filter = FilterValue::DateRange {
+            min: Some(NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()),
+            max: Some(NaiveDate::from_ymd_opt(2024, 12, 31).unwrap()),
+        };
+        assert!(cell.matches_filter(&filter));
+    }
+
+    #[test]
+    fn date_range_filter_blocks_when_out_of_range() {
+        use chrono::NaiveDate;
+        let d = NaiveDate::from_ymd_opt(2023, 12, 31).unwrap();
+        let cell = CellValue::Date(d);
+        let filter = FilterValue::DateRange {
+            min: Some(NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()),
+            max: None,
+        };
+        assert!(!cell.matches_filter(&filter));
+    }
+
+    // ---- numeric range filter edge cases ----------------------------------
+
+    #[test]
+    fn numeric_range_min_bound_is_inclusive() {
+        assert!(
+            CellValue::Float(5.0).matches_filter(&FilterValue::NumericRange {
+                min: Some(5.0),
+                max: None
+            })
+        );
+    }
+
+    #[test]
+    fn numeric_range_max_bound_is_inclusive() {
+        assert!(
+            CellValue::Float(10.0).matches_filter(&FilterValue::NumericRange {
+                min: None,
+                max: Some(10.0)
+            })
+        );
+    }
+
+    #[test]
+    fn numeric_range_open_bounds_passes_all() {
+        assert!(
+            CellValue::Float(f64::MAX).matches_filter(&FilterValue::NumericRange {
+                min: None,
+                max: None
+            })
+        );
     }
 }

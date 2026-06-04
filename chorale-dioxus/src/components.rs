@@ -1653,4 +1653,138 @@ mod tests {
         let s = super::cell_text(&CellValue::Text("hello".into()), &RenderKind::Text);
         assert_eq!(s, "hello");
     }
+
+    #[test]
+    fn cell_text_empty_returns_blank() {
+        let s = super::cell_text(&CellValue::Empty, &RenderKind::Text);
+        assert_eq!(s, "");
+    }
+
+    #[test]
+    fn cell_text_float_with_number_render_no_decimals() {
+        let s = super::cell_text(&CellValue::Float(3.9), &RenderKind::Number);
+        assert_eq!(s, "4"); // .0 format rounds
+    }
+
+    #[test]
+    fn cell_text_float_currency_two_decimals() {
+        let s = super::cell_text(
+            &CellValue::Float(99.5),
+            &RenderKind::Currency(chorale_core::CurrencyCode::EUR),
+        );
+        assert_eq!(s, "\u{20ac}99.50");
+    }
+
+    #[test]
+    fn cell_text_date_formats_correctly() {
+        let d = chorale_core::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap();
+        let s = super::cell_text(&CellValue::Date(d), &RenderKind::Date);
+        assert_eq!(s, "2024-03-15");
+    }
+
+    #[test]
+    fn cell_text_text_with_number_render_passes_through() {
+        // Text cell regardless of render kind → text is returned unchanged.
+        let s = super::cell_text(&CellValue::Text("abc".into()), &RenderKind::Number);
+        assert_eq!(s, "abc");
+    }
+
+    #[test]
+    fn currency_symbol_eur_and_gbp() {
+        use chorale_core::CurrencyCode;
+        assert_eq!(super::currency_symbol(&CurrencyCode::EUR), "\u{20ac}");
+        assert_eq!(super::currency_symbol(&CurrencyCode::GBP), "\u{00a3}");
+    }
+
+    #[test]
+    fn format_thousands_large_negative() {
+        assert_eq!(super::format_thousands(-1_234_567), "-1,234,567");
+    }
+
+    #[test]
+    fn format_thousands_single_digit() {
+        assert_eq!(super::format_thousands(5), "5");
+    }
+
+    #[test]
+    fn page_button_range_current_near_end_no_right_ellipsis() {
+        // total=10, current=8 → no right ellipsis expected.
+        let buttons = super::page_button_range(8, 10);
+        let has_trailing_none = buttons.last() == Some(&None);
+        assert!(
+            !has_trailing_none,
+            "should have no right ellipsis when near end"
+        );
+    }
+
+    #[test]
+    fn page_button_range_last_page_is_always_included() {
+        let buttons = super::page_button_range(0, 20);
+        let has_last_page = buttons.contains(&Some(19));
+        assert!(has_last_page, "last page (index 19) should always appear");
+    }
+
+    #[test]
+    fn page_button_range_current_page_is_always_included() {
+        for current in [0, 5, 10, 15, 19] {
+            let buttons = super::page_button_range(current, 20);
+            assert!(
+                buttons.contains(&Some(current)),
+                "current page {current} should appear in button list"
+            );
+        }
+    }
+
+    #[test]
+    fn numeric_range_to_filter_none_when_min_equals_config_min_and_max_equals_config_max() {
+        // Slider at default (both at extremes) → no filter.
+        let filter = super::numeric_range_to_filter(0.0, 100.0, 0.0, 100.0);
+        assert!(filter.is_none());
+    }
+
+    #[test]
+    fn date_range_to_filter_max_only() {
+        use chorale_core::NaiveDate;
+        let max = NaiveDate::from_ymd_opt(2024, 12, 31).unwrap();
+        let filter = super::date_range_to_filter(None, Some(max));
+        assert!(filter.is_some());
+        if let Some(chorale_core::FilterValue::DateRange { min, max: fmax }) = filter {
+            assert!(min.is_none());
+            assert!(fmax.is_some());
+        }
+    }
+
+    #[test]
+    fn col_width_style_with_only_initial_produces_width_css() {
+        let s = super::col_width_style(None, Some(150.0));
+        assert!(s.contains("150px"));
+    }
+
+    #[test]
+    fn compute_window_slice_returns_all_when_short_list() {
+        // Large viewport compared to row count → all rows returned.
+        let s = make_state(0.0, 40.0, 10_000.0);
+        let view = visible_view(&s);
+        let (_win, _ids, rows) = super::compute_window_slice(&s, &view);
+        assert_eq!(rows.len(), view.len());
+    }
+
+    // ---- badge_style -------------------------------------------------------
+
+    #[test]
+    fn badge_style_unknown_color_falls_back_to_default() {
+        let s = super::badge_style("hotpink");
+        assert!(s.contains("#e5e7eb"), "unknown color should use fallback bg");
+        assert!(s.contains("#1f2937"), "unknown color should use fallback fg");
+    }
+
+    // ---- additional visible_view correctness (adapter-level) ---------------
+
+    #[test]
+    fn visible_view_empty_dataset_produces_empty_view() {
+        use chorale_core::TableState;
+        let s: TableState<String> = TableState::new(vec![], vec![]);
+        let view = visible_view(&s);
+        assert!(view.is_empty());
+    }
 }

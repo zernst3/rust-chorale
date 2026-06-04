@@ -178,3 +178,219 @@ impl<TRow: Clone> TableState<TRow> {
         true
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::float_cmp, clippy::unwrap_used, clippy::cast_precision_loss)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::TableState;
+    use crate::column::{ColumnDef, FilterKind, RenderKind};
+    use crate::types::{Alignment, CellValue, ColumnId, FilterValue, RowId};
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct R {
+        name: String,
+        score: f64,
+    }
+
+    fn col_name() -> ColumnId {
+        ColumnId("name")
+    }
+    fn col_score() -> ColumnId {
+        ColumnId("score")
+    }
+
+    fn make_state_n(n: usize) -> TableState<R> {
+        let rows = (0..n)
+            .map(|i| {
+                (
+                    RowId::new(),
+                    R {
+                        name: format!("row-{i}"),
+                        score: i as f64,
+                    },
+                )
+            })
+            .collect();
+        let columns = vec![
+            ColumnDef {
+                id: col_name(),
+                header: "Name".into(),
+                accessor: Arc::new(|r: &R| CellValue::Text(r.name.clone())),
+                sortable: true,
+                filter: FilterKind::Text,
+                initial_width: None,
+                alignment: Alignment::Left,
+                render_kind: RenderKind::Text,
+                header_class: None,
+                cell_class: None,
+            },
+            ColumnDef {
+                id: col_score(),
+                header: "Score".into(),
+                accessor: Arc::new(|r: &R| CellValue::Float(r.score)),
+                sortable: true,
+                filter: FilterKind::NumericRange {
+                    min: 0.0,
+                    max: 100.0,
+                    step: 1.0,
+                },
+                initial_width: None,
+                alignment: Alignment::Right,
+                render_kind: RenderKind::Number,
+                header_class: None,
+                cell_class: None,
+            },
+        ];
+        TableState {
+            rows,
+            columns,
+            ..TableState::new(vec![], vec![])
+        }
+    }
+
+    // ---- TableState::new defaults -----------------------------------------
+
+    #[test]
+    fn new_has_correct_defaults() {
+        let s: TableState<String> = TableState::new(vec![], vec![]);
+        assert_eq!(s.page, 0);
+        assert_eq!(s.page_size, 50);
+        assert_eq!(s.row_height, 40.0);
+        assert_eq!(s.viewport_height, 500.0);
+        assert_eq!(s.buffer_rows, 3);
+        assert!(s.sort.is_none());
+        assert!(s.filters.is_empty());
+        assert!(s.selection.is_empty());
+    }
+
+    // ---- total_pages -------------------------------------------------------
+
+    #[test]
+    fn total_pages_empty_is_one() {
+        let s = make_state_n(0);
+        assert_eq!(s.total_pages(), 1);
+    }
+
+    #[test]
+    fn total_pages_exact_multiple() {
+        let mut s = make_state_n(100);
+        s.page_size = 10;
+        assert_eq!(s.total_pages(), 10);
+    }
+
+    #[test]
+    fn total_pages_with_remainder() {
+        let mut s = make_state_n(101);
+        s.page_size = 10;
+        assert_eq!(s.total_pages(), 11);
+    }
+
+    #[test]
+    fn total_pages_single_row() {
+        let s = make_state_n(1);
+        assert_eq!(s.total_pages(), 1);
+    }
+
+    #[test]
+    fn total_pages_respects_active_filter() {
+        let mut s = make_state_n(10);
+        s.page_size = 3;
+        // Filter to only "row-0": should give 1 page of 1 row
+        s.filters
+            .insert(col_name(), FilterValue::Text("row-0".into()));
+        assert_eq!(s.total_pages(), 1);
+    }
+
+    // ---- filtered_row_count -----------------------------------------------
+
+    #[test]
+    fn filtered_row_count_no_filter_returns_all() {
+        let s = make_state_n(7);
+        assert_eq!(s.filtered_row_count(), 7);
+    }
+
+    #[test]
+    fn filtered_row_count_with_text_filter() {
+        let mut s = make_state_n(5);
+        // Rows are "row-0" through "row-4"; filter "row-1" matches only "row-1"
+        s.filters
+            .insert(col_name(), FilterValue::Text("row-1".into()));
+        assert_eq!(s.filtered_row_count(), 1);
+    }
+
+    #[test]
+    fn filtered_row_count_with_numeric_range() {
+        let mut s = make_state_n(10);
+        // scores 0..9; keep score >= 5
+        s.filters.insert(
+            col_score(),
+            FilterValue::NumericRange {
+                min: Some(5.0),
+                max: None,
+            },
+        );
+        assert_eq!(s.filtered_row_count(), 5); // 5,6,7,8,9
+    }
+
+    // ---- is_column_visible ------------------------------------------------
+
+    #[test]
+    fn is_column_visible_default_is_true() {
+        let s = make_state_n(1);
+        assert!(s.is_column_visible(col_name()));
+    }
+
+    #[test]
+    fn is_column_visible_hidden_returns_false() {
+        let mut s = make_state_n(1);
+        s.column_visibility.insert(col_name(), false);
+        assert!(!s.is_column_visible(col_name()));
+    }
+
+    #[test]
+    fn is_column_visible_explicit_true_returns_true() {
+        let mut s = make_state_n(1);
+        s.column_visibility.insert(col_name(), true);
+        assert!(s.is_column_visible(col_name()));
+    }
+
+    // ---- row_passes_filters -----------------------------------------------
+
+    #[test]
+    fn row_passes_filters_unknown_column_always_passes() {
+        let mut s = make_state_n(1);
+        // Filter on a column that doesn't exist in columns → no matching col →
+        // filter is skipped → row passes.
+        s.filters.insert(
+            ColumnId("nonexistent"),
+            FilterValue::Text("anything".into()),
+        );
+        let row = &s.rows[0].1;
+        assert!(s.row_passes_filters(row));
+    }
+
+    #[test]
+    fn row_passes_filters_multiple_filters_all_must_pass() {
+        let mut s = make_state_n(5);
+        // Both conditions must hold: name contains "row-2" AND score >= 2
+        s.filters
+            .insert(col_name(), FilterValue::Text("row-2".into()));
+        s.filters.insert(
+            col_score(),
+            FilterValue::NumericRange {
+                min: Some(2.0),
+                max: None,
+            },
+        );
+        // row-2 (score=2.0) should pass both; row-1 fails name filter.
+        let passing: Vec<_> = s
+            .rows
+            .iter()
+            .filter(|(_, r)| s.row_passes_filters(r))
+            .collect();
+        assert_eq!(passing.len(), 1);
+        assert_eq!(passing[0].1.name, "row-2");
+    }
+}
