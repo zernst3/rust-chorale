@@ -253,7 +253,6 @@ fn csv_quote(s: &str) -> String {
 #[allow(clippy::float_cmp, clippy::cast_precision_loss)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     use crate::column::ColumnDef;
     use crate::state::TableState;
@@ -294,30 +293,18 @@ mod tests {
             ),
         ];
         let columns = vec![
-            ColumnDef {
-                id: ColumnId("name"),
-                header: "Name".into(),
-                accessor: Arc::new(|r: &R| CellValue::Text(r.name.clone())),
-                sortable: true,
-                filter: crate::column::FilterKind::Text,
-                initial_width: None,
-                alignment: Alignment::Left,
-                render_kind: crate::column::RenderKind::Text,
-                header_class: None,
-                cell_class: None,
-            },
-            ColumnDef {
-                id: ColumnId("score"),
-                header: "Score".into(),
-                accessor: Arc::new(|r: &R| CellValue::Integer(r.score)),
-                sortable: true,
-                filter: crate::column::FilterKind::Text,
-                initial_width: None,
-                alignment: Alignment::Right,
-                render_kind: crate::column::RenderKind::Number,
-                header_class: None,
-                cell_class: None,
-            },
+            ColumnDef::new(ColumnId("name"), "Name", |r: &R| {
+                CellValue::Text(r.name.clone())
+            })
+            .sortable()
+            .filter(crate::column::FilterKind::Text),
+            ColumnDef::new(ColumnId("score"), "Score", |r: &R| {
+                CellValue::Integer(r.score)
+            })
+            .sortable()
+            .filter(crate::column::FilterKind::Text)
+            .alignment(Alignment::Right)
+            .render_kind(crate::column::RenderKind::Number),
         ];
         TableState {
             rows,

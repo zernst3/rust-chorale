@@ -1272,11 +1272,9 @@ fn render_page_btn<TRow: Clone + PartialEq + 'static>(
 #[cfg(test)]
 #[allow(clippy::float_cmp, clippy::unwrap_used)]
 mod tests {
-    use std::sync::Arc;
-
     use chorale_core::{
         visible_row_ids, visible_view, visible_window_for_state, Alignment, CellValue, ColumnDef,
-        ColumnId, FilterKind, RenderKind, RowId, SortDirection, SortState, TableState,
+        ColumnId, RenderKind, RowId, SortDirection, SortState, TableState,
     };
 
     use super::compute_window_slice;
@@ -1299,18 +1297,12 @@ mod tests {
                 )
             })
             .collect();
-        let columns = vec![ColumnDef {
-            id: ColumnId("score"),
-            header: "Score".into(),
-            accessor: Arc::new(|r: &R| CellValue::Integer(r.score)),
-            sortable: true,
-            filter: FilterKind::None,
-            initial_width: None,
-            alignment: Alignment::Right,
-            render_kind: RenderKind::Number,
-            header_class: None,
-            cell_class: None,
-        }];
+        let columns = vec![ColumnDef::new(ColumnId("score"), "Score", |r: &R| {
+            CellValue::Integer(r.score)
+        })
+        .sortable()
+        .alignment(Alignment::Right)
+        .render_kind(RenderKind::Number)];
         let mut s = TableState::new(rows, columns);
         s.sort = vec![SortState::new(ColumnId("score"), SortDirection::Asc)];
         s.page_size = 100;

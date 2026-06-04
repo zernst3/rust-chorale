@@ -7,7 +7,6 @@ use chorale_core::{
 };
 use chorale_dioxus::{use_table, Table};
 use dioxus::prelude::*;
-use std::sync::Arc;
 
 #[derive(Clone, PartialEq)]
 struct Book {
@@ -41,42 +40,25 @@ fn books() -> Vec<(RowId, Book)> {
 
 fn columns() -> Vec<ColumnDef<Book>> {
     vec![
-        ColumnDef {
-            id: ColumnId("title"),
-            header: "Title".into(),
-            accessor: Arc::new(|b: &Book| CellValue::Text(b.title.clone())),
-            sortable: true,
-            filter: FilterKind::Text,
-            initial_width: Some(280.0),
-            alignment: Alignment::Left,
-            render_kind: RenderKind::Text,
-            header_class: None,
-            cell_class: None,
-        },
-        ColumnDef {
-            id: ColumnId("author"),
-            header: "Author".into(),
-            accessor: Arc::new(|b: &Book| CellValue::Text(b.author.clone())),
-            sortable: true,
-            filter: FilterKind::Text,
-            initial_width: Some(160.0),
-            alignment: Alignment::Left,
-            render_kind: RenderKind::Text,
-            header_class: None,
-            cell_class: None,
-        },
-        ColumnDef {
-            id: ColumnId("year"),
-            header: "Year".into(),
-            accessor: Arc::new(|b: &Book| CellValue::Integer(b.year)),
-            sortable: true,
-            filter: FilterKind::None,
-            initial_width: Some(80.0),
-            alignment: Alignment::Right,
-            render_kind: RenderKind::Number,
-            header_class: None,
-            cell_class: None,
-        },
+        ColumnDef::new(ColumnId("title"), "Title", |b: &Book| {
+            CellValue::Text(b.title.clone())
+        })
+        .sortable()
+        .filter(FilterKind::Text)
+        .initial_width(280.0),
+        ColumnDef::new(ColumnId("author"), "Author", |b: &Book| {
+            CellValue::Text(b.author.clone())
+        })
+        .sortable()
+        .filter(FilterKind::Text)
+        .initial_width(160.0),
+        ColumnDef::new(ColumnId("year"), "Year", |b: &Book| {
+            CellValue::Integer(b.year)
+        })
+        .sortable()
+        .initial_width(80.0)
+        .alignment(Alignment::Right)
+        .render_kind(RenderKind::Number),
     ]
 }
 

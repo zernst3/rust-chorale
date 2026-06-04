@@ -149,6 +149,7 @@ pub enum RenderKind {
 ///
 /// Per CHORALE-CORE-1: `ColumnDef` carries no framework types.
 /// Per ROBUSTNESS-1: named struct fields, not a tuple or builder-only API.
+#[non_exhaustive]
 pub struct ColumnDef<TRow> {
     /// Unique identifier for this column. Must be unique within a table.
     pub id: ColumnId,

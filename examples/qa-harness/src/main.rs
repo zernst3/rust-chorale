@@ -105,86 +105,55 @@ fn columns() -> Vec<ColumnDef<Employee>> {
         .with("Suspended", BadgeVariant::new("Suspended", "red"));
 
     vec![
-        ColumnDef {
-            id: ColumnId("name"),
-            header: "Name".to_string(),
-            accessor: Arc::new(|r: &Employee| CellValue::Text(r.name.clone())),
-            sortable: true,
-            filter: FilterKind::Text,
-            initial_width: Some(160.0),
-            alignment: Alignment::Left,
-            render_kind: RenderKind::Text,
-            header_class: None,
-            cell_class: None,
-        },
-        ColumnDef {
-            id: ColumnId("email"),
-            header: "Email".to_string(),
-            accessor: Arc::new(|r: &Employee| CellValue::Text(r.email.clone())),
-            sortable: true,
-            filter: FilterKind::Text,
-            initial_width: Some(220.0),
-            alignment: Alignment::Left,
-            render_kind: RenderKind::Text,
-            header_class: None,
-            cell_class: None,
-        },
-        ColumnDef {
-            id: ColumnId("joined_date"),
-            header: "Joined".to_string(),
-            accessor: Arc::new(|r: &Employee| CellValue::Date(r.joined_date)),
-            sortable: true,
-            filter: FilterKind::DateRange,
-            initial_width: Some(180.0),
-            alignment: Alignment::Left,
-            render_kind: RenderKind::Date,
-            header_class: None,
-            cell_class: None,
-        },
-        ColumnDef {
-            id: ColumnId("role"),
-            header: "Role".to_string(),
-            accessor: Arc::new(|r: &Employee| CellValue::Text(r.role.clone())),
-            sortable: true,
-            filter: FilterKind::MultiSelect {
-                options: ROLES.iter().map(|s| (*s).to_string()).collect(),
-            },
-            initial_width: Some(140.0),
-            alignment: Alignment::Left,
-            render_kind: RenderKind::Text,
-            header_class: None,
-            cell_class: None,
-        },
-        ColumnDef {
-            id: ColumnId("status"),
-            header: "Status".to_string(),
-            accessor: Arc::new(|r: &Employee| CellValue::Text(r.status.clone())),
-            sortable: true,
-            filter: FilterKind::MultiSelect {
-                options: STATUSES.iter().map(|s| (*s).to_string()).collect(),
-            },
-            initial_width: Some(120.0),
-            alignment: Alignment::Center,
-            render_kind: RenderKind::Badge(status_badges),
-            header_class: None,
-            cell_class: None,
-        },
-        ColumnDef {
-            id: ColumnId("salary"),
-            header: "Salary".to_string(),
-            accessor: Arc::new(|r: &Employee| CellValue::Integer(r.salary)),
-            sortable: true,
-            filter: FilterKind::NumericRange {
-                min: 40_000.0,
-                max: 200_000.0,
-                step: 1_000.0,
-            },
-            initial_width: Some(160.0),
-            alignment: Alignment::Right,
-            render_kind: RenderKind::Currency(CurrencyCode::USD),
-            header_class: None,
-            cell_class: None,
-        },
+        ColumnDef::new(ColumnId("name"), "Name", |r: &Employee| {
+            CellValue::Text(r.name.clone())
+        })
+        .sortable()
+        .filter(FilterKind::Text)
+        .initial_width(160.0),
+        ColumnDef::new(ColumnId("email"), "Email", |r: &Employee| {
+            CellValue::Text(r.email.clone())
+        })
+        .sortable()
+        .filter(FilterKind::Text)
+        .initial_width(220.0),
+        ColumnDef::new(ColumnId("joined_date"), "Joined", |r: &Employee| {
+            CellValue::Date(r.joined_date)
+        })
+        .sortable()
+        .filter(FilterKind::DateRange)
+        .initial_width(180.0)
+        .render_kind(RenderKind::Date),
+        ColumnDef::new(ColumnId("role"), "Role", |r: &Employee| {
+            CellValue::Text(r.role.clone())
+        })
+        .sortable()
+        .filter(FilterKind::MultiSelect {
+            options: ROLES.iter().map(|s| (*s).to_string()).collect(),
+        })
+        .initial_width(140.0),
+        ColumnDef::new(ColumnId("status"), "Status", |r: &Employee| {
+            CellValue::Text(r.status.clone())
+        })
+        .sortable()
+        .filter(FilterKind::MultiSelect {
+            options: STATUSES.iter().map(|s| (*s).to_string()).collect(),
+        })
+        .initial_width(120.0)
+        .alignment(Alignment::Center)
+        .render_kind(RenderKind::Badge(status_badges)),
+        ColumnDef::new(ColumnId("salary"), "Salary", |r: &Employee| {
+            CellValue::Integer(r.salary)
+        })
+        .sortable()
+        .filter(FilterKind::NumericRange {
+            min: 40_000.0,
+            max: 200_000.0,
+            step: 1_000.0,
+        })
+        .initial_width(160.0)
+        .alignment(Alignment::Right)
+        .render_kind(RenderKind::Currency(CurrencyCode::USD)),
     ]
 }
 

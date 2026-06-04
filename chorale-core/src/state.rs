@@ -187,8 +187,6 @@ impl<TRow: Clone> TableState<TRow> {
 #[cfg(test)]
 #[allow(clippy::float_cmp, clippy::unwrap_used, clippy::cast_precision_loss)]
 mod tests {
-    use std::sync::Arc;
-
     use super::TableState;
     use crate::column::{ColumnDef, FilterKind, RenderKind};
     use crate::types::{Alignment, CellValue, ColumnId, FilterValue, RowId};
@@ -219,34 +217,18 @@ mod tests {
             })
             .collect();
         let columns = vec![
-            ColumnDef {
-                id: col_name(),
-                header: "Name".into(),
-                accessor: Arc::new(|r: &R| CellValue::Text(r.name.clone())),
-                sortable: true,
-                filter: FilterKind::Text,
-                initial_width: None,
-                alignment: Alignment::Left,
-                render_kind: RenderKind::Text,
-                header_class: None,
-                cell_class: None,
-            },
-            ColumnDef {
-                id: col_score(),
-                header: "Score".into(),
-                accessor: Arc::new(|r: &R| CellValue::Float(r.score)),
-                sortable: true,
-                filter: FilterKind::NumericRange {
+            ColumnDef::new(col_name(), "Name", |r: &R| CellValue::Text(r.name.clone()))
+                .sortable()
+                .filter(FilterKind::Text),
+            ColumnDef::new(col_score(), "Score", |r: &R| CellValue::Float(r.score))
+                .sortable()
+                .filter(FilterKind::NumericRange {
                     min: 0.0,
                     max: 100.0,
                     step: 1.0,
-                },
-                initial_width: None,
-                alignment: Alignment::Right,
-                render_kind: RenderKind::Number,
-                header_class: None,
-                cell_class: None,
-            },
+                })
+                .alignment(Alignment::Right)
+                .render_kind(RenderKind::Number),
         ];
         TableState {
             rows,

@@ -26,13 +26,10 @@
 //!
 //! Run with: `dx serve --package virtualized-1m-rows`
 
-use chorale_core::{
-    Alignment, CellValue, ColumnDef, ColumnId, FilterKind, RenderKind, RowId, TableState,
-};
+use chorale_core::{Alignment, CellValue, ColumnDef, ColumnId, RenderKind, RowId, TableState};
 use chorale_dioxus::{use_table, Table, UseTableHandle};
 use dioxus::prelude::*;
 use rand::{rngs::StdRng, Rng, SeedableRng};
-use std::sync::Arc;
 
 const SEED: u64 = 42;
 const ROW_COUNT: usize = 1_000_000;
@@ -86,48 +83,22 @@ fn events() -> Vec<(RowId, Event)> {
 
 fn columns() -> Vec<ColumnDef<Event>> {
     vec![
-        ColumnDef {
-            id: ColumnId("id"),
-            header: "Event #".into(),
-            accessor: Arc::new(|e: &Event| {
-                // `as i64` is safe: row count is capped at 1M, well within i64.
-                #[allow(clippy::cast_possible_wrap)]
-                CellValue::Integer(e.id as i64)
-            }),
-            sortable: false,
-            filter: FilterKind::None,
-            initial_width: Some(140.0),
-            alignment: Alignment::Right,
-            render_kind: RenderKind::Number,
-            header_class: None,
-            cell_class: None,
-        },
-        ColumnDef {
-            id: ColumnId("kind"),
-            header: "Kind".into(),
-            accessor: Arc::new(|e: &Event| CellValue::Text(KINDS[e.kind_idx as usize].to_string())),
-            sortable: false,
-            filter: FilterKind::None,
-            initial_width: Some(160.0),
-            alignment: Alignment::Left,
-            render_kind: RenderKind::Text,
-            header_class: None,
-            cell_class: None,
-        },
-        ColumnDef {
-            id: ColumnId("actor"),
-            header: "Actor".into(),
-            accessor: Arc::new(|e: &Event| {
-                CellValue::Text(ACTORS[e.actor_idx as usize].to_string())
-            }),
-            sortable: false,
-            filter: FilterKind::None,
-            initial_width: Some(160.0),
-            alignment: Alignment::Left,
-            render_kind: RenderKind::Text,
-            header_class: None,
-            cell_class: None,
-        },
+        ColumnDef::new(ColumnId("id"), "Event #", |e: &Event| {
+            // `as i64` is safe: row count is capped at 1M, well within i64.
+            #[allow(clippy::cast_possible_wrap)]
+            CellValue::Integer(e.id as i64)
+        })
+        .initial_width(140.0)
+        .alignment(Alignment::Right)
+        .render_kind(RenderKind::Number),
+        ColumnDef::new(ColumnId("kind"), "Kind", |e: &Event| {
+            CellValue::Text(KINDS[e.kind_idx as usize].to_string())
+        })
+        .initial_width(160.0),
+        ColumnDef::new(ColumnId("actor"), "Actor", |e: &Event| {
+            CellValue::Text(ACTORS[e.actor_idx as usize].to_string())
+        })
+        .initial_width(160.0),
     ]
 }
 

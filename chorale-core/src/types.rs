@@ -62,6 +62,7 @@ pub enum SortDirection {
 }
 
 /// Active sort on a single column.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SortState {
     /// The column being sorted.

@@ -4,12 +4,9 @@
 //!
 //! Run with: `dx serve --package with-selection`
 
-use chorale_core::{
-    Alignment, CellValue, ColumnDef, ColumnId, FilterKind, RenderKind, RowId, TableState,
-};
+use chorale_core::{CellValue, ColumnDef, ColumnId, FilterKind, RowId, TableState};
 use chorale_dioxus::{use_table, Table};
 use dioxus::prelude::*;
-use std::sync::Arc;
 
 #[derive(Clone, PartialEq)]
 struct Task {
@@ -42,30 +39,18 @@ fn tasks() -> Vec<(RowId, Task)> {
 
 fn columns() -> Vec<ColumnDef<Task>> {
     vec![
-        ColumnDef {
-            id: ColumnId("title"),
-            header: "Task".into(),
-            accessor: Arc::new(|t: &Task| CellValue::Text(t.title.clone())),
-            sortable: true,
-            filter: FilterKind::Text,
-            initial_width: Some(280.0),
-            alignment: Alignment::Left,
-            render_kind: RenderKind::Text,
-            header_class: None,
-            cell_class: None,
-        },
-        ColumnDef {
-            id: ColumnId("assignee"),
-            header: "Assignee".into(),
-            accessor: Arc::new(|t: &Task| CellValue::Text(t.assignee.clone())),
-            sortable: true,
-            filter: FilterKind::Text,
-            initial_width: Some(140.0),
-            alignment: Alignment::Left,
-            render_kind: RenderKind::Text,
-            header_class: None,
-            cell_class: None,
-        },
+        ColumnDef::new(ColumnId("title"), "Task", |t: &Task| {
+            CellValue::Text(t.title.clone())
+        })
+        .sortable()
+        .filter(FilterKind::Text)
+        .initial_width(280.0),
+        ColumnDef::new(ColumnId("assignee"), "Assignee", |t: &Task| {
+            CellValue::Text(t.assignee.clone())
+        })
+        .sortable()
+        .filter(FilterKind::Text)
+        .initial_width(140.0),
     ]
 }
 

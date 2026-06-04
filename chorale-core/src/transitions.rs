@@ -272,7 +272,6 @@ pub fn update_row<TRow: Clone>(
 )]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     use super::*;
     use crate::column::ColumnDef;
@@ -296,30 +295,18 @@ mod tests {
 
     fn make_columns() -> Vec<ColumnDef<TestRow>> {
         vec![
-            ColumnDef {
-                id: col_name(),
-                header: "Name".into(),
-                accessor: Arc::new(|r: &TestRow| CellValue::Text(r.name.clone())),
-                sortable: true,
-                filter: crate::column::FilterKind::Text,
-                initial_width: None,
-                alignment: Alignment::Left,
-                render_kind: crate::column::RenderKind::Text,
-                header_class: None,
-                cell_class: None,
-            },
-            ColumnDef {
-                id: col_score(),
-                header: "Score".into(),
-                accessor: Arc::new(|r: &TestRow| CellValue::Float(r.score)),
-                sortable: true,
-                filter: crate::column::FilterKind::Text,
-                initial_width: None,
-                alignment: Alignment::Right,
-                render_kind: crate::column::RenderKind::Number,
-                header_class: None,
-                cell_class: None,
-            },
+            ColumnDef::new(col_name(), "Name", |r: &TestRow| {
+                CellValue::Text(r.name.clone())
+            })
+            .sortable()
+            .filter(crate::column::FilterKind::Text),
+            ColumnDef::new(col_score(), "Score", |r: &TestRow| {
+                CellValue::Float(r.score)
+            })
+            .sortable()
+            .filter(crate::column::FilterKind::Text)
+            .alignment(Alignment::Right)
+            .render_kind(crate::column::RenderKind::Number),
         ]
     }
 
