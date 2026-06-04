@@ -1,13 +1,24 @@
 name: CI
 
+# ORCH-CONFORMANCE-1 + ORCH-ENV-GATED-QUALITY-1: the deterministic quality
+# gates that every change must pass before it can merge to main. fmt/clippy/
+# test were here from v0.1.0; doc-check was added 2026-06-03 to catch broken
+# intra-doc links during the v0.1.1 docs pass.
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
 
+# Cancel in-progress runs when a new commit is pushed to the same PR.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
+    name: fmt / clippy / test / doc
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +35,13 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: cargo clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: cargo test
         run: cargo test --workspace
+
+      - name: cargo doc (no broken intra-doc links)
+        env:
+          # Promote intra-doc link errors so docs.rs renders cleanly post-publish.
+          RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links -D warnings"
+        run: cargo doc --workspace --no-deps --all-features

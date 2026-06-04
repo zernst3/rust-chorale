@@ -1,0 +1,72 @@
+name: Commit lint
+
+# CC-1 (chorale rule) / PROC-CITE-CONVENTION-ID-1 (Camerata rule):
+# Commits that modify chorale source must cite at least one convention ID
+# in the commit body. The pattern matches `<SCOPE>-<TOPIC>-<NUMBER>`
+# (e.g. CHORALE-CORE-2, ROBUSTNESS-1, ORCH-PREREVIEW-1).
+#
+# A commit that touches only README.md, CHANGELOG.md, docs/, examples/,
+# .github/, or test files is exempt — the rule scopes to source under
+# chorale-core/src/ and chorale-dioxus/src/.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+jobs:
+  lint:
+    name: Convention citation check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Verify every source-touching commit cites a convention ID
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Pattern: SCOPE-TOPIC-NUM, all caps and digits, hyphen-separated.
+          # Matches CHORALE-CORE-2, ROBUSTNESS-1, ORCH-PREREVIEW-1, CC-1, etc.
+          CITATION_REGEX='[A-Z][A-Z0-9]*-[A-Z][A-Z0-9-]*-[0-9]+|^CC-[0-9]+| CC-[0-9]+'
+
+          # Paths that, if exclusively touched, exempt the commit from CC-1.
+          EXEMPT_PATHS_REGEX='^(README\.md|CHANGELOG\.md|docs/|examples/|\.github/|AGENTS\.md|CONVENTIONS\.md|camerata\.lock|LICENSE-MIT|LICENSE-APACHE|\.gitignore|.*\.toml$|.*tests?/|.*_test\.rs$|.*/tests/)'
+
+          violations=0
+          for sha in $(git rev-list --reverse "${BASE_SHA}..${HEAD_SHA}"); do
+            paths=$(git show --name-only --pretty=format: "$sha" | grep -v '^$' || true)
+            if [[ -z "$paths" ]]; then
+              continue
+            fi
+
+            # Determine if any non-exempt path is touched.
+            non_exempt=$(echo "$paths" | grep -vE "$EXEMPT_PATHS_REGEX" || true)
+            if [[ -z "$non_exempt" ]]; then
+              echo "::notice::commit ${sha:0:12} touches only exempt paths; skipping CC-1 check"
+              continue
+            fi
+
+            # Check the commit body for a citation.
+            body=$(git log -1 --format=%B "$sha")
+            if echo "$body" | grep -qE "$CITATION_REGEX"; then
+              echo "::notice::commit ${sha:0:12} cites a convention ID"
+            else
+              echo "::error::commit ${sha:0:12} touches source but cites no convention ID (CC-1 / PROC-CITE-CONVENTION-ID-1)"
+              echo "::error::    subject: $(git log -1 --format=%s "$sha")"
+              echo "::error::    non-exempt paths: $(echo "$non_exempt" | tr '\n' ' ')"
+              violations=$((violations + 1))
+            fi
+          done
+
+          if [[ $violations -gt 0 ]]; then
+            echo "CC-1 / PROC-CITE-CONVENTION-ID-1: $violations commit(s) touched source without citing a convention ID. Amend the commit body to cite the rule(s) applied (e.g. 'Applies CHORALE-CORE-2.')."
+            exit 1
+          fi
+
+          echo "CC-1 / PROC-CITE-CONVENTION-ID-1: all source-touching commits cite a convention ID."
