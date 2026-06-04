@@ -973,10 +973,16 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
     // different counts). The resulting scroll-extent drift caused a runaway
     // scroll feedback loop. `box-shadow` is purely paint, never layout, so
     // the rendered row is exactly `row_height` px regardless of borders.
+    // Note the explicit `background: transparent` on the deselected branch
+    // rather than an empty string. Dioxus's attribute diff does not reliably
+    // clear a previously-set inline style when the new value is `""`; the
+    // tr keeps its old `background: #eff6ff` and the row stays blue after
+    // the checkbox toggles off. Always emitting a concrete background
+    // value forces the override.
     let (row_bg, separator_color) = if is_selected && selection_enabled {
         ("background: #eff6ff;", "#dbeafe")
     } else {
-        ("", "#f0f0f0")
+        ("background: transparent;", "#f0f0f0")
     };
     rsx! {
         tr {
