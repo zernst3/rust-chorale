@@ -116,6 +116,17 @@ pub fn filtered_sorted_rows<TRow: Clone>(state: &TableState<TRow>) -> Vec<TRow> 
 /// Adapters should pair this with their framework's memoization primitive
 /// (Dioxus `use_memo`, Leptos `create_memo`, etc.) keyed on the table-state
 /// signal so scroll-only state changes don't reinvoke the pipeline.
+///
+/// # Example
+///
+/// ```rust
+/// use chorale_core::{TableState, visible_view};
+///
+/// let state: TableState<String> = TableState::new(vec![], vec![]);
+/// let view = visible_view(&state);
+/// // Empty dataset → empty view.
+/// assert!(view.is_empty());
+/// ```
 #[must_use]
 pub fn visible_view<TRow: Clone>(state: &TableState<TRow>) -> Vec<(RowId, TRow)> {
     let filtered_sorted = filtered_sorted_pairs(state);

@@ -11,8 +11,24 @@ use crate::types::{ColumnId, FilterValue, RowId, SortDirection, SortState};
 /// Cycle through sort states for `col`: none → ASC → DESC → none.
 ///
 /// If a different column is currently sorted, replaces it with ASC on `col`.
-/// Resets `scroll_top` to 0.0 so virtualization re-anchors after reorder
-/// (recon-2 § 5).
+/// Resets `scroll_top` and `page` to 0 so virtualization re-anchors after
+/// reorder (recon-2 § 5).
+///
+/// # Example
+///
+/// ```rust
+/// use chorale_core::{TableState, ColumnId, toggle_sort};
+///
+/// let state: TableState<String> = TableState::new(vec![], vec![]);
+/// // First toggle: no sort → ASC.
+/// let s1 = toggle_sort(&state, ColumnId("name"));
+/// assert!(s1.sort.is_some());
+/// // Second toggle: ASC → DESC.
+/// let s2 = toggle_sort(&s1, ColumnId("name"));
+/// // Third toggle: DESC → none.
+/// let s3 = toggle_sort(&s2, ColumnId("name"));
+/// assert!(s3.sort.is_none());
+/// ```
 #[must_use]
 pub fn toggle_sort<TRow: Clone>(state: &TableState<TRow>, col: ColumnId) -> TableState<TRow> {
     let next_sort = match &state.sort {
@@ -41,6 +57,21 @@ pub fn toggle_sort<TRow: Clone>(state: &TableState<TRow>, col: ColumnId) -> Tabl
 /// `filter = None` removes any existing filter on the column.
 /// Resets `scroll_top` and `page` to 0 because the row count may change
 /// (recon-2 § 5).
+///
+/// # Example
+///
+/// ```rust
+/// use chorale_core::{TableState, ColumnId, FilterValue, set_filter};
+///
+/// let state: TableState<String> = TableState::new(vec![], vec![]);
+/// // Apply a text filter.
+/// let filtered = set_filter(&state, ColumnId("name"), Some(FilterValue::Text("alice".into())));
+/// assert!(filtered.filters.contains_key(&ColumnId("name")));
+/// assert_eq!(filtered.page, 0);
+/// // Clear it.
+/// let cleared = set_filter(&filtered, ColumnId("name"), None);
+/// assert!(cleared.filters.is_empty());
+/// ```
 #[must_use]
 pub fn set_filter<TRow: Clone>(
     state: &TableState<TRow>,

@@ -97,12 +97,24 @@ impl<TRow: Clone> Clone for TableState<TRow> {
 }
 
 impl<TRow: Clone> TableState<TRow> {
-    /// Create a minimal `TableState` with sensible defaults.
+    /// Create a `TableState` with sensible defaults.
     ///
-    /// - `page_size = 50`
-    /// - `row_height = 40.0` px
-    /// - `viewport_height = 500.0` px
-    /// - `buffer_rows = 3`
+    /// - `page_size = 50`, `page = 0`
+    /// - `row_height = 40.0` px, `viewport_height = 500.0` px
+    /// - `buffer_rows = 3` (overscan rows rendered beyond the visible window)
+    /// - No active sort, filters, selection, or column overrides.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use chorale_core::{TableState, RowId};
+    ///
+    /// // An empty table; rows and columns are typically provided by the host app.
+    /// let state: TableState<String> = TableState::new(vec![], vec![]);
+    /// assert_eq!(state.page, 0);
+    /// assert_eq!(state.page_size, 50);
+    /// assert_eq!(state.row_height, 40.0);
+    /// ```
     #[must_use]
     pub fn new(rows: Vec<(RowId, TRow)>, columns: Vec<ColumnDef<TRow>>) -> Self {
         Self {
