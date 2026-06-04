@@ -588,4 +588,28 @@ mod tests {
         let s2 = update_row(&s, unknown, new_row);
         assert_eq!(s2.rows[0].1, s.rows[0].1);
     }
+
+    // ---- toggle_select_all with active filter ----------------------------
+
+    #[test]
+    fn toggle_select_all_only_selects_visible_page_rows() {
+        // 3 rows, page_size=2 → page 0 has rows[0] and rows[1], page 1 has rows[2].
+        let s = make_state();
+        let mut s2 = s.clone();
+        s2.page_size = 2;
+        let s3 = toggle_select_all(&s2);
+        // Only the first 2 rows (the visible page) should be selected.
+        assert_eq!(s3.selection.len(), 2);
+        assert!(!s3.selection.contains(&s2.rows[2].0));
+    }
+
+    #[test]
+    fn set_scroll_is_idempotent_at_same_position() {
+        // set_scroll with the same value should return a state equal to
+        // calling it once (the transition is deterministic and pure).
+        let s = make_state();
+        let s1 = set_scroll(&s, 100.0);
+        let s2 = set_scroll(&s1, 100.0);
+        assert!((s2.scroll_top - 100.0).abs() < f64::EPSILON);
+    }
 }

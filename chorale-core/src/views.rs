@@ -548,4 +548,100 @@ mod tests {
         let pad_sum = win.top_pad_px + win.bottom_pad_px;
         assert!((pad_sum - (total_height - rendered_height)).abs() < f64::EPSILON);
     }
+
+    // ---- visible_row_ids --------------------------------------------------
+
+    #[test]
+    fn visible_row_ids_matches_visible_view_ids() {
+        let s = make_state();
+        let ids = visible_row_ids(&s);
+        let view = visible_view(&s);
+        assert_eq!(ids.len(), view.len());
+        for (id, (view_id, _)) in ids.iter().zip(view.iter()) {
+            assert_eq!(id, view_id);
+        }
+    }
+
+    #[test]
+    fn visible_row_ids_is_paginated() {
+        let mut s = make_state();
+        s.page_size = 2;
+        let page0_ids = visible_row_ids(&s);
+        assert_eq!(page0_ids.len(), 2);
+        s.page = 1;
+        let page1_ids = visible_row_ids(&s);
+        assert_eq!(page1_ids.len(), 1);
+        // No overlap between pages
+        for id in &page0_ids {
+            assert!(!page1_ids.contains(id));
+        }
+    }
+
+    // ---- filtered_sorted_rows ---------------------------------------------
+
+    #[test]
+    fn filtered_sorted_rows_ignores_pagination() {
+        let mut s = make_state();
+        s.page_size = 1; // only 1 row per page
+        let all = filtered_sorted_rows(&s);
+        // Despite page_size=1, all 3 rows are returned.
+        assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn filtered_sorted_rows_respects_filter() {
+        let mut s = make_state();
+        s.filters
+            .insert(ColumnId("name"), FilterValue::Text("Ali".into()));
+        let rows = filtered_sorted_rows(&s);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "Alice");
+    }
+
+    #[test]
+    fn filtered_sorted_rows_respects_sort() {
+        let mut s = make_state();
+        s.sort = Some(SortState {
+            column: ColumnId("score"),
+            direction: SortDirection::Desc,
+        });
+        let rows = filtered_sorted_rows(&s);
+        // Alice=90, Charlie=85, Bob=75 → desc
+        assert_eq!(rows[0].name, "Alice");
+        assert_eq!(rows[2].name, "Bob");
+    }
+
+    // ---- visible_window_for_state -----------------------------------------
+
+    #[test]
+    fn visible_window_for_state_returns_window_and_slice() {
+        let state = make_state_with_scroll(0.0, 40.0, 120.0);
+        let (win, rows) = visible_window_for_state(&state);
+        // 3 rows at 40px each = 120px total; viewport = 120px → all rows visible.
+        assert_eq!(win.start_index, 0);
+        assert!(rows.len() <= 3);
+    }
+
+    #[test]
+    fn visible_window_for_state_slices_correctly() {
+        // 3 rows, row_height=40, viewport=40 (shows 1 row), buffer=0.
+        let mut state = make_state_with_scroll(40.0, 40.0, 40.0);
+        state.buffer_rows = 0;
+        let (win, rows) = visible_window_for_state(&state);
+        // scroll_top=40 → start_index=1 (second row), end_index=1.
+        assert_eq!(win.start_index, 1);
+        assert_eq!(win.end_index, 1);
+        assert_eq!(rows.len(), 1);
+        // The sliced row should match what visible_rows returns for the same state.
+        let all = visible_rows(&state);
+        assert_eq!(rows[0], all[win.start_index]);
+    }
+
+    fn make_state_with_scroll(scroll_top: f64, row_height: f64, viewport: f64) -> TableState<R> {
+        let mut s = make_state();
+        s.scroll_top = scroll_top;
+        s.row_height = row_height;
+        s.viewport_height = viewport;
+        s
+    }
 }
