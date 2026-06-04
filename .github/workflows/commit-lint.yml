@@ -31,9 +31,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Pattern: SCOPE-TOPIC-NUM, all caps and digits, hyphen-separated.
-          # Matches CHORALE-CORE-2, ROBUSTNESS-1, ORCH-PREREVIEW-1, CC-1, etc.
-          CITATION_REGEX='[A-Z][A-Z0-9]*-[A-Z][A-Z0-9-]*-[0-9]+|^CC-[0-9]+| CC-[0-9]+'
+          # Pattern: <UPPER-ID>-<NUM>, single- or multi-hyphen.
+          # chorale's docs/CONVENTIONS.md uses single-hyphen IDs (CC-1,
+          # TESTS-1, API-1, VIRT-1, DEPS-1, ROBUSTNESS-1, PERF-1).
+          # Camerata's CONVENTIONS.md uses multi-hyphen IDs (CHORALE-CORE-2,
+          # ORCH-PREREVIEW-1, PROC-CITE-CONVENTION-ID-1). Both shapes are
+          # valid citations. The regex requires at least two uppercase or
+          # digit characters before the numeric suffix so short false
+          # positives (e.g. a "T-1" tracking number) don't slip through.
+          CITATION_REGEX='[A-Z][A-Z0-9-]*[A-Z0-9]-[0-9]+'
 
           # Paths that, if exclusively touched, exempt the commit from CC-1.
           EXEMPT_PATHS_REGEX='^(README\.md|CHANGELOG\.md|docs/|examples/|\.github/|AGENTS\.md|CONVENTIONS\.md|camerata\.lock|LICENSE-MIT|LICENSE-APACHE|\.gitignore|.*\.toml$|.*tests?/|.*_test\.rs$|.*/tests/)'
