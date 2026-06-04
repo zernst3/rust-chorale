@@ -129,3 +129,12 @@ Per TESTS-1 and ORCH-NEW-PATH-TESTS-1:
    — more ergonomic for simple cases but harder to compose with complex host RSX. The
    handle API already offers `selection_count()` and `selected_ids()`, so injection is
    redundant.
+
+## Decisions (signed off 2026-06-04)
+
+All 3 recommendations accepted as written.
+
+1. ✅ Prop type is `Element`. Consistent with `CellRenderers` and other slot props.
+2. ✅ Placement above the table. `SelectionToolbarPosition` enum prop deferred to v0.3.
+3. ✅ Host reads selection state from the handle (`selection_count()` /
+   `selected_ids()`); no auto-injection.

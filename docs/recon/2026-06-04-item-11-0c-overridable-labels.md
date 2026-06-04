@@ -204,3 +204,59 @@ Per TESTS-1 and ORCH-NEW-PATH-TESTS-1:
    with a link to "clear filters")?** Recommendation: plain `String` in v0.2.0. Rich text
    would require either a `VNode`-typed field (coupling core to Dioxus types) or a HTML
    escape layer. Deferred to v0.3.
+
+## Decisions (signed off 2026-06-04)
+
+4 of 5 recommendations accepted as written. Question #2 amended to the **layered
+design**: simple `String` fields for non-parameterized labels, `Arc<dyn Fn>`
+fields for parameterized labels. Ships in v0.2.0.
+
+1. ✅ Field-mutation pattern (no builder).
+2. ⚙️ **Layered design — ship in v0.2.0.** Non-parameterized fields stay
+   `String` (`filter_placeholder`, `clear_filter_label`, `previous_page_label`,
+   `next_page_label`, `go_to_page_label`, `page_size_all_label`,
+   `select_all_label`, `deselect_all_label`, `column_visibility_label`,
+   `show_all_columns_label`, `export_csv_label`, `sort_ascending_label`,
+   `sort_descending_label`, `sort_none_label`, `no_rows_label`).
+
+   The one parameterized field is upgraded:
+
+   ```rust
+   // BEFORE: pub page_count_of: String,  // "of"
+
+   /// Renders the "page N of M" affordance. Receives (current_page, total_pages)
+   /// and returns the full string. Default impl: `format!("{} of {}", page, total)`.
+   /// Hosts override to support token-reordering languages
+   /// (`|p, t| format!("{}ページ中{}ページ目", t, p)` for Japanese).
+   pub page_count: Arc<dyn Fn(usize, usize) -> String + Send + Sync>,
+   ```
+
+   **`PartialEq` impl:** `Labels` cannot derive `PartialEq` because `dyn Fn`
+   does not impl it. Hand-rolled impl compares all `String` fields by value
+   equality and the `page_count` field by `Arc::ptr_eq`:
+
+   ```rust
+   impl PartialEq for Labels {
+       fn eq(&self, other: &Self) -> bool {
+           self.filter_placeholder == other.filter_placeholder
+               && self.clear_filter_label == other.clear_filter_label
+               // ... all other String fields ...
+               && Arc::ptr_eq(&self.page_count, &other.page_count)
+       }
+   }
+   ```
+
+   `Arc::ptr_eq` compares the underlying pointer, not the closure body. Hosts
+   memoize the `Labels` (e.g., `use_memo(move || Labels { ... })` in Dioxus)
+   so the `Arc` is preserved across renders — the prop-equality check stays
+   cheap and correct.
+
+   **Default impl** uses `Arc::new(|page, total| format!("{} of {}", page, total))`.
+
+   This is a v0.3-safe shape: adding more parameterized fields later is
+   additive (`Labels` is `#[non_exhaustive]`).
+3. ✅ `Labels` lives in `chorale-core`. Single canonical type across adapters.
+4. ✅ `labels: Option<Labels>` prop. `None` falls back to `Labels::default()`
+   (English).
+5. ✅ Plain `String` for label content (no Markdown / HTML). Rich text
+   deferred to v0.3.

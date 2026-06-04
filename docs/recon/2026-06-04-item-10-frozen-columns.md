@@ -174,3 +174,15 @@ Per TESTS-1:
    `box-shadow`?** Recommendation: CSS variable (`--chorale-frozen-divider-shadow`) with
    a default value matching the row-separator convention. This lets host apps theme the
    divider without overriding Tailwind classes.
+
+## Decisions (signed off 2026-06-04)
+
+All 5 recommendations accepted as written. Runtime `FrozenSide` toggle and
+drag-out-of-frozen-zone deferred to v0.3.
+
+1. ✅ `FrozenSide` fixed at column-definition time. Runtime toggle deferred to v0.3.
+2. ✅ No drag-out-of-frozen-zone in v0.2.0. Same-zone reordering is supported via Item 9.
+3. ✅ `frozen_left_columns` / `frozen_right_columns` / `scrollable_columns` are public.
+   Avoids duplication across `chorale-dioxus` and `chorale-leptos`.
+4. ✅ Fallback width `150.0` px when no `initial_width` and no measured width.
+5. ✅ CSS variable `--chorale-frozen-divider-shadow` for divider styling.

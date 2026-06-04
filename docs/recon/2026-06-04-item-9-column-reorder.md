@@ -178,3 +178,14 @@ Per TESTS-1:
    `effective_column_order`, so the drag-reordered sequence is visible in the toolbar
    too. The adapter's toolbar rendering already reads the column list; it just needs to
    use the ordered version.
+
+## Decisions (signed off 2026-06-04)
+
+All 5 recommendations accepted as written.
+
+1. ✅ `effective_column_order` stays `pub(crate)`. Hosts read `state.column_order`.
+2. ✅ `move_column` clamps `to_index` to the last valid position; `Err` only
+   on unknown `column_id`.
+3. ✅ `set_column_order` rejects duplicates with `StateError::DuplicateColumnId`.
+4. ✅ `on_column_order_change` fires only on drop.
+5. ✅ Visibility toolbar iterates `effective_column_order`.

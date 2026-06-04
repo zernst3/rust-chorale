@@ -195,3 +195,41 @@ Per TESTS-1:
    `prev_editable_cell` transitions live in core?** Recommendation: core, to be
    reusable across adapters. Simple enough (`Vec<ColumnId>` walk with `EditorKind` check).
    This is a new public function; include in this batch's API-1 surface.
+
+## Decisions (signed off 2026-06-04)
+
+All 5 recommendations accepted, with one v0.2.0 scope addition (see #2).
+
+1. ✅ Named `EditTarget` struct per ROBUSTNESS-1.
+2. ✅ Optimistic commit semantics. **Scope addition for v0.2.0:** also ship a
+   `revert_edit(state: &TableState<TRow>, prior: PriorEdit) -> TableState<TRow>`
+   transition that hosts call from their `spawn(async { api::save(...) })`
+   error path. Signature sketch:
+
+   ```rust
+   /// Snapshot of a committed edit, sufficient to roll back on persistence failure.
+   /// Returned to the host as part of `CommittedEdit` so the host can pass it back
+   /// to `revert_edit` if the async save fails.
+   #[non_exhaustive]
+   pub struct PriorEdit {
+       pub row_id: RowId,
+       pub column_id: ColumnId,
+       pub prior_value: CellValue,
+   }
+
+   /// Reverts a previously-committed edit. Used by the host on persistence error
+   /// to roll back the optimistic commit. Returns a state with the cell's prior
+   /// value restored. No-op if the row is no longer present (it was deleted in
+   /// the meantime).
+   pub fn revert_edit(state: &TableState<TRow>, prior: PriorEdit) -> TableState<TRow>;
+   ```
+
+   The `CommittedEdit` callback payload gains a `prior: PriorEdit` field so
+   hosts have everything they need to roll back without re-querying state.
+   Pessimistic-commit mode is deferred to v0.3 (would require introducing
+   async machinery to core, violating CHORALE-CORE-2).
+3. ✅ `on_commit_edit` receives `String` (raw text). Host owns its domain type.
+4. ✅ `start_edit` returns `Err(StateError::ColumnNotEditable)` on non-editable
+   columns.
+5. ✅ `next_editable_cell` / `prev_editable_cell` live in `chorale-core`,
+   reusable across adapters.

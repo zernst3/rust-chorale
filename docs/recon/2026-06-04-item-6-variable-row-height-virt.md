@@ -165,3 +165,17 @@ Per TESTS-1, every new transition is unit-tested:
    Recommendation: the adapter owns scroll position (it lives in the DOM, not in
    `TableState`), so the adapter resets `scroll_top` to 0 when it detects a cleared
    cache. Core should not manage DOM state.
+
+## Decisions (signed off 2026-06-04)
+
+All 5 recommendations accepted as written. Implementation may proceed without
+further sign-off.
+
+1. ✅ Separate `visible_window_variable` function. Fixed-height path keeps the
+   v0.1.0 ergonomics; variable-height callers opt in.
+2. ✅ Key on row index (`usize`). Cache invalidated on sort / filter / page
+   changes via #4.
+3. ✅ `getBoundingClientRect` in `use_effect` + `request_animation_frame`.
+   ResizeObserver deferred to v0.3 if user demand surfaces.
+4. ✅ Implicit cache-clear inside `set_filter`, `toggle_sort`, `set_page`.
+5. ✅ Adapter owns scroll-position reset; core stays DOM-free.

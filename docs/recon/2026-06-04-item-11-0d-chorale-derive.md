@@ -175,3 +175,19 @@ against a stored `expected.rs` file).
    compile error if the struct doesn't satisfy the `TRow: Clone + PartialEq` bounds.
    This gives a clear error at derive site rather than a confusing monomorphization error
    at the `TableState::new` call site.
+
+## Decisions (signed off 2026-06-04)
+
+All 5 recommendations accepted. Opt-out keyword resolved to `filter = "none"`.
+
+1. ✅ Inherent method on the struct (`impl Invoice { pub fn chorale_columns() }`).
+   `TableRow` trait deferred to v0.3.
+2. ✅ `chorale-derive` publishes at `0.1.0`. Depends on `chorale-core ^0.2`.
+3. ✅ `Display`-only types default to `FilterKind::Text` (filter compares against
+   `Display` output). **Opt-out attribute: `#[chorale(filter = "none")]`.**
+   Consistent with the existing `filter = "Text"` / `filter = "Date"` family —
+   one key for all filter concerns, value selects the kind. The string `"none"`
+   is a sentinel; not a real `FilterKind` variant.
+4. ✅ `chrono` support gated behind Cargo feature `chrono`. Without the
+   feature, `NaiveDate` fields fall back to `Display`/`Text`.
+5. ✅ Enforce `Clone + PartialEq` at derive site with a compile error.

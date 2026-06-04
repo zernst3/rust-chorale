@@ -162,3 +162,18 @@ Per TESTS-1:
    Recommendation: no — hide the badge for single-column sort. A lone "1" badge is
    visual noise when there's only one sort active. The existing arrow icon conveys
    direction without a number.
+
+## Decisions (signed off 2026-06-04)
+
+All 5 recommendations accepted as written. The `toggle_sort` signature change is
+a deliberate source-breaking change, justified by the semver 0.2.0 bump.
+
+1. ✅ No `toggle_sort_single` migration wrapper. Mechanical migration: add
+   `SortAction::Replace` to each callsite. The adapter is the only realistic
+   direct caller and ships in lockstep.
+2. ✅ Removing a sorted column shifts remaining priorities up naturally
+   (vec-remove semantics).
+3. ✅ Number-badge style (1, 2, 3) for sort priority.
+4. ✅ `SortAction` NOT `#[non_exhaustive]`. Two semantically distinct actions;
+   compiler-caught incomplete matches are the right tradeoff.
+5. ✅ Hide priority badge for single-column sort.

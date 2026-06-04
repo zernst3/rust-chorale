@@ -191,3 +191,43 @@ Per TESTS-1:
    page size) or always return all grouped rows?** Recommendation: respect pagination
    (uses the existing `current_page` / `page_size` fields). Returning all rows at once
    breaks virtualization on large data sets. This ties into open question #1.
+
+## Decisions (signed off 2026-06-04)
+
+4 of 5 recommendations accepted as written. Question #1 amended to ship BOTH
+pagination strategies, host-selected via a new config field.
+
+1. ⚙️ **Both strategies ship in v0.2.0** as a host-selectable mode. New field on
+   `TableState`:
+
+   ```rust
+   /// How pagination interacts with grouping. Default `DataRowsOnly` (spreadsheet-
+   /// natural for small/medium datasets). Set to `Virtualized` for large grouped
+   /// trees where page-edge header awkwardness outweighs the page-jump affordance.
+   pub grouped_pagination: GroupedPaginationMode,
+
+   #[non_exhaustive]
+   pub enum GroupedPaginationMode {
+       /// Paginate data rows only; group headers re-render on each page where
+       /// their rows appear. Page density is consistent (always `page_size` data
+       /// rows). Headers may repeat across page boundaries. Default.
+       DataRowsOnly,
+       /// Ignore `page_size` when `state.grouping` is non-empty; render the full
+       /// grouped tree. Virtualization (Item 6) handles scale. Page controls hide
+       /// in the adapter when this mode is active and grouping is on.
+       Virtualized,
+   }
+   ```
+
+   Default `DataRowsOnly` keeps the spreadsheet-natural feel for the common
+   case. Hosts targeting large datasets opt into `Virtualized` once and forget.
+   The pagination bar in `chorale-dioxus` checks `state.grouping.is_empty() ||
+   state.grouped_pagination == DataRowsOnly` to decide whether to render page
+   controls. `visible_grouped_view` branches on the mode internally.
+2. ✅ No depth limit on `state.grouping`.
+3. ✅ Expose `GroupKey::from_values(&[String]) -> GroupKey`. Internal format
+   stays opaque.
+4. ✅ `Custom` aggregator returns `CellValue`. Hosts wrap pre-formatted text in
+   `CellValue::Text(...)` when needed.
+5. ✅ `visible_grouped_view` honors pagination (in `DataRowsOnly` mode);
+   bypasses pagination (in `Virtualized` mode per #1).

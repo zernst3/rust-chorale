@@ -280,3 +280,17 @@ Per TESTS-1, ORCH-NEW-PATH-TESTS-1:
    validation, `Callback<CommittedEdit>` for commit. This is idiomatic Leptos; document
    the `EventHandler` ↔ `Callback` mapping in the API migration guide for users coming
    from chorale-dioxus.
+
+## Decisions (signed off 2026-06-04)
+
+All 5 recommendations accepted as written.
+
+1. ✅ `RwSignal<TableState<TRow>>`. Component-scoped state on the main WASM
+   thread; `ArcRwSignal` reserved for cross-thread cases.
+2. ✅ `use_chorale_table` hook pattern. Mirrors Dioxus callsites; cross-adapter
+   muscle memory.
+3. ✅ `selection_toolbar: Option<ChildrenFn>`. Re-renderable; `None` default.
+4. ✅ Target Leptos 0.7 (current stable in the v0.2.0 window).
+5. ✅ `Callback<EditValidation, Result<(), String>>` for validate;
+   `Callback<CommittedEdit>` for commit. Document the `EventHandler` ↔
+   `Callback` mapping in the API migration guide.

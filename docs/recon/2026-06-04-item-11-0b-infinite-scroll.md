@@ -184,3 +184,26 @@ Per TESTS-1:
    show a spinner?** Recommendation: optional prop `infinite_scroll_loading_indicator:
    Option<Element>`. Rendered at the bottom of the table between threshold hit and the
    next render cycle with the new rows. Zach should decide if this is v0.2.0 or v0.3.
+
+## Decisions (signed off 2026-06-04)
+
+All 5 recommendations accepted as written. Question #5 resolved to **ship in
+v0.2.0**.
+
+1. ✅ Branch inside `visible_view`. One function, mode-conditioned semantics.
+2. ✅ `loaded_row_count` starts at `page_size` when entering InfiniteScroll.
+3. ✅ `load_more_rows` always loads `page_size` rows. No `count` parameter.
+4. ✅ InfiniteScroll and fixed-height virtualization are orthogonal. Threshold
+   detector accounts for `VirtualWindow::bottom_pad_px`.
+5. ✅ **Loading indicator ships in v0.2.0.** Optional prop on `Table`:
+
+   ```rust
+   /// Element rendered at the bottom of the table while a `load_more_rows`
+   /// call is in flight (or about to fire after a scroll-threshold hit).
+   /// `None` = no indicator (default). Only relevant in InfiniteScroll mode.
+   pub infinite_scroll_loading_indicator: Option<Element>,
+   ```
+
+   Adapter-local "is-pending" flag flips true on `load_more_rows` invocation,
+   flips false when the next render commits with the increased
+   `loaded_row_count`. No core changes required.
