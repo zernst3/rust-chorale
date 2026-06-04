@@ -1136,11 +1136,13 @@ fn currency_symbol(code: &CurrencyCode) -> &'static str {
     }
 }
 
+#[allow(clippy::match_same_arms)]
 fn alignment_css(alignment: Alignment) -> &'static str {
     match alignment {
         Alignment::Left => "left",
         Alignment::Center => "center",
         Alignment::Right => "right",
+        // `Alignment` is #[non_exhaustive]; default unknown variants to left.
         _ => "left",
     }
 }
