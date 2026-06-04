@@ -25,6 +25,7 @@ static SCROLL_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub struct CellRenderers(Arc<HashMap<ColumnId, CellRenderer>>);
 
 impl CellRenderers {
+    /// Create a `CellRenderers` from a map of column-id to renderer closure.
     #[must_use]
     pub fn new(map: HashMap<ColumnId, CellRenderer>) -> Self {
         Self(Arc::new(map))
@@ -1774,8 +1775,14 @@ mod tests {
     #[test]
     fn badge_style_unknown_color_falls_back_to_default() {
         let s = super::badge_style("hotpink");
-        assert!(s.contains("#e5e7eb"), "unknown color should use fallback bg");
-        assert!(s.contains("#1f2937"), "unknown color should use fallback fg");
+        assert!(
+            s.contains("#e5e7eb"),
+            "unknown color should use fallback bg"
+        );
+        assert!(
+            s.contains("#1f2937"),
+            "unknown color should use fallback fg"
+        );
     }
 
     // ---- additional visible_view correctness (adapter-level) ---------------

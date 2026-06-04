@@ -30,6 +30,7 @@ pub struct TableState<TRow: Clone> {
     /// The full dataset as `(RowId, row)` pairs. `RowId` is stable across
     /// sort, filter, and pagination so selection + edits survive reordering.
     pub rows: Vec<(RowId, TRow)>,
+    /// Column definitions in display order. Accessor closures are stored here.
     pub columns: Vec<ColumnDef<TRow>>,
     /// Active sort, or `None` for natural (insertion) order.
     pub sort: Option<SortState>,

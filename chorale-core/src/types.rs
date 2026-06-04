@@ -55,14 +55,18 @@ impl std::fmt::Display for ColumnId {
 /// Sort direction for a column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SortDirection {
+    /// Ascending order (smallest first).
     Asc,
+    /// Descending order (largest first).
     Desc,
 }
 
 /// Active sort on a single column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SortState {
+    /// The column being sorted.
     pub column: ColumnId,
+    /// Whether the sort is ascending or descending.
     pub direction: SortDirection,
 }
 
@@ -80,10 +84,17 @@ pub enum FilterValue {
     /// Free-text substring match (case-insensitive). Paired with `FilterKind::Text`.
     Text(String),
     /// Numeric range bounds. Either bound is optional. Paired with `FilterKind::NumericRange`.
-    NumericRange { min: Option<f64>, max: Option<f64> },
+    NumericRange {
+        /// Inclusive lower bound. `None` means no lower bound.
+        min: Option<f64>,
+        /// Inclusive upper bound. `None` means no upper bound.
+        max: Option<f64>,
+    },
     /// Date range bounds. Either bound is optional. Paired with `FilterKind::DateRange`.
     DateRange {
+        /// Inclusive start date. `None` means no lower bound.
         min: Option<NaiveDate>,
+        /// Inclusive end date. `None` means no upper bound.
         max: Option<NaiveDate>,
     },
     /// Set of allowed text values. Paired with `FilterKind::MultiSelect`. An empty
@@ -96,9 +107,12 @@ pub enum FilterValue {
 /// Horizontal alignment for a column's cells and header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Alignment {
+    /// Left-align cell content (the default).
     #[default]
     Left,
+    /// Center-align cell content.
     Center,
+    /// Right-align cell content.
     Right,
 }
 
@@ -107,8 +121,11 @@ pub enum Alignment {
 pub struct CurrencyCode(pub &'static str);
 
 impl CurrencyCode {
+    /// US Dollar.
     pub const USD: Self = Self("USD");
+    /// Euro.
     pub const EUR: Self = Self("EUR");
+    /// British Pound Sterling.
     pub const GBP: Self = Self("GBP");
 }
 
@@ -121,12 +138,19 @@ impl CurrencyCode {
 /// Defined in recon-2 § 7a.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CellValue {
+    /// UTF-8 text.
     Text(String),
+    /// 64-bit signed integer.
     Integer(i64),
+    /// 64-bit IEEE 754 floating-point number.
     Float(f64),
+    /// Boolean true/false.
     Boolean(bool),
+    /// Calendar date (no time component).
     Date(NaiveDate),
+    /// Date + time in UTC.
     DateTime(DateTime<Utc>),
+    /// No value / missing data. Sorts last; renders as an empty string.
     Empty,
 }
 

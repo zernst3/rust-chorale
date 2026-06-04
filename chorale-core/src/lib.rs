@@ -31,6 +31,8 @@
 //! [CHORALE-CORE-2]: https://github.com/zernst3/rust-chorale/blob/main/docs/CONVENTIONS.md
 //! [repository README]: https://github.com/zernst3/rust-chorale#quick-start
 
+#![warn(missing_docs)]
+
 mod column;
 mod error;
 mod state;

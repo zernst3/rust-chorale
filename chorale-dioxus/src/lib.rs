@@ -38,6 +38,8 @@
 //! [`Signal`]: dioxus::prelude::Signal
 //! [repository README]: https://github.com/zernst3/rust-chorale#quick-start
 
+#![warn(missing_docs)]
+
 mod components;
 mod hooks;
 

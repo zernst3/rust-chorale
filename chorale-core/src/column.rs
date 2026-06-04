@@ -10,11 +10,14 @@ use crate::types::{Alignment, CellValue, ColumnId, CurrencyCode};
 /// `Empty` cells use the `empty_label` / `empty_color` fallback.
 #[derive(Clone, Debug, Default)]
 pub struct BadgeVariantMap {
+    /// Map from cell text value to badge display configuration.
     pub variants: HashMap<String, BadgeVariant>,
+    /// Variant used when the cell value is not in `variants`.
     pub fallback: Option<BadgeVariant>,
 }
 
 impl BadgeVariantMap {
+    /// Create an empty `BadgeVariantMap`.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -47,11 +50,14 @@ impl BadgeVariantMap {
 /// adapter maps to a CSS class such as `chorale-badge--green`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BadgeVariant {
+    /// Text displayed inside the badge pill.
     pub label: String,
+    /// CSS color token (e.g. `"green"`, `"red"`) used by the adapter to apply a style.
     pub color: String,
 }
 
 impl BadgeVariant {
+    /// Create a `BadgeVariant` from a label and a color token.
     #[must_use]
     pub fn new(label: impl Into<String>, color: impl Into<String>) -> Self {
         Self {
@@ -86,11 +92,21 @@ pub enum FilterKind {
     Text,
     /// User picks zero or more values from a fixed option set. An empty
     /// selection passes all rows.
-    MultiSelect { options: Vec<String> },
+    MultiSelect {
+        /// The list of allowed option strings shown in the filter dropdown.
+        options: Vec<String>,
+    },
     /// Numeric range bounded by `min..=max` with the given UI step.
     /// `min` / `max` configure the slider extents AND the default unset state
     /// (an unset filter equals `NumericRange { min: None, max: None }`).
-    NumericRange { min: f64, max: f64, step: f64 },
+    NumericRange {
+        /// Inclusive lower bound of the slider range.
+        min: f64,
+        /// Inclusive upper bound of the slider range.
+        max: f64,
+        /// Step increment for the range-slider UI control.
+        step: f64,
+    },
     /// Date range picker. No bounds — both endpoints are optional.
     DateRange,
     /// Tri-state filter (All / true / false). "All" = no filter active.
@@ -130,17 +146,22 @@ pub enum RenderKind {
 /// Per CHORALE-CORE-1: `ColumnDef` carries no framework types.
 /// Per ROBUSTNESS-1: named struct fields, not a tuple or builder-only API.
 pub struct ColumnDef<TRow> {
+    /// Unique identifier for this column. Must be unique within a table.
     pub id: ColumnId,
+    /// Text displayed in the column's header cell.
     pub header: String,
     /// Extract the cell value for this column from a row.
     pub accessor: Arc<dyn Fn(&TRow) -> CellValue + Send + Sync>,
+    /// Whether the column header is clickable to sort the table by this column.
     pub sortable: bool,
     /// Filter UI and matching strategy for this column. Defaults to
     /// `FilterKind::None` (not filterable).
     pub filter: FilterKind,
     /// Override the column's starting width in px. `None` = auto.
     pub initial_width: Option<f64>,
+    /// Horizontal text alignment for this column's header and body cells.
     pub alignment: Alignment,
+    /// How the adapter renders cell values for this column by default.
     pub render_kind: RenderKind,
     /// Optional static CSS class applied to every header cell of this column.
     pub header_class: Option<String>,
