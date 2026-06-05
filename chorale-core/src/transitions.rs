@@ -8,41 +8,96 @@ use std::collections::HashMap;
 
 use crate::error::StateError;
 use crate::state::TableState;
-use crate::types::{ColumnId, EditTarget, FilterValue, PriorEdit, RowId, SortDirection, SortState};
+use crate::types::{
+    ColumnId, EditTarget, FilterValue, PriorEdit, RowId, SortAction, SortDirection, SortState,
+};
 
-/// Cycle through sort states for `col`: none → ASC → DESC → none.
+/// Cycle the sort state for `col` using `action` to determine replace vs append.
 ///
-/// If a different column is currently sorted, replaces it with ASC on `col`.
+/// **`SortAction::Replace` (plain click):**
+/// cycles: None → Asc → Desc → None, clearing all other sort columns.
+///
+/// **`SortAction::Append` (Shift+click):**
+/// cycles: absent → Asc → Desc → removed. Other columns are unaffected.
+///
 /// Resets `scroll_top` and `page` to 0 so virtualization re-anchors after
-/// reorder (recon-2 § 5).
+/// reorder (recon-2 § 5). Clears `row_heights` cache (VIRT-2).
 ///
 /// # Example
 ///
 /// ```rust
-/// use chorale_core::{TableState, ColumnId, toggle_sort};
+/// use chorale_core::{TableState, ColumnId, SortAction, toggle_sort};
 ///
 /// let state: TableState<String> = TableState::new(vec![], vec![]);
-/// // First toggle: no sort → ASC.
-/// let s1 = toggle_sort(&state, ColumnId("name"));
+/// // Replace: None → Asc.
+/// let s1 = toggle_sort(&state, ColumnId("name"), SortAction::Replace);
 /// assert!(!s1.sort.is_empty());
-/// // Second toggle: ASC → DESC.
-/// let s2 = toggle_sort(&s1, ColumnId("name"));
-/// // Third toggle: DESC → none.
-/// let s3 = toggle_sort(&s2, ColumnId("name"));
+/// // Replace again: Asc → Desc.
+/// let s2 = toggle_sort(&s1, ColumnId("name"), SortAction::Replace);
+/// // Replace again: Desc → None.
+/// let s3 = toggle_sort(&s2, ColumnId("name"), SortAction::Replace);
 /// assert!(s3.sort.is_empty());
 /// ```
 #[must_use]
-pub fn toggle_sort<TRow: Clone>(state: &TableState<TRow>, col: ColumnId) -> TableState<TRow> {
-    let next_sort = match state.sort.first() {
-        Some(s) if s.column == col => match s.direction {
-            SortDirection::Asc => vec![SortState::new(col, SortDirection::Desc)],
-            SortDirection::Desc => vec![],
-        },
-        _ => vec![SortState::new(col, SortDirection::Asc)],
+pub fn toggle_sort<TRow: Clone>(
+    state: &TableState<TRow>,
+    col: ColumnId,
+    action: SortAction,
+) -> TableState<TRow> {
+    let next_sort = match action {
+        SortAction::Replace => {
+            match state.sort.first() {
+                Some(s) if s.column == col => match s.direction {
+                    SortDirection::Asc => vec![SortState::new(col, SortDirection::Desc)],
+                    SortDirection::Desc => vec![],
+                },
+                _ => vec![SortState::new(col, SortDirection::Asc)],
+            }
+        }
+        SortAction::Append => {
+            let mut next = state.sort.clone();
+            if let Some(pos) = next.iter().position(|s| s.column == col) {
+                match next[pos].direction {
+                    SortDirection::Asc => next[pos] = SortState::new(col, SortDirection::Desc),
+                    SortDirection::Desc => { next.remove(pos); }
+                }
+            } else {
+                next.push(SortState::new(col, SortDirection::Asc));
+            }
+            next
+        }
     };
     // Clear the variable-row-height cache: row indices shift on sort (VIRT-2).
     TableState {
         sort: next_sort,
+        scroll_top: 0.0,
+        page: 0,
+        row_heights: HashMap::new(),
+        ..state.clone()
+    }
+}
+
+/// Remove `col` from the sort list entirely. No-op if `col` is not sorted.
+///
+/// Does not disturb the priority of other sort columns.
+#[must_use]
+pub fn remove_sort<TRow: Clone>(state: &TableState<TRow>, col: ColumnId) -> TableState<TRow> {
+    let mut next_sort = state.sort.clone();
+    next_sort.retain(|s| s.column != col);
+    TableState {
+        sort: next_sort,
+        scroll_top: 0.0,
+        page: 0,
+        row_heights: HashMap::new(),
+        ..state.clone()
+    }
+}
+
+/// Clear all active sort columns.
+#[must_use]
+pub fn clear_sort<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    TableState {
+        sort: vec![],
         scroll_top: 0.0,
         page: 0,
         row_heights: HashMap::new(),
@@ -558,7 +613,9 @@ mod tests {
     use super::*;
     use crate::column::ColumnDef;
     use crate::state::TableState;
-    use crate::types::{Alignment, CellValue, ColumnId, FilterValue, RowId, SortDirection};
+    use crate::types::{
+        Alignment, CellValue, ColumnId, FilterValue, RowId, SortAction, SortDirection,
+    };
 
     // ---- helpers -----------------------------------------------------------
 
@@ -664,7 +721,7 @@ mod tests {
     #[test]
     fn toggle_sort_none_to_asc() {
         let s = make_state();
-        let s2 = toggle_sort(&s, col_name());
+        let s2 = toggle_sort(&s, col_name(), SortAction::Replace);
         assert_eq!(
             s2.sort,
             vec![SortState::new(col_name(), SortDirection::Asc)]
@@ -676,8 +733,8 @@ mod tests {
     #[test]
     fn toggle_sort_asc_to_desc() {
         let s = make_state();
-        let s = toggle_sort(&s, col_name());
-        let s2 = toggle_sort(&s, col_name());
+        let s = toggle_sort(&s, col_name(), SortAction::Replace);
+        let s2 = toggle_sort(&s, col_name(), SortAction::Replace);
         assert_eq!(
             s2.sort,
             vec![SortState::new(col_name(), SortDirection::Desc)]
@@ -687,21 +744,141 @@ mod tests {
     #[test]
     fn toggle_sort_desc_to_none() {
         let s = make_state();
-        let s = toggle_sort(&s, col_name());
-        let s = toggle_sort(&s, col_name());
-        let s2 = toggle_sort(&s, col_name());
+        let s = toggle_sort(&s, col_name(), SortAction::Replace);
+        let s = toggle_sort(&s, col_name(), SortAction::Replace);
+        let s2 = toggle_sort(&s, col_name(), SortAction::Replace);
         assert!(s2.sort.is_empty());
     }
 
     #[test]
     fn toggle_sort_different_column_resets_to_asc() {
         let s = make_state();
-        let s = toggle_sort(&s, col_name());
-        let s2 = toggle_sort(&s, col_score());
+        let s = toggle_sort(&s, col_name(), SortAction::Replace);
+        let s2 = toggle_sort(&s, col_score(), SortAction::Replace);
         assert_eq!(
             s2.sort,
             vec![SortState::new(col_score(), SortDirection::Asc)]
         );
+    }
+
+    // ---- toggle_sort multi-column (Item 11.0a) --------------------------------
+
+    #[test]
+    fn toggle_sort_replace_clears_other_columns() {
+        let s = make_state();
+        // Sort by name, then by score → sort has [name, score].
+        let s = toggle_sort(&s, col_name(), SortAction::Append);
+        let s = toggle_sort(&s, col_score(), SortAction::Append);
+        assert_eq!(s.sort.len(), 2);
+        // Replace with col_name → only col_name in sort.
+        let s2 = toggle_sort(&s, col_name(), SortAction::Replace);
+        assert_eq!(s2.sort.len(), 1);
+        assert_eq!(s2.sort[0].column, col_name());
+    }
+
+    #[test]
+    fn toggle_sort_append_on_unsorted_adds_asc() {
+        let s = make_state();
+        let s2 = toggle_sort(&s, col_name(), SortAction::Append);
+        assert_eq!(s2.sort.len(), 1);
+        assert_eq!(s2.sort[0].column, col_name());
+        assert_eq!(s2.sort[0].direction, SortDirection::Asc);
+    }
+
+    #[test]
+    fn toggle_sort_append_on_existing_flips_direction() {
+        let s = make_state();
+        let s = toggle_sort(&s, col_name(), SortAction::Append);
+        let s2 = toggle_sort(&s, col_name(), SortAction::Append);
+        assert_eq!(s2.sort[0].direction, SortDirection::Desc);
+    }
+
+    #[test]
+    fn toggle_sort_append_on_desc_removes_column() {
+        let s = make_state();
+        let s = toggle_sort(&s, col_name(), SortAction::Append);
+        let s = toggle_sort(&s, col_name(), SortAction::Append); // → Desc
+        let s2 = toggle_sort(&s, col_name(), SortAction::Append); // → removed
+        assert!(s2.sort.is_empty());
+    }
+
+    #[test]
+    fn toggle_sort_append_does_not_disturb_other_columns() {
+        let s = make_state();
+        let s = toggle_sort(&s, col_name(), SortAction::Append);
+        let s = toggle_sort(&s, col_score(), SortAction::Append);
+        // Flip col_name from Asc to Desc; col_score should remain.
+        let s2 = toggle_sort(&s, col_name(), SortAction::Append);
+        assert_eq!(s2.sort.len(), 2);
+        let name_entry = s2.sort.iter().find(|e| e.column == col_name()).unwrap();
+        assert_eq!(name_entry.direction, SortDirection::Desc);
+        let score_entry = s2.sort.iter().find(|e| e.column == col_score()).unwrap();
+        assert_eq!(score_entry.direction, SortDirection::Asc);
+    }
+
+    #[test]
+    fn remove_sort_removes_target_column() {
+        let s = make_state();
+        let s = toggle_sort(&s, col_name(), SortAction::Append);
+        let s = toggle_sort(&s, col_score(), SortAction::Append);
+        let s2 = remove_sort(&s, col_name());
+        assert_eq!(s2.sort.len(), 1);
+        assert_eq!(s2.sort[0].column, col_score());
+    }
+
+    #[test]
+    fn remove_sort_is_noop_if_not_sorted() {
+        let s = make_state();
+        let s2 = remove_sort(&s, col_name());
+        assert!(s2.sort.is_empty());
+    }
+
+    #[test]
+    fn clear_sort_removes_all_columns() {
+        let s = make_state();
+        let s = toggle_sort(&s, col_name(), SortAction::Append);
+        let s = toggle_sort(&s, col_score(), SortAction::Append);
+        let s2 = clear_sort(&s);
+        assert!(s2.sort.is_empty());
+    }
+
+    #[test]
+    fn multi_column_sort_priority_order() {
+        use crate::views::visible_view;
+        // 4 rows: two with dept "A" (scores 10, 20), two with dept "B" (scores 5, 30).
+        // Sort by dept ASC, then score DESC.
+        // Expected: A/20, A/10, B/30, B/5.
+        #[derive(Clone, PartialEq)]
+        struct Row {
+            dept: &'static str,
+            score: i64,
+        }
+        let rows = vec![
+            (RowId::new(), Row { dept: "B", score: 5 }),
+            (RowId::new(), Row { dept: "A", score: 20 }),
+            (RowId::new(), Row { dept: "B", score: 30 }),
+            (RowId::new(), Row { dept: "A", score: 10 }),
+        ];
+        let cols = vec![
+            crate::column::ColumnDef::new(ColumnId("dept"), "Dept", |r: &Row| {
+                CellValue::Text(r.dept.to_string())
+            })
+            .sortable(),
+            crate::column::ColumnDef::new(ColumnId("score"), "Score", |r: &Row| {
+                CellValue::Integer(r.score)
+            })
+            .sortable(),
+        ];
+        let s = TableState::new(rows, cols);
+        let s = toggle_sort(&s, ColumnId("dept"), SortAction::Append); // dept ASC
+        let s = toggle_sort(&s, ColumnId("score"), SortAction::Append); // score ASC
+        // Flip score to DESC.
+        let s = toggle_sort(&s, ColumnId("score"), SortAction::Append);
+        let view = visible_view(&s);
+        let depts: Vec<&str> = view.iter().map(|(_, r)| r.dept).collect();
+        let scores: Vec<i64> = view.iter().map(|(_, r)| r.score).collect();
+        assert_eq!(depts, vec!["A", "A", "B", "B"]);
+        assert_eq!(scores, vec![20, 10, 30, 5]);
     }
 
     // ---- set_filter --------------------------------------------------------
@@ -955,7 +1132,7 @@ mod tests {
     fn toggle_sort_clears_row_height_cache() {
         let s = make_state();
         let s = record_row_height(&s, 0, 60.0);
-        let s2 = toggle_sort(&s, col_name());
+        let s2 = toggle_sort(&s, col_name(), SortAction::Replace);
         assert!(s2.row_heights.is_empty());
     }
 

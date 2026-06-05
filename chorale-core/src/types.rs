@@ -132,6 +132,25 @@ pub enum SortDirection {
     Desc,
 }
 
+/// How a sort toggle should behave: replace the entire sort list or append to it.
+///
+/// Passed as the `action` argument to [`crate::toggle_sort`].
+/// The adapter passes `Replace` for a plain click and `Append` for Shift+click.
+///
+/// Per Decision #4 of Item 11.0a: NOT `#[non_exhaustive]` — exactly two
+/// semantically distinct actions; exhaustive matches are the right tradeoff.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SortAction {
+    /// Replace the entire sort with just this column (plain click).
+    ///
+    /// Cycles: None → Asc → Desc → None, clearing all other sort columns.
+    Replace,
+    /// Append this column as the lowest-priority sort (Shift+click).
+    ///
+    /// Cycles: absent → Asc → Desc → removed. Does not disturb other columns.
+    Append,
+}
+
 /// Active sort on a single column.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

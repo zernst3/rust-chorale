@@ -1,9 +1,9 @@
 //! Dioxus hooks for chorale tables.
 
 use chorale_core::{
-    move_column, set_column_visibility, set_column_width, set_filter, set_page, set_page_size,
-    set_scroll, set_selection, toggle_select_all, toggle_sort, update_row, ColumnId, FilterValue,
-    RowId, StateError, TableState,
+    clear_sort, move_column, remove_sort, set_column_visibility, set_column_width, set_filter,
+    set_page, set_page_size, set_scroll, set_selection, toggle_select_all, toggle_sort,
+    update_row, ColumnId, FilterValue, RowId, SortAction, StateError, TableState,
 };
 use dioxus::prelude::*;
 
@@ -43,11 +43,24 @@ impl<TRow: Clone + 'static> UseTableHandle<TRow> {
         self.inner
     }
 
-    /// Cycle sort on `col`: none → ASC → DESC → none.
+    /// Cycle sort on `col` using `action` (Replace or Append).
     ///
-    /// Resets `scroll_top` and `page` to 0 so virtualization re-anchors.
-    pub fn toggle_sort(&self, col: ColumnId) {
-        self.dispatch(|s| toggle_sort(s, col));
+    /// `SortAction::Replace` (plain click): cycles None → Asc → Desc → None,
+    /// clearing other sort columns. `SortAction::Append` (Shift+click): appends,
+    /// flips, or removes without disturbing other sort columns.
+    /// Resets `scroll_top` and `page` to 0.
+    pub fn toggle_sort(&self, col: ColumnId, action: SortAction) {
+        self.dispatch(|s| toggle_sort(s, col, action));
+    }
+
+    /// Remove `col` from the sort list. No-op if not sorted.
+    pub fn remove_sort(&self, col: ColumnId) {
+        self.dispatch(|s| remove_sort(s, col));
+    }
+
+    /// Clear all active sort columns.
+    pub fn clear_sort(&self) {
+        self.dispatch(|s| clear_sort(s));
     }
 
     /// Set or clear the filter on `col`.

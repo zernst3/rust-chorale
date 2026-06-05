@@ -382,19 +382,37 @@ fn filtered_sorted_pairs<TRow: Clone>(state: &TableState<TRow>) -> Vec<(RowId, T
         .cloned()
         .collect();
 
-    if let Some(sort) = state.sort.first() {
-        if let Some(col) = state.columns.iter().find(|c| c.id == sort.column) {
-            let direction = sort.direction;
-            pairs.sort_by(|(_, a), (_, b)| {
+    if !state.sort.is_empty() {
+        // Build a list of (accessor_ref, direction) pairs in priority order.
+        // Columns not found in state.columns are silently skipped.
+        let sort_keys: Vec<(&crate::column::ColumnDef<TRow>, crate::types::SortDirection)> =
+            state
+                .sort
+                .iter()
+                .filter_map(|s| {
+                    state
+                        .columns
+                        .iter()
+                        .find(|c| c.id == s.column)
+                        .map(|c| (c, s.direction))
+                })
+                .collect();
+
+        pairs.sort_by(|(_, a), (_, b)| {
+            for (col, direction) in &sort_keys {
                 let a_val = (col.accessor)(a);
                 let b_val = (col.accessor)(b);
                 let ord = a_val.cmp_for_sort(&b_val);
-                match direction {
+                let ord = match direction {
                     crate::types::SortDirection::Asc => ord,
                     crate::types::SortDirection::Desc => ord.reverse(),
+                };
+                if ord != std::cmp::Ordering::Equal {
+                    return ord;
                 }
-            });
-        }
+            }
+            std::cmp::Ordering::Equal
+        });
     }
 
     pairs

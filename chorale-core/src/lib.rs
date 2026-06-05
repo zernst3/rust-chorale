@@ -151,6 +151,12 @@ pub use types::FilterValue;
 /// Sort direction for a column: `Asc` or `Desc`.
 pub use types::SortDirection;
 
+/// Whether a sort toggle should replace the sort list or append to it.
+///
+/// Passed to [`toggle_sort`]. `Replace` for plain click (single-column semantics);
+/// `Append` for Shift+click (multi-column: adds/flips/removes without clearing others).
+pub use types::SortAction;
+
 /// Active sort on a single column: `column: ColumnId` + `direction: SortDirection`.
 pub use types::SortState;
 
@@ -208,8 +214,14 @@ pub use theme::CellClassFn;
 
 // ---- Transitions ----------------------------------------------------------
 
-/// Cycle sort on `col`: none → ASC → DESC → none. Resets page and scroll.
+/// Cycle sort on `col` using `action` (Replace or Append). Resets page and scroll.
 pub use transitions::toggle_sort;
+
+/// Remove a specific column from the active sort list. No-op if not sorted.
+pub use transitions::remove_sort;
+
+/// Clear all active sort columns.
+pub use transitions::clear_sort;
 
 /// Set or clear the filter on `col`. Resets page and scroll.
 pub use transitions::set_filter;

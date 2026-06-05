@@ -9,7 +9,7 @@ use chorale_core::{
     frozen_right_columns, next_editable_cell, prev_editable_cell, scrollable_columns, to_csv,
     visible_view, visible_window, visible_window_variable, Alignment, BadgeVariantMap, CellValue,
     ColumnDef, ColumnId, CommittedEdit, CurrencyCode, EditorKind, FilterKind, FilterValue,
-    Labels, RenderKind, RowId, SortDirection, SortState, TableState, VirtualWindow,
+    Labels, RenderKind, RowId, SortAction, SortDirection, SortState, TableState, VirtualWindow,
 };
 use dioxus::prelude::*;
 
@@ -688,14 +688,22 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
     let is_sortable = sort_enabled && col.sortable;
     let initial_width = col.initial_width;
 
+    // Find this column's sort entry (if any) across the whole multi-sort list.
+    let sort_entry = current_sort.iter().enumerate().find(|(_, s)| s.column == col_id);
     let sort_arrow = if is_sortable {
-        match current_sort.first() {
-            Some(s) if s.column == col_id && s.direction == SortDirection::Asc => " \u{2191}",
-            Some(s) if s.column == col_id && s.direction == SortDirection::Desc => " \u{2193}",
-            _ => "",
+        match sort_entry.map(|(_, s)| s.direction) {
+            Some(SortDirection::Asc) => " \u{2191}",
+            Some(SortDirection::Desc) => " \u{2193}",
+            None => "",
         }
     } else {
         ""
+    };
+    // Show a priority badge (1-based) only when multiple columns are sorted.
+    let sort_badge = if is_sortable && current_sort.len() > 1 {
+        sort_entry.map(|(pos, _)| format!("{}", pos + 1))
+    } else {
+        None
     };
 
     let drag_cursor = if column_reorder_enabled { "grab; " } else { "" };
@@ -716,9 +724,14 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
                     text-overflow: ellipsis; position: sticky; top: 0; \
                     background: #f8f9fa; z-index: 1; {w} {sticky_css} {drag_over_style}",
             draggable: column_reorder_enabled,
-            onclick: move |_| {
+            onclick: move |e| {
                 if is_sortable {
-                    handle.toggle_sort(col_id);
+                    let action = if e.modifiers().shift() {
+                        SortAction::Append
+                    } else {
+                        SortAction::Replace
+                    };
+                    handle.toggle_sort(col_id, action);
                 }
             },
             ondragstart: move |e| {
@@ -774,6 +787,14 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
                 drag_col_id.set(None);
             },
             "{header}{sort_arrow}"
+            if let Some(badge) = sort_badge {
+                sup {
+                    class: "chorale-sort-badge",
+                    style: "font-size: 0.65em; margin-left: 2px; color: #4a90e2; \
+                            font-weight: 700; vertical-align: super;",
+                    "{badge}"
+                }
+            }
             if resize_enabled {
                 div {
                     style: "position: absolute; right: 0; top: 0; bottom: 0; width: 5px; \
