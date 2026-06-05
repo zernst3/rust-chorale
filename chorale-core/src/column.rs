@@ -3,6 +3,26 @@ use std::sync::Arc;
 
 use crate::types::{Alignment, CellValue, ColumnId, CurrencyCode};
 
+/// Which edge a column is pinned to. Defaults to `None` (scrollable).
+///
+/// Set via [`ColumnDef::frozen`]. The adapter renders left-frozen columns at
+/// the left edge (CSS `position: sticky; left: Xpx`), right-frozen columns at
+/// the right edge, and scrollable columns in between.
+///
+/// `FrozenSide` is `#[non_exhaustive]` so additional pin positions (e.g. a
+/// top/bottom axis for row pinning) can be added in future minor releases.
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum FrozenSide {
+    /// Column scrolls with the table (default).
+    #[default]
+    None,
+    /// Column is pinned to the left edge.
+    Left,
+    /// Column is pinned to the right edge.
+    Right,
+}
+
 /// Maps a `CellValue` text variant (or `Empty`) to a badge label and CSS
 /// color token. Used by `RenderKind::Badge`.
 ///
@@ -204,6 +224,12 @@ pub struct ColumnDef<TRow> {
     /// `None` (default) means the column is read-only; `start_edit` will return
     /// `Err(StateError::ColumnNotEditable)` for it.
     pub editor: Option<EditorKind>,
+    /// Which edge this column is pinned to, or `None` for scrollable (default).
+    ///
+    /// Set via `.frozen(FrozenSide::Left)` / `.frozen(FrozenSide::Right)`.
+    /// The adapter renders frozen columns with CSS `position: sticky` and a
+    /// computed `left`/`right` offset.
+    pub frozen: FrozenSide,
 }
 
 impl<TRow> ColumnDef<TRow> {
@@ -226,6 +252,7 @@ impl<TRow> ColumnDef<TRow> {
             header_class: None,
             cell_class: None,
             editor: None,
+            frozen: FrozenSide::None,
         }
     }
 
@@ -289,6 +316,14 @@ impl<TRow> ColumnDef<TRow> {
         self
     }
 
+    /// Pin this column to an edge. `FrozenSide::None` (the default) leaves the
+    /// column scrollable; `Left` / `Right` fix it at that edge.
+    #[must_use]
+    pub fn frozen(mut self, side: FrozenSide) -> Self {
+        self.frozen = side;
+        self
+    }
+
     /// True if the column has any filter UI configured (anything other than
     /// `FilterKind::None`).
     #[must_use]
@@ -311,6 +346,7 @@ impl<TRow> Clone for ColumnDef<TRow> {
             header_class: self.header_class.clone(),
             cell_class: self.cell_class.clone(),
             editor: self.editor.clone(),
+            frozen: self.frozen.clone(),
         }
     }
 }

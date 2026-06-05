@@ -74,6 +74,14 @@ pub use column::ColumnDef;
 /// Variants: `Text`, `Number { min, max, step }`, `Date`, `BoolToggle`, `Custom`.
 pub use column::EditorKind;
 
+/// Which edge a column is pinned to: `None` (scrollable, the default),
+/// `Left`, or `Right`.
+///
+/// Set via [`ColumnDef::frozen`]. Adapters use [`frozen_left_columns`],
+/// [`scrollable_columns`], and [`frozen_right_columns`] to split the column
+/// list into rendering zones.
+pub use column::FrozenSide;
+
 /// Declares the filter UI and matching strategy for a column.
 ///
 /// Pair with a [`FilterValue`] variant of the same kind. Default is
@@ -158,10 +166,11 @@ pub use types::CurrencyCode;
 // ---- Errors ---------------------------------------------------------------
 
 /// Errors from fallible state transitions (`set_page`, `set_page_size`,
-/// `set_column_width`).
+/// `set_column_width`, `set_column_order`, `move_column`).
 ///
 /// One variant per distinct failure mode (ROBUSTNESS-1):
-/// `PageOutOfRange`, `PageSizeZero`, `InvalidColumnWidth`.
+/// `PageOutOfRange`, `PageSizeZero`, `InvalidColumnWidth`,
+/// `ColumnNotEditable`, `UnknownColumnId`, `DuplicateColumnId`.
 pub use error::StateError;
 
 // ---- Labels ---------------------------------------------------------------
@@ -272,6 +281,17 @@ pub use transitions::batch_record_row_heights;
 /// [`toggle_sort`], [`set_filter`], and [`set_page`] call this implicitly.
 pub use transitions::clear_row_height_cache;
 
+/// Set an explicit column render order. Validates that every id exists and has
+/// no duplicates; returns `Err` otherwise.
+pub use transitions::set_column_order;
+
+/// Move a column to a new index in the render order. Clamps out-of-bounds
+/// `to_index`. Returns `Err(UnknownColumnId)` if `column_id` is not found.
+pub use transitions::move_column;
+
+/// Reset to definition order by clearing `column_order`.
+pub use transitions::reset_column_order;
+
 // ---- Views ----------------------------------------------------------------
 
 /// Post-filter / post-sort / post-pagination `(RowId, TRow)` pairs for the
@@ -309,6 +329,21 @@ pub use views::visible_window_variable;
 
 /// Serialize the post-filter / post-sort view (all pages) to an RFC 4180 CSV string.
 pub use views::to_csv;
+
+/// Columns pinned to the left edge, in effective column order. Excludes hidden columns.
+///
+/// Combine with [`scrollable_columns`] and [`frozen_right_columns`] to produce
+/// the full left-to-right render order for adapters.
+pub use views::frozen_left_columns;
+
+/// Columns pinned to the right edge, in effective column order. Excludes hidden columns.
+pub use views::frozen_right_columns;
+
+/// Scrollable (non-frozen) columns, in effective column order. Excludes hidden columns.
+///
+/// The union of `frozen_left_columns`, `scrollable_columns`, and
+/// `frozen_right_columns` equals all visible columns.
+pub use views::scrollable_columns;
 
 // Re-export third-party types used in the public surface so adapter crates
 // don't need to add `chrono` to their Cargo.toml.

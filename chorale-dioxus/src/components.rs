@@ -5,10 +5,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use chorale_core::{
-    batch_record_row_heights, cancel_edit, commit_edit, next_editable_cell, prev_editable_cell,
-    to_csv, visible_view, visible_window, visible_window_variable, Alignment, BadgeVariantMap,
-    CellValue, ColumnDef, ColumnId, CommittedEdit, CurrencyCode, EditorKind, FilterKind,
-    FilterValue, Labels, RenderKind, RowId, SortDirection, SortState, TableState, VirtualWindow,
+    batch_record_row_heights, cancel_edit, commit_edit, frozen_left_columns,
+    frozen_right_columns, next_editable_cell, prev_editable_cell, scrollable_columns, to_csv,
+    visible_view, visible_window, visible_window_variable, Alignment, BadgeVariantMap, CellValue,
+    ColumnDef, ColumnId, CommittedEdit, CurrencyCode, EditorKind, FilterKind, FilterValue,
+    Labels, RenderKind, RowId, SortDirection, SortState, TableState, VirtualWindow,
 };
 use dioxus::prelude::*;
 
@@ -130,6 +131,10 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     #[props(default)] labels: Option<Labels>,
     #[props(default = false)] column_reorder_enabled: bool,
     on_column_order_change: Option<EventHandler<Vec<ColumnId>>>,
+    /// CSS `z-index` applied to frozen column cells (header, filter row, and body).
+    /// Raise if custom cell renderers use `z-index` internally.
+    /// Default is `2` (above scrollable columns, which use no explicit z-index).
+    #[props(default = 2)] frozen_column_z_index: i32,
 ) -> Element {
     let labels = labels.clone().unwrap_or_default();
 
@@ -299,10 +304,89 @@ dioxus.send(parts.join('\n'));"
         order
     };
 
-    let visible_cols: Vec<ColumnDef<TRow>> = effective_order
+    // Read widths early so the sticky CSS computation can use them.
+    let widths = state.column_widths.clone();
+
+    // Split into frozen-left, scrollable, frozen-right zones. Render order:
+    // left-frozen | scrollable | right-frozen. This is required for CSS
+    // `position: sticky` to work correctly (Decision #2 from Item 10 spec).
+    let left_frozen: Vec<ColumnDef<TRow>> = frozen_left_columns(&state)
+        .into_iter()
+        .cloned()
+        .collect();
+    let scrollable: Vec<ColumnDef<TRow>> = scrollable_columns(&state)
+        .into_iter()
+        .cloned()
+        .collect();
+    let right_frozen: Vec<ColumnDef<TRow>> = frozen_right_columns(&state)
+        .into_iter()
+        .cloned()
+        .collect();
+
+    // Per-column sticky CSS (position + offset + z-index + optional divider shadow).
+    // Two maps: header cells keep their own background (from base style) so we inject
+    // only the offset; body cells need an explicit background to cover scrolled content.
+    // Fallback width when no initial_width and no measured width: 150px (Decision 4).
+    let header_z = frozen_column_z_index + 1; // corner cells are above both axes
+    let body_z = frozen_column_z_index;
+    let mut sticky_header_css: HashMap<ColumnId, String> = HashMap::new();
+    let mut sticky_body_css: HashMap<ColumnId, String> = HashMap::new();
+    {
+        let mut left_offset = 0.0f64;
+        let left_count = left_frozen.len();
+        for (k, col) in left_frozen.iter().enumerate() {
+            let col_w = widths.get(&col.id).copied()
+                .or(col.initial_width)
+                .unwrap_or(150.0);
+            let is_last = k + 1 == left_count;
+            let divider = if is_last {
+                " box-shadow: var(--chorale-frozen-divider-shadow, 3px 0 4px -2px rgba(0,0,0,0.15));"
+            } else {
+                ""
+            };
+            sticky_header_css.insert(
+                col.id,
+                format!("position: sticky; left: {left_offset}px; z-index: {header_z};{divider}"),
+            );
+            sticky_body_css.insert(
+                col.id,
+                format!(
+                    "position: sticky; left: {left_offset}px; z-index: {body_z}; background: #fff;{divider}"
+                ),
+            );
+            left_offset += col_w;
+        }
+    }
+    {
+        let mut right_offset = 0.0f64;
+        for (j, col) in right_frozen.iter().enumerate().rev() {
+            let col_w = widths.get(&col.id).copied()
+                .or(col.initial_width)
+                .unwrap_or(150.0);
+            let is_first = j == 0;
+            let divider = if is_first {
+                " box-shadow: var(--chorale-frozen-divider-shadow, -3px 0 4px -2px rgba(0,0,0,0.15));"
+            } else {
+                ""
+            };
+            sticky_header_css.insert(
+                col.id,
+                format!("position: sticky; right: {right_offset}px; z-index: {header_z};{divider}"),
+            );
+            sticky_body_css.insert(
+                col.id,
+                format!(
+                    "position: sticky; right: {right_offset}px; z-index: {body_z}; background: #fff;{divider}"
+                ),
+            );
+            right_offset += col_w;
+        }
+    }
+
+    let visible_cols: Vec<ColumnDef<TRow>> = left_frozen
         .iter()
-        .filter_map(|id| state.columns.iter().find(|c| c.id == *id))
-        .filter(|c| state.is_column_visible(c.id))
+        .chain(scrollable.iter())
+        .chain(right_frozen.iter())
         .cloned()
         .collect();
 
@@ -314,7 +398,6 @@ dioxus.send(parts.join('\n'));"
     let effective_col_count = col_count + usize::from(selection_enabled);
     let row_height = state.row_height;
     let viewport_height = state.viewport_height;
-    let widths = state.column_widths.clone();
     let current_sort: &[SortState] = &state.sort;
     let filters = state.filters.clone();
     let editing_target = state.editing;
@@ -387,7 +470,7 @@ dioxus.send(parts.join('\n'));"
             // Virtualized lists must always opt out of scroll anchoring.
             div {
                 id: "{scroll_id}",
-                style: "overflow-y: auto; overflow-anchor: none; \
+                style: "overflow-y: auto; overflow-x: auto; overflow-anchor: none; \
                         height: {viewport_height}px;",
                 onscroll: move |e| {
                     handle.set_scroll(e.scroll_top());
@@ -403,7 +486,7 @@ dioxus.send(parts.join('\n'));"
                                 {select_all_th(handle, all_page_selected)}
                             }
                             for col in &visible_cols {
-                                {header_th(col, widths.get(&col.id).copied(), handle, sort_enabled, current_sort, resize_enabled, drag_state, column_reorder_enabled, drag_col_id, on_column_order_change)}
+                                {header_th(col, widths.get(&col.id).copied(), handle, sort_enabled, current_sort, resize_enabled, drag_state, column_reorder_enabled, drag_col_id, on_column_order_change, sticky_header_css.get(&col.id).map_or("", String::as_str))}
                             }
                         }
                         if filter_enabled {
@@ -416,7 +499,7 @@ dioxus.send(parts.join('\n'));"
                                     }
                                 }
                                 for col in &visible_cols {
-                                    {filter_th(col, widths.get(&col.id).copied(), handle, &filters, &labels)}
+                                    {filter_th(col, widths.get(&col.id).copied(), handle, &filters, &labels, sticky_header_css.get(&col.id).map_or("", String::as_str))}
                                 }
                             }
                         }
@@ -436,7 +519,7 @@ dioxus.send(parts.join('\n'));"
                                 let editing_col = editing_target
                                     .filter(|t| t.row_id == *row_id)
                                     .map(|t| t.column_id);
-                                data_tr(row, *row_id, win.start_index + i, variable_row_height, &visible_cols, row_height, &widths, selection_enabled, selection_set.contains(row_id), handle, &cell_renderers, editing_col, editing_text, edit_error, &validate_edit, on_commit_edit)
+                                data_tr(row, *row_id, win.start_index + i, variable_row_height, &visible_cols, row_height, &widths, selection_enabled, selection_set.contains(row_id), handle, &cell_renderers, editing_col, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css)
                             }
                         }
                         if win.bottom_pad_px > 0.0 {
@@ -596,6 +679,7 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
     column_reorder_enabled: bool,
     mut drag_col_id: Signal<Option<ColumnId>>,
     on_column_order_change: Option<EventHandler<Vec<ColumnId>>>,
+    sticky_css: &str,
 ) -> Element {
     let w = col_width_style(override_width, col.initial_width);
     let align = alignment_css(col.alignment);
@@ -630,7 +714,7 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
             style: "{extra}padding: 0.5rem 1rem; border-bottom: 1px solid #ddd; \
                     text-align: {align}; white-space: nowrap; overflow: hidden; \
                     text-overflow: ellipsis; position: sticky; top: 0; \
-                    background: #f8f9fa; z-index: 1; {w} {drag_over_style}",
+                    background: #f8f9fa; z-index: 1; {w} {sticky_css} {drag_over_style}",
             draggable: column_reorder_enabled,
             onclick: move |_| {
                 if is_sortable {
@@ -744,13 +828,14 @@ fn column_vis_checkbox<TRow: Clone + PartialEq + 'static>(
     }
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn filter_th<TRow: Clone + PartialEq + 'static>(
     col: &ColumnDef<TRow>,
     override_width: Option<f64>,
     handle: UseTableHandle<TRow>,
     filters: &HashMap<ColumnId, FilterValue>,
     labels: &Labels,
+    sticky_css: &str,
 ) -> Element {
     let w = col_width_style(override_width, col.initial_width);
     let col_id = col.id;
@@ -759,10 +844,12 @@ fn filter_th<TRow: Clone + PartialEq + 'static>(
     let clear_label = labels.clear_filter_label.clone();
     let all_label = labels.page_size_all_label.clone();
 
-    let th_style =
-        format!("padding: 0.25rem 0.5rem; border-bottom: 1px solid #eee; background: #fff; {w}");
-    let empty_th_style =
-        format!("padding: 0.25rem; border-bottom: 1px solid #eee; background: #fff; {w}");
+    let th_style = format!(
+        "padding: 0.25rem 0.5rem; border-bottom: 1px solid #eee; background: #fff; {w} {sticky_css}"
+    );
+    let empty_th_style = format!(
+        "padding: 0.25rem; border-bottom: 1px solid #eee; background: #fff; {w} {sticky_css}"
+    );
 
     match &col.filter {
         FilterKind::None => rsx! { th { style: "{empty_th_style}" } },
@@ -1265,6 +1352,7 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
     edit_error: Signal<Option<String>>,
     validate_edit: &ValidateEditFn,
     on_commit_edit: Option<EventHandler<CommittedEdit<TRow>>>,
+    sticky_css_map: &HashMap<ColumnId, String>,
 ) -> Element {
     // Row separator is rendered as a 1px inset box-shadow on each TD instead
     // of `border-bottom: 1px` on the TR. Reason: with `border-collapse: collapse`
@@ -1317,9 +1405,10 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
                         validate_edit,
                         on_commit_edit,
                         handle,
+                        sticky_css_map.get(&col.id).map_or("", String::as_str),
                     )}
                 } else {
-                    {data_td(row, col, row_height, variable_row_height, widths.get(&col.id).copied(), cell_renderers.get(col.id), separator_color)}
+                    {data_td(row, col, row_height, variable_row_height, widths.get(&col.id).copied(), cell_renderers.get(col.id), separator_color, sticky_css_map.get(&col.id).map_or("", String::as_str))}
                 }
             }
         }
@@ -1340,6 +1429,7 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
     validate: &ValidateEditFn,
     on_commit_edit: Option<EventHandler<CommittedEdit<TRow>>>,
     handle: UseTableHandle<TRow>,
+    sticky_css: &str,
 ) -> Element {
     let col_id = col.id;
     let editor_kind = col.editor.clone().unwrap_or(EditorKind::Text);
@@ -1347,12 +1437,12 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
     let style = if variable_row_height {
         format!(
             "padding: 0.25rem 0.5rem; box-sizing: border-box; \
-             box-shadow: inset 0 -1px 0 {separator_color}; {w}"
+             box-shadow: inset 0 -1px 0 {separator_color}; {w} {sticky_css}"
         )
     } else {
         format!(
             "padding: 0.25rem 0.5rem; height: {row_height}px; box-sizing: border-box; \
-             box-shadow: inset 0 -1px 0 {separator_color}; {w}"
+             box-shadow: inset 0 -1px 0 {separator_color}; {w} {sticky_css}"
         )
     };
     let input_type = match &editor_kind {
@@ -1442,6 +1532,7 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn data_td<TRow: Clone>(
     row: &TRow,
     col: &ColumnDef<TRow>,
@@ -1450,6 +1541,7 @@ fn data_td<TRow: Clone>(
     override_width: Option<f64>,
     custom_renderer: Option<CellRenderer>,
     separator_color: &str,
+    sticky_css: &str,
 ) -> Element {
     let val = (col.accessor)(row);
     let align = alignment_css(col.alignment);
@@ -1459,13 +1551,13 @@ fn data_td<TRow: Clone>(
     let style = if variable_row_height {
         format!(
             "padding: 0.5rem 1rem; text-align: {align}; \
-             box-sizing: border-box; box-shadow: inset 0 -1px 0 {separator_color}; {w}"
+             box-sizing: border-box; box-shadow: inset 0 -1px 0 {separator_color}; {w} {sticky_css}"
         )
     } else {
         format!(
             "padding: 0.5rem 1rem; height: {row_height}px; text-align: {align}; \
              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; \
-             box-sizing: border-box; box-shadow: inset 0 -1px 0 {separator_color}; {w}"
+             box-sizing: border-box; box-shadow: inset 0 -1px 0 {separator_color}; {w} {sticky_css}"
         )
     };
     let content = if let Some(renderer) = custom_renderer {

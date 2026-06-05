@@ -242,18 +242,101 @@ pub fn visible_window_for_state<TRow: Clone>(
     (win, slice)
 }
 
+/// Returns columns in their effective render order (respects `state.column_order`).
+///
+/// If `column_order` is empty, returns columns in definition order.
+/// Otherwise columns appear in `column_order` sequence; any column not listed
+/// in `column_order` is appended at the end in definition order.
+///
+/// Visibility filtering is NOT applied — this helper operates on all columns.
+/// Callers that need only visible columns should filter the result.
+pub(crate) fn effective_column_order<TRow: Clone>(
+    state: &TableState<TRow>,
+) -> Vec<&crate::column::ColumnDef<TRow>> {
+    if state.column_order.is_empty() {
+        return state.columns.iter().collect();
+    }
+    let mut result: Vec<&crate::column::ColumnDef<TRow>> = state
+        .column_order
+        .iter()
+        .filter_map(|id| state.columns.iter().find(|c| c.id == *id))
+        .collect();
+    for col in &state.columns {
+        if !state.column_order.contains(&col.id) {
+            result.push(col);
+        }
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------
+// Frozen-column view helpers (Item 10)
+// ---------------------------------------------------------------------------
+
+/// Returns the columns pinned to the left edge, in effective column order.
+///
+/// Excludes hidden columns. An empty vec is returned when no columns have
+/// `frozen == FrozenSide::Left` or when all such columns are hidden.
+///
+/// For adapter rendering, combine the three zone helpers as:
+/// `frozen_left_columns` + `scrollable_columns` + `frozen_right_columns`.
+#[must_use]
+pub fn frozen_left_columns<TRow: Clone>(
+    state: &TableState<TRow>,
+) -> Vec<&crate::column::ColumnDef<TRow>> {
+    effective_column_order(state)
+        .into_iter()
+        .filter(|c| {
+            c.frozen == crate::column::FrozenSide::Left && state.is_column_visible(c.id)
+        })
+        .collect()
+}
+
+/// Returns the columns pinned to the right edge, in effective column order.
+///
+/// Excludes hidden columns. An empty vec is returned when no columns have
+/// `frozen == FrozenSide::Right` or when all such columns are hidden.
+#[must_use]
+pub fn frozen_right_columns<TRow: Clone>(
+    state: &TableState<TRow>,
+) -> Vec<&crate::column::ColumnDef<TRow>> {
+    effective_column_order(state)
+        .into_iter()
+        .filter(|c| {
+            c.frozen == crate::column::FrozenSide::Right && state.is_column_visible(c.id)
+        })
+        .collect()
+}
+
+/// Returns the scrollable (non-frozen) columns, in effective column order.
+///
+/// Excludes hidden columns. The union of `frozen_left_columns`,
+/// `scrollable_columns`, and `frozen_right_columns` equals all visible columns
+/// in definition/effective order.
+#[must_use]
+pub fn scrollable_columns<TRow: Clone>(
+    state: &TableState<TRow>,
+) -> Vec<&crate::column::ColumnDef<TRow>> {
+    effective_column_order(state)
+        .into_iter()
+        .filter(|c| {
+            c.frozen == crate::column::FrozenSide::None && state.is_column_visible(c.id)
+        })
+        .collect()
+}
+
 /// Serialize the post-sort / post-filter view (all pages) to a CSV string.
 ///
-/// Only visible columns (per `column_visibility`) are included.
-/// The CSV uses RFC 4180 quoting (double-quote fields that contain commas,
-/// double-quotes, or newlines).
+/// Columns are serialized in their effective render order (respecting
+/// `state.column_order`). Only visible columns (per `column_visibility`) are
+/// included. The CSV uses RFC 4180 quoting (double-quote fields that contain
+/// commas, double-quotes, or newlines).
 ///
 /// Per work-queue spec v0.1-core § 3: "NOT just the current page."
 #[must_use]
 pub fn to_csv<TRow: Clone>(state: &TableState<TRow>) -> String {
-    let visible_cols: Vec<&crate::column::ColumnDef<TRow>> = state
-        .columns
-        .iter()
+    let visible_cols: Vec<&crate::column::ColumnDef<TRow>> = effective_column_order(state)
+        .into_iter()
         .filter(|c| state.is_column_visible(c.id))
         .collect();
 
@@ -398,6 +481,7 @@ mod tests {
             page_size: 10,
             column_visibility: HashMap::new(),
             column_widths: HashMap::new(),
+            column_order: vec![],
             editing: None,
             row_heights: HashMap::new(),
             scroll_top: 0.0,
@@ -636,6 +720,48 @@ mod tests {
         }
     }
 
+    // ---- effective_column_order -------------------------------------------
+
+    #[test]
+    fn effective_column_order_empty_order_returns_definition_order() {
+        let s = make_state();
+        let order = effective_column_order(&s);
+        assert_eq!(order[0].id, ColumnId("name"));
+        assert_eq!(order[1].id, ColumnId("score"));
+    }
+
+    #[test]
+    fn effective_column_order_respects_explicit_order() {
+        let mut s = make_state();
+        s.column_order = vec![ColumnId("score"), ColumnId("name")];
+        let order = effective_column_order(&s);
+        assert_eq!(order[0].id, ColumnId("score"));
+        assert_eq!(order[1].id, ColumnId("name"));
+    }
+
+    #[test]
+    fn effective_column_order_appends_unlisted_columns() {
+        let mut s = make_state();
+        // Only specify "score"; "name" should be appended at end.
+        s.column_order = vec![ColumnId("score")];
+        let order = effective_column_order(&s);
+        assert_eq!(order[0].id, ColumnId("score"));
+        assert_eq!(order[1].id, ColumnId("name"));
+    }
+
+    #[test]
+    fn to_csv_respects_column_order() {
+        let mut s = make_state();
+        // Reorder: score first, then name.
+        s.column_order = vec![ColumnId("score"), ColumnId("name")];
+        let csv = to_csv(&s);
+        let header = csv.lines().next().unwrap();
+        // Score column should appear before Name in the header.
+        let score_pos = header.find("Score").unwrap();
+        let name_pos = header.find("Name").unwrap();
+        assert!(score_pos < name_pos, "score should come before name");
+    }
+
     // ---- filtered_sorted_rows ---------------------------------------------
 
     #[test]
@@ -815,5 +941,126 @@ mod tests {
         let win = visible_window_variable(&HashMap::new(), 100_000.0, 500.0, 40.0, 10, 0);
         assert_eq!(win.end_index, 9);
         assert!(win.bottom_pad_px >= 0.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Frozen column helpers (Item 10)
+    // -----------------------------------------------------------------------
+
+    use crate::column::FrozenSide;
+
+    fn make_frozen_state() -> TableState<R> {
+        let rows = vec![(RowId::new(), R { name: "A".into(), score: 1 })];
+        let columns = vec![
+            ColumnDef::new(ColumnId("id"), "ID", |r: &R| CellValue::Integer(r.score))
+                .frozen(FrozenSide::Left),
+            ColumnDef::new(ColumnId("name"), "Name", |r: &R| {
+                CellValue::Text(r.name.clone())
+            })
+            .frozen(FrozenSide::Left),
+            ColumnDef::new(ColumnId("score"), "Score", |r: &R| {
+                CellValue::Integer(r.score)
+            }),
+            ColumnDef::new(ColumnId("notes"), "Notes", |r: &R| {
+                CellValue::Text(r.name.clone())
+            }),
+            ColumnDef::new(ColumnId("actions"), "Actions", |_: &R| CellValue::Empty)
+                .frozen(FrozenSide::Right),
+        ];
+        TableState::new(rows, columns)
+    }
+
+    #[test]
+    fn frozen_left_returns_left_frozen_in_order() {
+        let state = make_frozen_state();
+        let cols = frozen_left_columns(&state);
+        assert_eq!(cols.len(), 2);
+        assert_eq!(cols[0].id, ColumnId("id"));
+        assert_eq!(cols[1].id, ColumnId("name"));
+    }
+
+    #[test]
+    fn frozen_right_returns_right_frozen() {
+        let state = make_frozen_state();
+        let cols = frozen_right_columns(&state);
+        assert_eq!(cols.len(), 1);
+        assert_eq!(cols[0].id, ColumnId("actions"));
+    }
+
+    #[test]
+    fn scrollable_columns_returns_non_frozen() {
+        let state = make_frozen_state();
+        let cols = scrollable_columns(&state);
+        assert_eq!(cols.len(), 2);
+        assert_eq!(cols[0].id, ColumnId("score"));
+        assert_eq!(cols[1].id, ColumnId("notes"));
+    }
+
+    #[test]
+    fn frozen_union_equals_all_visible_columns() {
+        let state = make_frozen_state();
+        let left = frozen_left_columns(&state);
+        let right = frozen_right_columns(&state);
+        let scroll = scrollable_columns(&state);
+        let total = left.len() + right.len() + scroll.len();
+        assert_eq!(total, state.columns.len());
+    }
+
+    #[test]
+    fn frozen_helpers_empty_when_no_columns() {
+        let state: TableState<R> = TableState::new(vec![], vec![]);
+        assert!(frozen_left_columns(&state).is_empty());
+        assert!(frozen_right_columns(&state).is_empty());
+        assert!(scrollable_columns(&state).is_empty());
+    }
+
+    #[test]
+    fn frozen_helpers_exclude_hidden_columns() {
+        let state = make_frozen_state();
+        let state = crate::transitions::set_column_visibility(&state, ColumnId("id"), false);
+        let left = frozen_left_columns(&state);
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].id, ColumnId("name"));
+    }
+
+    #[test]
+    fn frozen_helpers_respect_column_order() {
+        let state = make_frozen_state();
+        // Swap the two left-frozen columns.
+        let state = crate::transitions::set_column_order(
+            &state,
+            vec![
+                ColumnId("name"),
+                ColumnId("id"),
+                ColumnId("score"),
+                ColumnId("notes"),
+                ColumnId("actions"),
+            ],
+        )
+        .unwrap();
+        let left = frozen_left_columns(&state);
+        assert_eq!(left[0].id, ColumnId("name"));
+        assert_eq!(left[1].id, ColumnId("id"));
+    }
+
+    #[test]
+    fn all_none_frozen_means_all_scrollable() {
+        let state = make_state();
+        assert!(frozen_left_columns(&state).is_empty());
+        assert!(frozen_right_columns(&state).is_empty());
+        assert_eq!(scrollable_columns(&state).len(), state.columns.len());
+    }
+
+    #[test]
+    fn frozen_builder_sets_side() {
+        let col = ColumnDef::new(ColumnId("x"), "X", |_: &R| CellValue::Empty)
+            .frozen(FrozenSide::Left);
+        assert_eq!(col.frozen, FrozenSide::Left);
+    }
+
+    #[test]
+    fn frozen_default_is_none() {
+        let col = ColumnDef::new(ColumnId("x"), "X", |_: &R| CellValue::Empty);
+        assert_eq!(col.frozen, FrozenSide::None);
     }
 }
