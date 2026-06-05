@@ -325,6 +325,26 @@ pub use transitions::set_pagination_mode;
 /// a scroll-threshold handler to implement infinite-scroll load-more.
 pub use transitions::load_more_rows;
 
+/// Set the columns to group by (outermost-first). Clears collapsed state.
+///
+/// Pass an empty vec to remove all grouping. Resets page and scroll.
+pub use transitions::set_grouping;
+
+/// Toggle the collapsed/expanded state of a group identified by `key`.
+///
+/// Collapsed groups show their header row but hide data children.
+/// Obtain `key` values from [`GroupedRow::Header::key`] in the output of
+/// [`visible_grouped_view`].
+pub use transitions::toggle_group;
+
+/// Expand all groups (clear `collapsed_groups`).
+pub use transitions::expand_all_groups;
+
+/// Collapse all groups by inserting every group header key into `collapsed_groups`.
+///
+/// No-op when `state.grouping` is empty.
+pub use transitions::collapse_all_groups;
+
 // ---- Views ----------------------------------------------------------------
 
 /// Post-filter / post-sort / post-pagination `(RowId, TRow)` pairs for the
@@ -377,6 +397,37 @@ pub use views::frozen_right_columns;
 /// The union of `frozen_left_columns`, `scrollable_columns`, and
 /// `frozen_right_columns` equals all visible columns.
 pub use views::scrollable_columns;
+
+/// Interleaved group-header + data rows for the current grouping state.
+///
+/// When `state.grouping` is empty, every item is `GroupedRow::Data` and
+/// this degrades gracefully to the flat view. Adapters match on
+/// `GroupedRow::Header` / `GroupedRow::Data` to render group separators.
+///
+/// Pagination applies to data rows only in `DataRowsOnly` mode (the default).
+/// In `Virtualized` mode the full tree is returned without slicing.
+pub use views::visible_grouped_view;
+
+/// A row in the grouped view: either a `Header` (group separator) or `Data` row.
+///
+/// Returned by [`visible_grouped_view`]. `#[non_exhaustive]`.
+pub use views::GroupedRow;
+
+/// How to aggregate rows within a group for a column (Sum/Average/Count/Min/Max/Custom).
+///
+/// Set via [`ColumnDef::aggregator`]. Appears in [`GroupedRow::Header::aggregates`].
+pub use column::AggregatorKind;
+
+/// How pagination interacts with grouped rows: `DataRowsOnly` (default) or `Virtualized`.
+///
+/// Set via `TableState::grouped_pagination`.
+pub use types::GroupedPaginationMode;
+
+/// Opaque group identifier, built from the concatenated values of the group-by columns.
+///
+/// Obtain from [`GroupedRow::Header::key`]; pass to [`toggle_group`] to
+/// collapse/expand that group.
+pub use types::GroupKey;
 
 // Re-export third-party types used in the public surface so adapter crates
 // don't need to add `chrono` to their Cargo.toml.

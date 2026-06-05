@@ -5,8 +5,341 @@
 
 use std::collections::HashMap;
 
+use crate::column::AggregatorKind;
 use crate::state::{TableState, VirtualWindow};
-use crate::types::{PaginationMode, RowId};
+use crate::types::{CellValue, ColumnId, GroupKey, GroupedPaginationMode, PaginationMode, RowId};
+
+/// A row in the grouped view: either a group header or a data row.
+///
+/// Returned by [`visible_grouped_view`]. Adapters match on this enum and render
+/// `Header` rows as group-header `<tr>` elements and `Data` rows as ordinary cells.
+///
+/// `GroupedRow` is `#[non_exhaustive]` so additional variants can be added in
+/// future minor releases without breaking existing match arms.
+#[non_exhaustive]
+pub enum GroupedRow<TRow> {
+    /// A group header row.
+    Header {
+        /// The opaque key for this group. Pass to [`crate::transitions::toggle_group`]
+        /// to collapse or expand.
+        key: GroupKey,
+        /// The display label for this group (the cell value of the group-by column).
+        label: String,
+        /// Nesting depth (0 = outermost group).
+        depth: usize,
+        /// Total number of data rows in this group (before collapse, after filter).
+        row_count: usize,
+        /// Whether this group is currently collapsed.
+        is_collapsed: bool,
+        /// Aggregate value per column in effective column order (`None` when the
+        /// column has no aggregator). Index `i` corresponds to the column at
+        /// position `i` in `effective_column_order`.
+        aggregates: Vec<Option<CellValue>>,
+    },
+    /// A data row.
+    Data(RowId, TRow),
+}
+
+impl<TRow: Clone> Clone for GroupedRow<TRow> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Header {
+                key,
+                label,
+                depth,
+                row_count,
+                is_collapsed,
+                aggregates,
+            } => Self::Header {
+                key: key.clone(),
+                label: label.clone(),
+                depth: *depth,
+                row_count: *row_count,
+                is_collapsed: *is_collapsed,
+                aggregates: aggregates.clone(),
+            },
+            Self::Data(id, row) => Self::Data(*id, row.clone()),
+        }
+    }
+}
+
+impl<TRow: PartialEq> PartialEq for GroupedRow<TRow> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Header {
+                    key: k1,
+                    label: l1,
+                    depth: d1,
+                    row_count: r1,
+                    is_collapsed: c1,
+                    aggregates: a1,
+                },
+                Self::Header {
+                    key: k2,
+                    label: l2,
+                    depth: d2,
+                    row_count: r2,
+                    is_collapsed: c2,
+                    aggregates: a2,
+                },
+            ) => k1 == k2 && l1 == l2 && d1 == d2 && r1 == r2 && c1 == c2 && a1 == a2,
+            (Self::Data(id1, r1), Self::Data(id2, r2)) => id1 == id2 && r1 == r2,
+            _ => false,
+        }
+    }
+}
+
+/// Returns the interleaved group-header + data rows for the current state.
+///
+/// When `state.grouping` is empty, every item is `GroupedRow::Data`
+/// (callers may use the simpler [`visible_view`] instead).
+///
+/// In `GroupedPaginationMode::DataRowsOnly` (the default), pagination applies
+/// to data rows only; group headers repeat on each page where their rows appear.
+/// In `GroupedPaginationMode::Virtualized`, the full grouped tree is returned
+/// without pagination.
+///
+/// Collapsed groups (keys in `state.collapsed_groups`) emit a `Header` row
+/// with `is_collapsed: true` and no `Data` children.
+#[must_use]
+pub fn visible_grouped_view<TRow: Clone>(state: &TableState<TRow>) -> Vec<GroupedRow<TRow>> {
+    let filtered_sorted = filtered_sorted_pairs(state);
+
+    if state.grouping.is_empty() {
+        return filtered_sorted
+            .into_iter()
+            .map(|(id, row)| GroupedRow::Data(id, row))
+            .collect();
+    }
+
+    let flat = build_group_rows(&filtered_sorted, state, &state.grouping, &[], 0);
+
+    match state.grouped_pagination {
+        GroupedPaginationMode::DataRowsOnly => paginate_grouped(flat, state.page, state.page_size),
+        GroupedPaginationMode::Virtualized => flat,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Grouping internal helpers
+// ---------------------------------------------------------------------------
+
+/// Recursively build the flat interleaved list of headers and data rows.
+fn build_group_rows<TRow: Clone>(
+    pairs: &[(RowId, TRow)],
+    state: &TableState<TRow>,
+    grouping: &[ColumnId],
+    parent_values: &[String],
+    depth: usize,
+) -> Vec<GroupedRow<TRow>> {
+    if grouping.is_empty() {
+        return pairs
+            .iter()
+            .map(|(id, row)| GroupedRow::Data(*id, row.clone()))
+            .collect();
+    }
+
+    let group_col_id = grouping[0];
+    let group_col = state.columns.iter().find(|c| c.id == group_col_id);
+
+    // Partition into groups preserving first-occurrence order.
+    let mut group_order: Vec<String> = Vec::new();
+    let mut group_map: HashMap<String, Vec<(RowId, TRow)>> = HashMap::new();
+    for (id, row) in pairs {
+        let val = group_col.map_or_else(String::new, |c| (c.accessor)(row).to_csv_string());
+        if !group_map.contains_key(&val) {
+            group_order.push(val.clone());
+        }
+        group_map.entry(val).or_default().push((*id, row.clone()));
+    }
+
+    let cols_in_order = effective_column_order(state);
+    let mut result = Vec::new();
+
+    for val in &group_order {
+        let group_pairs = &group_map[val];
+        let mut current_values = parent_values.to_vec();
+        current_values.push(val.clone());
+        let key = GroupKey::from_values(&current_values);
+
+        let is_collapsed = state.collapsed_groups.contains(&key);
+        let aggregates = compute_aggregates(group_pairs, &cols_in_order);
+
+        result.push(GroupedRow::Header {
+            key: key.clone(),
+            label: val.clone(),
+            depth,
+            row_count: group_pairs.len(),
+            is_collapsed,
+            aggregates,
+        });
+
+        if !is_collapsed {
+            let children = build_group_rows(
+                group_pairs,
+                state,
+                &grouping[1..],
+                &current_values,
+                depth + 1,
+            );
+            result.extend(children);
+        }
+    }
+    result
+}
+
+/// Compute aggregate values for a group's rows, one per column in effective order.
+fn compute_aggregates<TRow: Clone>(
+    pairs: &[(RowId, TRow)],
+    cols: &[&crate::column::ColumnDef<TRow>],
+) -> Vec<Option<CellValue>> {
+    cols.iter()
+        .map(|col| {
+            let agg = col.aggregator.as_ref()?;
+            let values: Vec<CellValue> = pairs.iter().map(|(_, row)| (col.accessor)(row)).collect();
+            let row_refs: Vec<&TRow> = pairs.iter().map(|(_, row)| row).collect();
+            Some(match agg {
+                AggregatorKind::Sum => {
+                    let sum: f64 = values.iter().filter_map(cell_to_f64).sum();
+                    CellValue::Float(sum)
+                }
+                AggregatorKind::Average => {
+                    let nums: Vec<f64> = values.iter().filter_map(cell_to_f64).collect();
+                    if nums.is_empty() {
+                        CellValue::Text("\u{2014}".into())
+                    } else {
+                        #[allow(clippy::cast_precision_loss)]
+                        CellValue::Float(nums.iter().sum::<f64>() / nums.len() as f64)
+                    }
+                }
+                AggregatorKind::Count =>
+                {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                    CellValue::Integer(pairs.len() as i64)
+                }
+                AggregatorKind::Min => values
+                    .iter()
+                    .cloned()
+                    .reduce(|a, b| {
+                        if b.cmp_for_sort(&a) == std::cmp::Ordering::Less {
+                            b
+                        } else {
+                            a
+                        }
+                    })
+                    .unwrap_or(CellValue::Empty),
+                AggregatorKind::Max => values
+                    .iter()
+                    .cloned()
+                    .reduce(|a, b| {
+                        if b.cmp_for_sort(&a) == std::cmp::Ordering::Greater {
+                            b
+                        } else {
+                            a
+                        }
+                    })
+                    .unwrap_or(CellValue::Empty),
+                AggregatorKind::Custom(f) => f(&row_refs),
+            })
+        })
+        .collect()
+}
+
+/// Extract a numeric `f64` from a `CellValue` for Sum/Average aggregation.
+fn cell_to_f64(v: &CellValue) -> Option<f64> {
+    match v {
+        CellValue::Integer(n) =>
+        {
+            #[allow(clippy::cast_precision_loss)]
+            Some(*n as f64)
+        }
+        CellValue::Float(f) => Some(*f),
+        _ => None,
+    }
+}
+
+/// Apply `DataRowsOnly` pagination to a flat grouped list.
+///
+/// Headers are included on every page that contains at least one of their data
+/// rows. Data rows are sliced to `[page * page_size .. (page+1) * page_size)`.
+fn paginate_grouped<TRow: Clone>(
+    flat: Vec<GroupedRow<TRow>>,
+    page: usize,
+    page_size: usize,
+) -> Vec<GroupedRow<TRow>> {
+    if page_size == 0 {
+        return flat;
+    }
+
+    // Collect flat indices of data rows.
+    let data_flat_indices: Vec<usize> = flat
+        .iter()
+        .enumerate()
+        .filter_map(|(i, row)| {
+            if matches!(row, GroupedRow::Data(..)) {
+                Some(i)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let start = page * page_size;
+    if start >= data_flat_indices.len() {
+        return vec![];
+    }
+    let end = ((page + 1) * page_size).min(data_flat_indices.len());
+
+    let page_flat_indices: std::collections::HashSet<usize> =
+        data_flat_indices[start..end].iter().copied().collect();
+
+    let n = flat.len();
+    let mut result = Vec::new();
+    let mut i = 0;
+
+    while i < n {
+        match &flat[i] {
+            GroupedRow::Header {
+                depth,
+                is_collapsed,
+                ..
+            } => {
+                let d = *depth;
+                // Collapsed headers always appear (user needs them to expand).
+                let include = *is_collapsed || {
+                    // Include expanded header when any data row in its subtree is on the page.
+                    let mut j = i + 1;
+                    let mut found = false;
+                    while j < n {
+                        match &flat[j] {
+                            // Subtree ends at any header with depth <= d.
+                            GroupedRow::Header { depth: jd, .. } if *jd <= d => break,
+                            GroupedRow::Data(..) if page_flat_indices.contains(&j) => {
+                                found = true;
+                                break;
+                            }
+                            _ => {}
+                        }
+                        j += 1;
+                    }
+                    found
+                };
+                if include {
+                    result.push(flat[i].clone());
+                }
+                i += 1;
+            }
+            GroupedRow::Data(..) => {
+                if page_flat_indices.contains(&i) {
+                    result.push(flat[i].clone());
+                }
+                i += 1;
+            }
+        }
+    }
+    result
+}
 
 /// Compute the fixed-height virtual window for a scroll offset.
 ///
@@ -433,15 +766,15 @@ fn csv_quote(s: &str) -> String {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-#[allow(clippy::float_cmp, clippy::cast_precision_loss)]
+#[allow(clippy::float_cmp, clippy::cast_precision_loss, clippy::unwrap_used)]
 mod tests {
     use std::collections::HashMap;
 
     use crate::column::ColumnDef;
     use crate::state::TableState;
     use crate::types::{
-        Alignment, CellValue, ColumnId, FilterValue, PaginationMode, RowId, SortDirection,
-        SortState,
+        Alignment, CellValue, ColumnId, FilterValue, GroupKey, GroupedPaginationMode,
+        PaginationMode, RowId, SortDirection, SortState,
     };
 
     use super::*;
@@ -509,6 +842,9 @@ mod tests {
             buffer_rows: 3,
             pagination_mode: PaginationMode::Pages,
             loaded_row_count: 0,
+            grouping: vec![],
+            collapsed_groups: std::collections::HashSet::new(),
+            grouped_pagination: GroupedPaginationMode::DataRowsOnly,
         }
     }
 
@@ -1089,6 +1425,157 @@ mod tests {
     fn frozen_default_is_none() {
         let col = ColumnDef::new(ColumnId("x"), "X", |_: &R| CellValue::Empty);
         assert_eq!(col.frozen, FrozenSide::None);
+    }
+
+    // ---- visible_grouped_view (Item 8) ----------------------------------------
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct GR {
+        group: String,
+        value: i64,
+    }
+
+    fn make_grouped_state() -> TableState<GR> {
+        let rows = vec![
+            (
+                RowId::new(),
+                GR {
+                    group: "A".into(),
+                    value: 10,
+                },
+            ),
+            (
+                RowId::new(),
+                GR {
+                    group: "A".into(),
+                    value: 20,
+                },
+            ),
+            (
+                RowId::new(),
+                GR {
+                    group: "B".into(),
+                    value: 30,
+                },
+            ),
+        ];
+        let columns = vec![
+            ColumnDef::new(ColumnId("group"), "Group", |r: &GR| {
+                CellValue::Text(r.group.clone())
+            }),
+            ColumnDef::new(ColumnId("value"), "Value", |r: &GR| {
+                CellValue::Integer(r.value)
+            })
+            .aggregator(crate::column::AggregatorKind::Sum),
+        ];
+        let mut s = TableState::new(rows, columns);
+        s.page_size = 100;
+        s
+    }
+
+    #[test]
+    fn visible_grouped_view_no_grouping_returns_data_rows() {
+        let s = make_grouped_state();
+        let view = visible_grouped_view(&s);
+        assert_eq!(view.len(), 3);
+        assert!(view.iter().all(|r| matches!(r, GroupedRow::Data(..))));
+    }
+
+    #[test]
+    fn visible_grouped_view_groups_by_single_column() {
+        let mut s = make_grouped_state();
+        s.grouping = vec![ColumnId("group")];
+        let view = visible_grouped_view(&s);
+        // 2 headers (A, B) + 2 data rows (A) + 1 data row (B) = 5
+        assert_eq!(view.len(), 5);
+        assert!(
+            matches!(&view[0], GroupedRow::Header { label, row_count, depth, .. } if label == "A" && *row_count == 2 && *depth == 0)
+        );
+        assert!(matches!(&view[1], GroupedRow::Data(..)));
+        assert!(matches!(&view[2], GroupedRow::Data(..)));
+        assert!(
+            matches!(&view[3], GroupedRow::Header { label, row_count, .. } if label == "B" && *row_count == 1)
+        );
+        assert!(matches!(&view[4], GroupedRow::Data(..)));
+    }
+
+    #[test]
+    fn visible_grouped_view_collapse_hides_data_rows() {
+        let mut s = make_grouped_state();
+        s.grouping = vec![ColumnId("group")];
+        let key_a = GroupKey::from_values(&["A"]);
+        s.collapsed_groups.insert(key_a);
+        let view = visible_grouped_view(&s);
+        // Header A (collapsed) + Header B + 1 data row = 3
+        assert_eq!(view.len(), 3);
+        assert!(
+            matches!(&view[0], GroupedRow::Header { label, is_collapsed, .. } if label == "A" && *is_collapsed)
+        );
+        assert!(matches!(&view[1], GroupedRow::Header { label, .. } if label == "B"));
+        assert!(matches!(&view[2], GroupedRow::Data(..)));
+    }
+
+    #[test]
+    fn visible_grouped_view_aggregates_sum() {
+        let mut s = make_grouped_state();
+        s.grouping = vec![ColumnId("group")];
+        let view = visible_grouped_view(&s);
+        // Group A: sum of [10, 20] = 30; group B: sum of [30] = 30
+        if let GroupedRow::Header {
+            aggregates, label, ..
+        } = &view[0]
+        {
+            assert_eq!(label, "A");
+            // aggregates[1] = Some(Float(30.0)) (value column at index 1)
+            assert_eq!(aggregates[1], Some(CellValue::Float(30.0)));
+        } else {
+            panic!("expected header at index 0");
+        }
+        if let GroupedRow::Header {
+            aggregates, label, ..
+        } = &view[3]
+        {
+            assert_eq!(label, "B");
+            assert_eq!(aggregates[1], Some(CellValue::Float(30.0)));
+        } else {
+            panic!("expected header at index 3");
+        }
+    }
+
+    #[test]
+    fn visible_grouped_view_pagination_data_rows_only() {
+        let mut s = make_grouped_state();
+        s.grouping = vec![ColumnId("group")];
+        s.page_size = 2; // 2 data rows per page
+        s.page = 0;
+        let view = visible_grouped_view(&s);
+        // Page 0: data rows 0,1 (both in group A) → Header A + 2 data
+        assert_eq!(view.len(), 3);
+        assert!(matches!(&view[0], GroupedRow::Header { label, .. } if label == "A"));
+
+        s.page = 1;
+        let view2 = visible_grouped_view(&s);
+        // Page 1: data row 2 (group B) → Header B + 1 data
+        assert_eq!(view2.len(), 2);
+        assert!(matches!(&view2[0], GroupedRow::Header { label, .. } if label == "B"));
+    }
+
+    #[test]
+    fn visible_grouped_view_empty_grouping_on_empty_dataset() {
+        let s: TableState<GR> = TableState::new(vec![], vec![]);
+        let view = visible_grouped_view(&s);
+        assert!(view.is_empty());
+    }
+
+    #[test]
+    fn visible_grouped_view_virtualized_mode_ignores_pagination() {
+        let mut s = make_grouped_state();
+        s.grouping = vec![ColumnId("group")];
+        s.grouped_pagination = GroupedPaginationMode::Virtualized;
+        s.page_size = 1; // would normally show 1 data row per page
+        let view = visible_grouped_view(&s);
+        // Virtualized mode: all rows returned regardless of page_size
+        assert_eq!(view.len(), 5);
     }
 
     // ---- InfiniteScroll mode (Item 11.0b) ------------------------------------

@@ -123,6 +123,59 @@ impl<TRow: Clone> CommittedEdit<TRow> {
     }
 }
 
+/// Opaque key identifying a group (the concatenated group-by column values).
+///
+/// `GroupKey` is formed by joining the group-by column values for a row with a
+/// `\0` delimiter. Two rows with identical values for all active `state.grouping`
+/// columns produce equal keys.
+///
+/// Construct explicitly via [`GroupKey::from_values`] to pre-collapse specific
+/// groups without having to walk the grouped view first.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct GroupKey(pub(crate) String);
+
+impl GroupKey {
+    /// Construct a `GroupKey` from the ordered group-by column values for a row.
+    ///
+    /// The internal format is an opaque `\0`-delimited concatenation;
+    /// the exact format is an implementation detail.
+    #[must_use]
+    pub fn from_values(vals: &[impl AsRef<str>]) -> Self {
+        Self(
+            vals.iter()
+                .map(AsRef::as_ref)
+                .collect::<Vec<_>>()
+                .join("\0"),
+        )
+    }
+}
+
+impl std::fmt::Display for GroupKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// How pagination interacts with grouped rows.
+///
+/// `GroupedPaginationMode` is `#[non_exhaustive]` so additional modes can be
+/// added in future minor releases without breaking existing match arms.
+///
+/// Default is `DataRowsOnly`.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GroupedPaginationMode {
+    /// Paginate data rows only. Group headers re-render on each page that
+    /// contains their rows. Pagination controls remain active. **Default.**
+    #[default]
+    DataRowsOnly,
+    /// Disable pagination when `state.grouping` is non-empty; render the full
+    /// grouped tree. The adapter hides page controls when grouping is active
+    /// and this mode is set. Relies on virtualization for scale.
+    Virtualized,
+}
+
 /// Sort direction for a column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SortDirection {

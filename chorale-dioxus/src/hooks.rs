@@ -1,10 +1,11 @@
 //! Dioxus hooks for chorale tables.
 
 use chorale_core::{
-    clear_sort, load_more_rows, move_column, remove_sort, set_column_visibility, set_column_width,
-    set_filter, set_page, set_page_size, set_pagination_mode, set_scroll, set_selection,
-    toggle_select_all, toggle_sort, update_row, ColumnId, FilterValue, PaginationMode, RowId,
-    SortAction, StateError, TableState,
+    clear_sort, collapse_all_groups, expand_all_groups, load_more_rows, move_column, remove_sort,
+    set_column_visibility, set_column_width, set_filter, set_grouping, set_page, set_page_size,
+    set_pagination_mode, set_scroll, set_selection, toggle_group, toggle_select_all, toggle_sort,
+    update_row, ColumnId, FilterValue, GroupKey, PaginationMode, RowId, SortAction, StateError,
+    TableState,
 };
 use dioxus::prelude::*;
 
@@ -179,6 +180,31 @@ impl<TRow: Clone + 'static> UseTableHandle<TRow> {
     /// No-op (silently discarded) in `PaginationMode::Pages`.
     pub fn load_more_rows(&self) {
         self.try_dispatch(load_more_rows).ok();
+    }
+
+    /// Set the columns to group by (outermost-first). Clears collapsed state.
+    ///
+    /// Pass an empty vec to remove all grouping. Resets page and scroll.
+    pub fn set_grouping(&self, columns: Vec<ColumnId>) {
+        self.dispatch(|s| set_grouping(s, columns));
+    }
+
+    /// Toggle the collapsed/expanded state of a group.
+    ///
+    /// Obtain `key` from [`GroupedRow::Header::key`] in [`visible_grouped_view`] output.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn toggle_group(&self, key: GroupKey) {
+        self.dispatch(|s| toggle_group(s, &key));
+    }
+
+    /// Expand all groups (clear `collapsed_groups`).
+    pub fn expand_all_groups(&self) {
+        self.dispatch(|s| expand_all_groups(s));
+    }
+
+    /// Collapse all groups.
+    pub fn collapse_all_groups(&self) {
+        self.dispatch(|s| collapse_all_groups(s));
     }
 
     // -------------------------------------------------------------------------

@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use crate::error::StateError;
 use crate::state::TableState;
 use crate::types::{
-    ColumnId, EditTarget, FilterValue, PaginationMode, PriorEdit, RowId, SortAction, SortDirection,
-    SortState,
+    ColumnId, EditTarget, FilterValue, GroupKey, PaginationMode, PriorEdit, RowId, SortAction,
+    SortDirection, SortState,
 };
 
 /// Cycle the sort state for `col` using `action` to determine replace vs append.
@@ -681,6 +681,79 @@ pub fn load_more_rows<TRow: Clone>(
 }
 
 // ---------------------------------------------------------------------------
+// Grouping transitions (Item 8)
+// ---------------------------------------------------------------------------
+
+/// Set the active grouping columns.
+///
+/// `columns = vec![]` clears grouping. Setting grouping always clears
+/// `collapsed_groups` so stale collapse state does not carry over when the
+/// column set changes.
+#[must_use]
+pub fn set_grouping<TRow: Clone>(
+    state: &TableState<TRow>,
+    columns: Vec<ColumnId>,
+) -> TableState<TRow> {
+    TableState {
+        grouping: columns,
+        collapsed_groups: std::collections::HashSet::new(),
+        ..state.clone()
+    }
+}
+
+/// Toggle a group's collapsed state.
+///
+/// If `key` is in `collapsed_groups`, it is removed (group expands).
+/// Otherwise it is inserted (group collapses). No-op on an unknown key.
+#[must_use]
+pub fn toggle_group<TRow: Clone>(state: &TableState<TRow>, key: &GroupKey) -> TableState<TRow> {
+    let mut collapsed = state.collapsed_groups.clone();
+    if collapsed.contains(key) {
+        collapsed.remove(key);
+    } else {
+        collapsed.insert(key.clone());
+    }
+    TableState {
+        collapsed_groups: collapsed,
+        ..state.clone()
+    }
+}
+
+/// Expand all groups (clear `collapsed_groups`).
+#[must_use]
+pub fn expand_all_groups<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    TableState {
+        collapsed_groups: std::collections::HashSet::new(),
+        ..state.clone()
+    }
+}
+
+/// Collapse all top-level and nested groups.
+///
+/// Computes all group keys by temporarily expanding the full grouped tree, then
+/// sets `collapsed_groups` to that key set.
+#[must_use]
+pub fn collapse_all_groups<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    // Expand everything to discover all group keys.
+    let fully_expanded = TableState {
+        collapsed_groups: std::collections::HashSet::new(),
+        ..state.clone()
+    };
+    let all_keys: std::collections::HashSet<GroupKey> =
+        crate::views::visible_grouped_view(&fully_expanded)
+            .into_iter()
+            .filter_map(|row| match row {
+                crate::views::GroupedRow::Header { key, .. } => Some(key),
+                crate::views::GroupedRow::Data(..) => None,
+            })
+            .collect();
+    TableState {
+        collapsed_groups: all_keys,
+        ..state.clone()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests (TESTS-1: every transition has a unit test asserting the result)
 // ---------------------------------------------------------------------------
 
@@ -698,8 +771,8 @@ mod tests {
     use crate::column::ColumnDef;
     use crate::state::TableState;
     use crate::types::{
-        Alignment, CellValue, ColumnId, FilterValue, PaginationMode, RowId, SortAction,
-        SortDirection,
+        Alignment, CellValue, ColumnId, FilterValue, GroupedPaginationMode, PaginationMode, RowId,
+        SortAction, SortDirection,
     };
 
     // ---- helpers -----------------------------------------------------------
@@ -777,6 +850,9 @@ mod tests {
             buffer_rows: 3,
             pagination_mode: PaginationMode::Pages,
             loaded_row_count: 0,
+            grouping: vec![],
+            collapsed_groups: std::collections::HashSet::new(),
+            grouped_pagination: GroupedPaginationMode::DataRowsOnly,
         }
     }
 
@@ -1730,5 +1806,104 @@ mod tests {
         s.loaded_row_count = 30;
         let s2 = toggle_sort(&s, col_name(), SortAction::Replace);
         assert_eq!(s2.loaded_row_count, s.page_size);
+    }
+
+    // ---- grouping transitions (Item 8) ----------------------------------------
+
+    fn make_grouped_state() -> TableState<TestRow> {
+        let rows = vec![
+            (
+                RowId::new(),
+                TestRow {
+                    name: "Alice".into(),
+                    score: 90.0,
+                },
+            ),
+            (
+                RowId::new(),
+                TestRow {
+                    name: "Bob".into(),
+                    score: 75.0,
+                },
+            ),
+            (
+                RowId::new(),
+                TestRow {
+                    name: "Alice".into(),
+                    score: 85.0,
+                },
+            ),
+        ];
+        TableState {
+            rows,
+            columns: make_columns(),
+            ..make_state()
+        }
+    }
+
+    #[test]
+    fn set_grouping_sets_columns_and_clears_collapsed() {
+        let s = make_grouped_state();
+        // pre-collapse a group key
+        let key = GroupKey::from_values(&["Alice"]);
+        let s = toggle_group(&s, &key);
+        assert!(!s.collapsed_groups.is_empty());
+        // set_grouping must clear collapsed_groups
+        let s2 = set_grouping(&s, vec![col_name()]);
+        assert_eq!(s2.grouping, vec![col_name()]);
+        assert!(s2.collapsed_groups.is_empty());
+    }
+
+    #[test]
+    fn set_grouping_empty_clears_grouping() {
+        let s = make_grouped_state();
+        let s = set_grouping(&s, vec![col_name()]);
+        let s2 = set_grouping(&s, vec![]);
+        assert!(s2.grouping.is_empty());
+    }
+
+    #[test]
+    fn toggle_group_collapses_and_expands() {
+        let s = make_grouped_state();
+        let key = GroupKey::from_values(&["Alice"]);
+        // collapse
+        let s2 = toggle_group(&s, &key);
+        assert!(s2.collapsed_groups.contains(&key));
+        // expand
+        let s3 = toggle_group(&s2, &key);
+        assert!(!s3.collapsed_groups.contains(&key));
+    }
+
+    #[test]
+    fn expand_all_groups_clears_all_collapsed() {
+        let s = make_grouped_state();
+        let k1 = GroupKey::from_values(&["Alice"]);
+        let k2 = GroupKey::from_values(&["Bob"]);
+        let s = toggle_group(&s, &k1);
+        let s = toggle_group(&s, &k2);
+        assert_eq!(s.collapsed_groups.len(), 2);
+        let s2 = expand_all_groups(&s);
+        assert!(s2.collapsed_groups.is_empty());
+    }
+
+    #[test]
+    fn collapse_all_groups_fills_collapsed_set() {
+        let s = set_grouping(&make_grouped_state(), vec![col_name()]);
+        let s2 = collapse_all_groups(&s);
+        // Alice and Bob are the two group keys
+        assert_eq!(s2.collapsed_groups.len(), 2);
+        assert!(s2
+            .collapsed_groups
+            .contains(&GroupKey::from_values(&["Alice"])));
+        assert!(s2
+            .collapsed_groups
+            .contains(&GroupKey::from_values(&["Bob"])));
+    }
+
+    #[test]
+    fn collapse_all_groups_on_empty_grouping_produces_empty_set() {
+        let s = make_grouped_state(); // grouping is empty
+        let s2 = collapse_all_groups(&s);
+        assert!(s2.collapsed_groups.is_empty());
     }
 }

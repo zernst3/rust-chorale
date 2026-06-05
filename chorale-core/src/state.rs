@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 use crate::column::ColumnDef;
-use crate::types::{ColumnId, EditTarget, FilterValue, PaginationMode, RowId, SortState};
+use crate::types::{
+    ColumnId, EditTarget, FilterValue, GroupKey, GroupedPaginationMode, PaginationMode, RowId,
+    SortState,
+};
 
 /// The result of `visible_window()`: which rows to render and how large the
 /// top/bottom spacer divs should be so the scrollbar reflects the full list.
@@ -88,6 +91,22 @@ pub struct TableState<TRow: Clone> {
     /// currently "loaded" (visible to the user). Grows by `page_size` each
     /// time `load_more_rows` is called. In `Pages` mode, always 0.
     pub loaded_row_count: usize,
+    /// Ordered list of columns to group by. Empty = no grouping.
+    ///
+    /// The first element is the outermost group; subsequent elements create
+    /// nested subgroups. Set via [`crate::transitions::set_grouping`].
+    pub grouping: Vec<ColumnId>,
+    /// Group keys that are currently collapsed. Empty = all expanded.
+    ///
+    /// When a key is present, `visible_grouped_view` omits that group's data
+    /// rows. Toggle via [`crate::transitions::toggle_group`].
+    pub collapsed_groups: std::collections::HashSet<GroupKey>,
+    /// How pagination interacts with grouped rows. Defaults to `DataRowsOnly`.
+    ///
+    /// `DataRowsOnly`: page controls count data rows only; headers repeat on
+    /// each page that contains their rows. `Virtualized`: pagination disabled
+    /// while grouping is active; the full grouped tree is rendered.
+    pub grouped_pagination: GroupedPaginationMode,
 }
 
 impl<TRow: Clone + std::fmt::Debug> std::fmt::Debug for TableState<TRow> {
@@ -110,6 +129,9 @@ impl<TRow: Clone + std::fmt::Debug> std::fmt::Debug for TableState<TRow> {
             .field("buffer_rows", &self.buffer_rows)
             .field("pagination_mode", &self.pagination_mode)
             .field("loaded_row_count", &self.loaded_row_count)
+            .field("grouping", &self.grouping)
+            .field("collapsed_groups", &self.collapsed_groups)
+            .field("grouped_pagination", &self.grouped_pagination)
             .finish_non_exhaustive()
     }
 }
@@ -135,6 +157,9 @@ impl<TRow: Clone> Clone for TableState<TRow> {
             buffer_rows: self.buffer_rows,
             pagination_mode: self.pagination_mode,
             loaded_row_count: self.loaded_row_count,
+            grouping: self.grouping.clone(),
+            collapsed_groups: self.collapsed_groups.clone(),
+            grouped_pagination: self.grouped_pagination,
         }
     }
 }
@@ -179,6 +204,9 @@ impl<TRow: Clone> TableState<TRow> {
             buffer_rows: 3,
             pagination_mode: PaginationMode::Pages,
             loaded_row_count: 0,
+            grouping: vec![],
+            collapsed_groups: std::collections::HashSet::new(),
+            grouped_pagination: GroupedPaginationMode::DataRowsOnly,
         }
     }
 

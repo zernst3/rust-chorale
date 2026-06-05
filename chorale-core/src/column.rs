@@ -3,6 +3,59 @@ use std::sync::Arc;
 
 use crate::types::{Alignment, CellValue, ColumnId, CurrencyCode};
 
+/// How to aggregate rows within a group for a column.
+///
+/// Set via [`ColumnDef::aggregator`]. Aggregation applies when grouping is
+/// active (`state.grouping` is non-empty). The aggregated result appears in
+/// each `GroupedRow::Header`'s `aggregates` vec at this column's position in
+/// the effective column order.
+///
+/// `AggregatorKind` is `#[non_exhaustive]` so additional built-in aggregators
+/// can be added in future minor releases.
+#[non_exhaustive]
+pub enum AggregatorKind<TRow> {
+    /// Sum of numeric cell values (`CellValue::Integer` and `Float`).
+    Sum,
+    /// Average of numeric cell values. Returns `CellValue::Text("—")` when no
+    /// numeric values are present.
+    Average,
+    /// Count of rows in the group. Always returns `CellValue::Integer`.
+    Count,
+    /// Minimum value (uses `CellValue::cmp_for_sort`).
+    Min,
+    /// Maximum value (uses `CellValue::cmp_for_sort`).
+    Max,
+    /// Host-supplied aggregation. Called with the group's rows; returns any `CellValue`.
+    #[allow(clippy::type_complexity)]
+    Custom(Arc<dyn Fn(&[&TRow]) -> CellValue + Send + Sync>),
+}
+
+impl<TRow> Clone for AggregatorKind<TRow> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Sum => Self::Sum,
+            Self::Average => Self::Average,
+            Self::Count => Self::Count,
+            Self::Min => Self::Min,
+            Self::Max => Self::Max,
+            Self::Custom(f) => Self::Custom(Arc::clone(f)),
+        }
+    }
+}
+
+impl<TRow> std::fmt::Debug for AggregatorKind<TRow> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Sum => write!(f, "Sum"),
+            Self::Average => write!(f, "Average"),
+            Self::Count => write!(f, "Count"),
+            Self::Min => write!(f, "Min"),
+            Self::Max => write!(f, "Max"),
+            Self::Custom(_) => write!(f, "Custom(<fn>)"),
+        }
+    }
+}
+
 /// Which edge a column is pinned to. Defaults to `None` (scrollable).
 ///
 /// Set via [`ColumnDef::frozen`]. The adapter renders left-frozen columns at
@@ -230,6 +283,11 @@ pub struct ColumnDef<TRow> {
     /// The adapter renders frozen columns with CSS `position: sticky` and a
     /// computed `left`/`right` offset.
     pub frozen: FrozenSide,
+    /// How to aggregate this column's values within a group.
+    ///
+    /// `None` (default) means the column shows no aggregate in group headers.
+    /// Only applies when grouping is active (`state.grouping` is non-empty).
+    pub aggregator: Option<AggregatorKind<TRow>>,
 }
 
 impl<TRow> ColumnDef<TRow> {
@@ -253,6 +311,7 @@ impl<TRow> ColumnDef<TRow> {
             cell_class: None,
             editor: None,
             frozen: FrozenSide::None,
+            aggregator: None,
         }
     }
 
@@ -324,6 +383,16 @@ impl<TRow> ColumnDef<TRow> {
         self
     }
 
+    /// Set an aggregation function for this column.
+    ///
+    /// When grouping is active, each group header shows the aggregated value
+    /// for this column in its `aggregates` vec. `None` (the default) shows no aggregate.
+    #[must_use]
+    pub fn aggregator(mut self, kind: AggregatorKind<TRow>) -> Self {
+        self.aggregator = Some(kind);
+        self
+    }
+
     /// True if the column has any filter UI configured (anything other than
     /// `FilterKind::None`).
     #[must_use]
@@ -347,6 +416,7 @@ impl<TRow> Clone for ColumnDef<TRow> {
             cell_class: self.cell_class.clone(),
             editor: self.editor.clone(),
             frozen: self.frozen.clone(),
+            aggregator: self.aggregator.clone(),
         }
     }
 }

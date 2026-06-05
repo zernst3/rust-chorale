@@ -6,11 +6,11 @@ use std::sync::Arc;
 
 use chorale_core::{
     batch_record_row_heights, cancel_edit, commit_edit, frozen_left_columns, frozen_right_columns,
-    next_editable_cell, prev_editable_cell, scrollable_columns, to_csv, visible_view,
-    visible_window, visible_window_variable, Alignment, BadgeVariantMap, CellValue, ColumnDef,
-    ColumnId, CommittedEdit, CurrencyCode, EditorKind, FilterKind, FilterValue, Labels,
-    PaginationMode, RenderKind, RowId, SortAction, SortDirection, SortState, TableState,
-    VirtualWindow,
+    next_editable_cell, prev_editable_cell, scrollable_columns, to_csv, visible_grouped_view,
+    visible_view, visible_window, visible_window_variable, Alignment, BadgeVariantMap, CellValue,
+    ColumnDef, ColumnId, CommittedEdit, CurrencyCode, EditorKind, FilterKind, FilterValue,
+    GroupKey, GroupedPaginationMode, GroupedRow, Labels, PaginationMode, RenderKind, RowId,
+    SortAction, SortDirection, SortState, TableState, VirtualWindow,
 };
 use dioxus::prelude::*;
 
@@ -137,6 +137,10 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     /// Default is `2` (above scrollable columns, which use no explicit z-index).
     #[props(default = 2)]
     frozen_column_z_index: i32,
+    /// CSS class applied to every group-header `<tr>` when grouping is active.
+    /// Default: `"chorale-group-header"`.
+    #[props(default = String::from("chorale-group-header"))]
+    group_header_class: String,
     /// Distance from the scroll container bottom (px) at which to fire
     /// `load_more_rows` in `PaginationMode::InfiniteScroll`. Default is `200`.
     #[props(default = 200.0_f64)]
@@ -191,6 +195,8 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
             s.sort.clone(),
             s.filters.clone(),
             s.rows.len(),
+            s.grouping.clone(),
+            s.collapsed_groups.clone(),
         )
     });
     // sig.peek() reads without subscribing this memo to sig directly;
@@ -198,6 +204,10 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     let view = use_memo(move || {
         let _key = view_key.read();
         visible_view(&*sig.peek())
+    });
+    let grouped_view = use_memo(move || {
+        let _key = view_key.read();
+        visible_grouped_view(&*sig.peek())
     });
 
     // Memo over just the page index so `use_effect` re-runs only on page
@@ -291,6 +301,7 @@ dioxus.send(parts.join('\n'));"
     }
 
     let view_read = view.read();
+    let grouped_view_read = grouped_view.read();
     let state = sig.read();
 
     // Compute effective column order: explicit order first, then any unlisted columns appended.
@@ -401,6 +412,9 @@ dioxus.send(parts.join('\n'));"
     let total_rows = state.filtered_row_count();
     let is_infinite_scroll = state.pagination_mode == PaginationMode::InfiniteScroll;
     let has_more_rows = is_infinite_scroll && view_read.len() < total_rows;
+    let is_grouped = !state.grouping.is_empty();
+    let is_virtualized_grouped =
+        is_grouped && state.grouped_pagination == GroupedPaginationMode::Virtualized;
     let col_count = visible_cols.len();
     let effective_col_count = col_count + usize::from(selection_enabled);
     let row_height = state.row_height;
@@ -486,6 +500,7 @@ dioxus.send(parts.join('\n'));"
                     let sig_for_scroll = handle.signal();
                     let s = sig_for_scroll.read();
                     if s.pagination_mode == PaginationMode::InfiniteScroll {
+                        #[allow(clippy::cast_precision_loss)]
                         let total_h = s.loaded_row_count as f64 * s.row_height;
                         let dist = total_h - st - s.viewport_height;
                         if dist < infinite_scroll_threshold_px {
@@ -525,37 +540,53 @@ dioxus.send(parts.join('\n'));"
                     }
 
                     tbody {
-                        if win.top_pad_px > 0.0 {
-                            tr {
-                                td {
-                                    colspan: "{effective_col_count}",
-                                    style: "height: {win.top_pad_px}px; padding: 0; border: 0;",
+                        if is_grouped {
+                            for (i, grouped_row) in grouped_view_read.iter().cloned().enumerate() {
+                                {render_grouped_row(grouped_row, i, effective_col_count, selection_enabled, handle, &group_header_class, &visible_cols, row_height, &widths, variable_row_height, &cell_renderers, editing_target, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, &selection_set)}
+                            }
+                            if grouped_view_read.is_empty() {
+                                tr {
+                                    td {
+                                        colspan: "{effective_col_count}",
+                                        style: "padding: 2rem 1rem; text-align: center; \
+                                                color: #999; font-style: italic;",
+                                        "{labels.no_rows_label}"
+                                    }
                                 }
                             }
-                        }
-                        for (i, (row_id, row)) in id_slice.iter().zip(row_slice.iter()).enumerate() {
-                            {
-                                let editing_col = editing_target
-                                    .filter(|t| t.row_id == *row_id)
-                                    .map(|t| t.column_id);
-                                data_tr(row, *row_id, win.start_index + i, variable_row_height, &visible_cols, row_height, &widths, selection_enabled, selection_set.contains(row_id), handle, &cell_renderers, editing_col, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css)
-                            }
-                        }
-                        if win.bottom_pad_px > 0.0 {
-                            tr {
-                                td {
-                                    colspan: "{effective_col_count}",
-                                    style: "height: {win.bottom_pad_px}px; padding: 0; border: 0;",
+                        } else {
+                            if win.top_pad_px > 0.0 {
+                                tr {
+                                    td {
+                                        colspan: "{effective_col_count}",
+                                        style: "height: {win.top_pad_px}px; padding: 0; border: 0;",
+                                    }
                                 }
                             }
-                        }
-                        if total_rows == 0 {
-                            tr {
-                                td {
-                                    colspan: "{effective_col_count}",
-                                    style: "padding: 2rem 1rem; text-align: center; \
-                                            color: #999; font-style: italic;",
-                                    "{labels.no_rows_label}"
+                            for (i, (row_id, row)) in id_slice.iter().zip(row_slice.iter()).enumerate() {
+                                {
+                                    let editing_col = editing_target
+                                        .filter(|t| t.row_id == *row_id)
+                                        .map(|t| t.column_id);
+                                    data_tr(row, *row_id, win.start_index + i, variable_row_height, &visible_cols, row_height, &widths, selection_enabled, selection_set.contains(row_id), handle, &cell_renderers, editing_col, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css)
+                                }
+                            }
+                            if win.bottom_pad_px > 0.0 {
+                                tr {
+                                    td {
+                                        colspan: "{effective_col_count}",
+                                        style: "height: {win.bottom_pad_px}px; padding: 0; border: 0;",
+                                    }
+                                }
+                            }
+                            if total_rows == 0 {
+                                tr {
+                                    td {
+                                        colspan: "{effective_col_count}",
+                                        style: "padding: 2rem 1rem; text-align: center; \
+                                                color: #999; font-style: italic;",
+                                        "{labels.no_rows_label}"
+                                    }
                                 }
                             }
                         }
@@ -572,7 +603,7 @@ dioxus.send(parts.join('\n'));"
                         "{labels.load_more_label}"
                     }
                 }
-            } else {
+            } else if !is_virtualized_grouped {
                 div {
                     style: "padding: 0.5rem 1rem; display: flex; align-items: center; \
                             flex-wrap: wrap; gap: 0.25rem; border-top: 1px solid #ddd; \
@@ -1464,6 +1495,123 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
                     )}
                 } else {
                     {data_td(row, col, row_height, variable_row_height, widths.get(&col.id).copied(), cell_renderers.get(col.id), separator_color, sticky_css_map.get(&col.id).map_or("", String::as_str))}
+                }
+            }
+        }
+    }
+}
+
+/// Dispatch a single `GroupedRow` to either `group_header_tr` or `data_tr`.
+#[allow(clippy::too_many_arguments)]
+fn render_grouped_row<TRow: Clone + PartialEq + 'static>(
+    grouped_row: GroupedRow<TRow>,
+    row_index: usize,
+    effective_col_count: usize,
+    selection_enabled: bool,
+    handle: UseTableHandle<TRow>,
+    group_header_class: &str,
+    visible_cols: &[ColumnDef<TRow>],
+    row_height: f64,
+    widths: &HashMap<ColumnId, f64>,
+    variable_row_height: bool,
+    cell_renderers: &CellRenderers,
+    editing_target: Option<chorale_core::EditTarget>,
+    editing_text: Signal<String>,
+    edit_error: Signal<Option<String>>,
+    validate_edit: &ValidateEditFn,
+    on_commit_edit: Option<EventHandler<CommittedEdit<TRow>>>,
+    sticky_body_css: &HashMap<ColumnId, String>,
+    selection_set: &HashSet<RowId>,
+) -> Element {
+    match grouped_row {
+        GroupedRow::Header {
+            key,
+            label,
+            depth,
+            row_count,
+            is_collapsed,
+            aggregates,
+        } => group_header_tr(
+            key,
+            label,
+            depth,
+            row_count,
+            is_collapsed,
+            aggregates,
+            effective_col_count,
+            selection_enabled,
+            handle,
+            group_header_class,
+        ),
+        GroupedRow::Data(row_id, row) => {
+            let editing_col = editing_target
+                .filter(|t| t.row_id == row_id)
+                .map(|t| t.column_id);
+            data_tr(
+                &row,
+                row_id,
+                row_index,
+                variable_row_height,
+                visible_cols,
+                row_height,
+                widths,
+                selection_enabled,
+                selection_set.contains(&row_id),
+                handle,
+                cell_renderers,
+                editing_col,
+                editing_text,
+                edit_error,
+                validate_edit,
+                on_commit_edit,
+                sticky_body_css,
+            )
+        }
+        _ => rsx! {},
+    }
+}
+
+/// Render a single group-header `<tr>`.
+///
+/// Clicking the row (or the toggle button) calls `toggle_group` on the handle.
+/// Depth is expressed as left-padding on the first cell (8px per level).
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+fn group_header_tr<TRow: Clone + PartialEq + 'static>(
+    key: GroupKey,
+    label: String,
+    depth: usize,
+    row_count: usize,
+    is_collapsed: bool,
+    _aggregates: Vec<Option<CellValue>>,
+    col_count: usize,
+    selection_enabled: bool,
+    handle: UseTableHandle<TRow>,
+    extra_class: &str,
+) -> Element {
+    let indent = depth * 16;
+    let toggle_icon = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
+    let extra_class = extra_class.to_owned();
+    rsx! {
+        tr {
+            class: "{extra_class}",
+            style: "background: #f0f4ff; font-weight: 600; cursor: pointer;",
+            onclick: move |_| { handle.toggle_group(key.clone()); },
+            if selection_enabled {
+                td { style: "padding: 0.25rem 0.5rem; width: 2.5rem;" }
+            }
+            td {
+                colspan: "{col_count - usize::from(selection_enabled)}",
+                style: "padding: 0.4rem 1rem 0.4rem {indent}px; \
+                        border-bottom: 1px solid #dce4ff; font-size: 0.875rem;",
+                span {
+                    style: "margin-right: 0.5rem; font-size: 0.75rem; color: #4a90e2;",
+                    "{toggle_icon}"
+                }
+                "{label}"
+                span {
+                    style: "margin-left: 0.5rem; font-size: 0.75rem; font-weight: 400; \
+                            color: #888;",
+                    "({row_count})"
                 }
             }
         }
