@@ -229,142 +229,226 @@ regression testing combinations:
 
 ### 11. Multi-column sort (v0.2.0, Item 11.0a)
 
-**Setup:** `dx serve --package qa-harness` with sort enabled.
+**Setup:** `dx serve --package qa-harness`. Enable the **Sort** toggle. Enable
+**Sort** in the Leptos harness (`trunk serve --open --package leptos-qa-harness`)
+for parity testing.
 
-**Happy path:**
-1. Click "Name" header. Single sort (ASC) activates. Badge shows `1`.
+**Happy path (2-column):**
+1. Click "Name" header. Arrow appears (ASC). No numbered badge — single-column
+   sort does not show a badge.
 2. Hold Shift and click "Salary" header. Two-sort stack: Name ASC primary,
-   Salary ASC secondary. Both badges appear.
-3. Hold Shift and click "Salary" header again. Salary flips to DESC.
-4. Hold Shift and click "Salary" once more. Salary is removed from the stack;
-   Name ASC is the only sort.
-5. Click "Name" without Shift. All sort is replaced by Name ASC.
+   Salary ASC secondary. Both headers now show a numbered badge: Name `1`,
+   Salary `2`.
+3. Hold Shift and click "Salary" again. Salary flips to DESC; badges remain
+   (Name `1`, Salary `2`).
+4. Hold Shift and click "Salary" once more. Salary is removed; only Name ASC
+   remains (no badge, single-column sort).
+5. Click "Name" without Shift. All sort replaced by Name ASC.
+
+**Happy path (3-column — exercises the `Vec<SortState>` growth path):**
+1. Enable Sort. Click "Name" (ASC, no badge).
+2. Shift+click "Salary". Stack grows to 2: Name `1`, Salary `2`. Badges appear.
+3. Shift+click "Role". Stack grows to 3: Name `1`, Salary `2`, Role `3`.
+   Three distinct numbered badges are visible simultaneously.
+4. Shift+click "Salary" again. Salary flips to DESC; badge positions unchanged.
+5. Shift+click "Salary" once more. Salary removed; Name `1`, Role `2`.
+   (The remaining two badges renumber to reflect the new stack order.)
 
 **Edge cases:**
 - Click same column twice (no Shift): cycles ASC → DESC → unsorted.
-- Sort priority badge is visible (1, 2, …) for each column in the stack.
+- Sort priority badge appears only when 2 or more columns are active; a
+  single-column sort shows an arrow but no numbered badge.
+- Shift+click a third distinct column must grow the stack to 3 (regression
+  guard: the sort `Vec` must not be capped at 2).
 
 ---
 
 ### 12. Infinite scroll (v0.2.0, Item 11.0b)
 
-**Setup:** `dx serve --package qa-harness` — switch pagination mode to "Infinite scroll".
+**Setup:** `dx serve --package qa-harness` — enable the **Infinite Scroll** toggle
+(v0.2.0 features panel). For Leptos: `trunk serve --open --package leptos-qa-harness`
+and enable the same toggle.
 
 **Happy path:**
-1. Infinite scroll shows the first page_size rows.
-2. Scroll to near the bottom (within `infinite_scroll_threshold_px`). More rows appear.
+1. Enable **Infinite Scroll**. The pagination bar disappears; the first 50 rows
+   are visible.
+2. Scroll to near the bottom (within the 200 px threshold). More rows appear.
 3. Repeat until all rows are loaded. The "Loading more rows…" indicator
    disappears when all rows are visible.
-4. Apply a text filter. The loaded count resets to the first batch.
+4. Enable the **Filter** toggle and type in the Name column. The loaded count
+   resets to the first batch.
 
 **Edge cases:**
-- Switch back to Pages mode. Pagination bar reappears; `set_page` works.
+- Disable **Infinite Scroll** (toggle off). Pagination bar reappears; page
+  navigation works.
 - Infinite scroll + filter: loaded count resets on filter change.
 
 ---
 
 ### 13. User-overridable labels / i18n (v0.2.0, Item 11.0c)
 
-**Setup:** construct a table with a custom `Labels` struct passed as the `labels` prop.
+**Setup:** `dx serve --package qa-harness` — enable the **French Labels** toggle
+(v0.2.0 features panel). Also enable **Filter** and **CSV Export** to expose
+labeled UI elements. For Leptos: same toggle in `leptos-qa-harness`.
 
 **Verification:**
-1. Set `labels.filter_placeholder = "Suche…"`. The filter input placeholder
-   shows the custom text.
-2. Set `labels.export_csv_label = "CSV herunterladen"`. The export button shows
-   the custom text.
-3. Override `labels.page_count` to a closure that formats `"{t}ページ中{p}ページ"`.
-   The "Go to" affordance shows the custom format.
-4. All adapter components that render user-visible text read from `labels`,
+1. Enable **French Labels**. The filter placeholder changes to `"Filtrer…"`.
+2. Enable **CSV Export**. The export button label changes to `"Exporter CSV"`.
+3. Enable **Infinite Scroll**. The load-more indicator shows `"Charger plus…"`.
+4. Apply a filter that returns no rows. The empty-state message shows
+   `"Aucune ligne ne correspond au filtre."`.
+5. Disable **French Labels**. All strings revert to English defaults.
+6. All adapter components that render user-visible text read from `labels`,
    never from hardcoded string literals.
 
 ---
 
 ### 14. Variable-row-height virtualization (v0.2.0, Item 6)
 
-**Setup:** set `row_heights` on individual rows in `TableState`.
+**Setup (Dioxus):** `dx serve --package qa-harness` — enable the
+**Variable Row Height** toggle (v0.2.0 features panel).
 
-**Verification:**
-1. Rows with different heights render at their specified heights.
-2. Scrollbar reflects the correct total content height (sum of all row heights).
-3. Virtualization window math holds: only visible rows are mounted as DOM nodes.
+**Note (Leptos):** the Leptos adapter does not yet implement
+`variable_row_height`. The `leptos-qa-harness` shows a stub note in place of
+the toggle.
+
+**Verification (Dioxus):**
+1. Enable **Variable Row Height**. The adapter begins measuring each rendered
+   row's DOM height after mount and caches the result.
+2. Rows that wrap content (long names, multi-line cells) render taller than
+   the default row height.
+3. The scrollbar height reflects the sum of all measured row heights.
+4. Scroll the table. The virtualization window adjusts: only the rows whose
+   accumulated height falls within the viewport are mounted as DOM nodes.
 
 ---
 
 ### 15. In-cell editing (v0.2.0, Item 7)
 
-**Setup:** `dx serve --package qa-harness` with editable columns.
+**Setup:** `dx serve --package qa-harness` — enable the
+**In-cell Editing (Name)** toggle (v0.2.0 features panel). For Leptos: same
+toggle in `leptos-qa-harness`.
 
 **Happy path:**
-1. Double-click an editable cell. An input field appears.
-2. Type a new value and press Enter. The edit commits; the cell shows the new value.
-3. Press Escape. The edit cancels; the cell shows the original value.
-4. Tab to move to the next editable cell.
+1. Enable **In-cell Editing (Name)**. The Name column gains the `editor` property.
+2. Double-click a Name cell. A text input appears pre-filled with the current name.
+3. Type a new value and press Enter. The edit commits; the cell shows the new
+   name immediately (optimistic update via `update_row`).
+4. Press Escape instead of Enter. The edit cancels; the cell reverts to its
+   original name.
+5. Tab from an active editor to move to the next editable cell.
 
 **Edge cases:**
 - Validation rejection: if `validate_edit` returns `Err`, the input shows
-  an error message and the Enter key does not commit.
-- Click outside: edit cancels.
+  an error message and Enter does not commit.
+- Click outside the input: edit cancels.
+- Sort or filter while an edit is in flight: the edit cancels.
 
 ---
 
 ### 16. Grouping and aggregation (v0.2.0, Item 8)
 
-**Setup:** `dx serve --package qa-harness` with grouping enabled.
+**Setup:** `dx serve --package qa-harness` — enable the **Group by Role** toggle
+(v0.2.0 features panel). For Leptos: same toggle in `leptos-qa-harness`.
 
 **Happy path:**
-1. Group by "Role". Rows collapse into group headers labeled with each role.
-2. Click a group header. The group collapses, hiding its data rows.
-3. Click again. The group expands.
-4. Aggregated values appear in the group header row for columns with aggregators.
+1. Enable **Group by Role**. Rows collapse into group headers labeled by role
+   (Engineer, Designer, Manager, …).
+2. Salary group headers show a `Σ` sum aggregate (the Salary column always has
+   `AggregatorKind::Sum` in the harness).
+3. Click a group header. The group collapses, hiding its data rows.
+4. Click again. The group expands.
+
+**Grouped pagination mode select:**
+- Switch the **Grouped pagination** dropdown from `DataRowsOnly` to
+  `Virtualized`. Verify that virtualization still works correctly inside
+  expanded groups.
 
 **Edge cases:**
-- Nested grouping: group by two columns produces sub-groups.
-- Empty group (all rows filtered out): group header disappears.
+- Enable **Filter** while grouped. A filter that removes all rows from a group
+  causes that group's header to disappear.
+- Disable **Group by Role** (toggle off). All group headers disappear; rows
+  return to flat list order.
 
 ---
 
 ### 17. Column reorder (v0.2.0, Item 9)
 
-**Setup:** `dx serve --package qa-harness` with `column_reorder_enabled: true`.
+**Setup:** `dx serve --package qa-harness` — enable the **Column Reorder** toggle
+(v0.2.0 features panel). For Leptos: same toggle in `leptos-qa-harness`.
 
 **Happy path:**
-1. Drag a column header to a new position. The column moves to that position.
-2. Release. The new order persists.
-3. Sort and filter still work correctly after reorder.
+1. Enable **Column Reorder**. Drag handles appear on column headers.
+2. Drag a column header to a new position. The column moves to that position.
+3. Release. The new order persists.
+4. Enable **Sort** or **Filter** after reorder. Both features still work
+   correctly with the reordered column set.
 
 ---
 
 ### 18. Frozen columns (v0.2.0, Item 10)
 
-**Setup:** `dx serve --package qa-harness` with frozen columns.
+**Setup:** `dx serve --package qa-harness` — enable the
+**Frozen Columns (Name=Left, Salary=Right)** toggle (v0.2.0 features panel).
+For Leptos: same toggle in `leptos-qa-harness`.
 
 **Happy path:**
-1. Columns marked `FrozenSide::Left` stay visible while the user scrolls right.
-2. Columns marked `FrozenSide::Right` stay visible while the user scrolls left.
-3. Non-frozen columns scroll normally between frozen columns.
+1. Enable **Frozen Columns**. The Name column is pinned to the left edge and
+   the Salary column is pinned to the right edge.
+2. Scroll the table horizontally to the right. Name stays fixed on the left.
+3. Scroll to the left. Salary stays fixed on the right.
+4. Non-frozen columns (Email, Joined, Role, Status) scroll horizontally between
+   the frozen columns.
+
+**Edge cases:**
+- Disable **Frozen Columns** (toggle off). All columns scroll freely.
+- Combine with **Column Resize**: resizing a frozen column must not break the
+  sticky positioning.
 
 ---
 
 ### 19. `selection_toolbar` slot (v0.2.0, Item 11)
 
-**Setup:** pass a `selection_toolbar` slot to the `<Table>` component.
+**Setup:** `dx serve --package qa-harness` — enable both **Selection** and
+**Selection Toolbar** toggles (v0.1 and v0.2.0 panels respectively). For
+Leptos: same toggles in `leptos-qa-harness`.
 
 **Happy path:**
-1. Select one or more rows. The custom toolbar appears above the table.
-2. Deselect all rows. The toolbar disappears.
+1. Enable **Selection** and **Selection Toolbar**.
+2. Click a row checkbox. The blue toolbar above the table shows
+   `"1 row(s) selected"`.
+3. Check two more rows. The count updates to `"3 row(s) selected"`.
+4. Uncheck all rows. The toolbar shows `"0 row(s) selected"` (Dioxus: toolbar
+   element is removed; Leptos: slot renders an empty view when count is 0).
+
+**Note (Leptos vs Dioxus):** In the Dioxus harness, `selection_toolbar` is
+`Option<Element>` and is passed as `None` when the toggle is off (no DOM node
+rendered). In the Leptos harness, `selection_toolbar` is always passed as a
+`ChildrenFn` that renders empty content when the toggle is off.
 
 ---
 
 ### 20. `chorale-derive` proc-macro (v0.2.0, Item 11.0d)
 
-**Verification:**
-1. Add `#[derive(TableRow)]` to a struct. `cargo check` succeeds.
-2. Call `MyStruct::chorale_columns()`. The returned `Vec<ColumnDef<MyStruct>>`
-   matches the hand-written equivalent: one column per field, with the
-   `#[chorale(...)]` attributes respected.
-3. Override with `#[chorale(header = "Custom Header")]`. The column header
-   matches the override, not the field name.
-4. `#[chorale(skip)]` omits the field from the generated columns.
+**Setup:** `dx serve --package qa-harness` — enable the
+**Use #[derive(TableRow)] columns** toggle (v0.2.0 features panel). For Leptos:
+same toggle in `leptos-qa-harness`.
+
+**Verification (runtime toggle):**
+1. Enable **Use #[derive(TableRow)] columns**. The table columns switch from the
+   hand-crafted `build_columns()` set to `Employee::chorale_columns()`, which
+   is generated at compile time by the macro. Columns visible: Name, Email,
+   Joined, Role, Status, Salary (6 total — one per field).
+2. Disable the toggle. The hand-crafted columns return (with badge rendering,
+   currency formatting, numeric-range filter on Salary, etc.).
+
+**Verification (compile time — `cargo check`):**
+1. `Employee` in both harnesses is annotated with `#[derive(TableRow, Clone, PartialEq)]`.
+   Running `cargo check --workspace` succeeds.
+2. `Employee::chorale_columns()` is callable without any additional imports
+   beyond `chorale_derive::TableRow` and `chorale_core`.
+3. `#[chorale(header = "Custom Header")]` on a field overrides the column label.
+4. `#[chorale(skip)]` omits the field from the generated column list.
 
 ---
 
@@ -390,7 +474,9 @@ confirm:
    behaves identically to the Dioxus version (§9).
 6. **leptos-virtualized-1m-rows** — two-stage render shows "Initializing…"
    message, then the table appears ~1-2 s later (§9).
-7. **leptos-qa-harness** — all v0.2.0 feature toggles work (§11–19).
+7. **leptos-qa-harness** — all v0.2.0 feature toggles work (§11–19); the
+   **Variable Row Height** toggle is stubbed (Leptos adapter not yet
+   implemented; a note is shown in place of the checkbox).
 
 **PERF-1 regression guard (Leptos):** scroll a large table (10k+ rows) while
 watching the browser's JavaScript profiler. Scroll events should NOT trigger
@@ -425,3 +511,4 @@ Run this after any change to either adapter to confirm behavioral equivalence:
 | `selection_toolbar` slot | `qa-harness` | `leptos-qa-harness` | parity expected |
 | In-cell editing | `qa-harness` | `leptos-qa-harness` | parity expected |
 | Labels / i18n | `qa-harness` | `leptos-qa-harness` | parity expected |
+| Variable row height | `qa-harness` | — | Leptos adapter not yet implemented |
