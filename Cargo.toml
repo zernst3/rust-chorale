@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["chorale-core", "chorale-dioxus", "chorale-derive", "examples/*"]
+members = ["chorale-core", "chorale-dioxus", "chorale-derive", "chorale-leptos", "examples/*"]
 
 [workspace.package]
 version = "0.1.0"

@@ -1,0 +1,30 @@
+[package]
+name = "chorale-leptos"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Leptos adapter for the chorale table library. Renders `chorale-core::TableState` with virtualization, selection, and inline cell renderers."
+readme = "../README.md"
+keywords = ["table", "grid", "leptos", "headless", "virtualization"]
+categories = ["gui"]
+
+[lints]
+workspace = true
+
+[dependencies]
+chorale-core = { path = "../chorale-core", version = "0.1.0" }
+leptos = { version = "0.8", features = ["csr"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = [
+  "Blob",
+  "BlobPropertyBag",
+  "Document",
+  "HtmlAnchorElement",
+  "HtmlElement",
+  "Url",
+] }
+wasm-bindgen = "0.2"
