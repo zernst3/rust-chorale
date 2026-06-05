@@ -9,7 +9,7 @@ Basic Leptos example for `chorale-leptos`: sort and filter.
 trunk serve --open
 
 # Or from the workspace root:
-trunk serve --open --package leptos-basic
+cd examples/leptos-basic && trunk serve --open
 ```
 
 Requires [Trunk](https://trunkrs.dev): `cargo install trunk`

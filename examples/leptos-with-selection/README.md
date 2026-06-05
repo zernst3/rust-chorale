@@ -10,7 +10,7 @@ selection count.
 trunk serve --open
 
 # Or from the workspace root:
-trunk serve --open --package leptos-with-selection
+cd examples/leptos-with-selection && trunk serve --open
 ```
 
 Requires [Trunk](https://trunkrs.dev): `cargo install trunk`

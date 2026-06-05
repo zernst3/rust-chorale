@@ -11,7 +11,7 @@ renders the virtualized table.
 trunk serve --open
 
 # Or from the workspace root:
-trunk serve --open --package leptos-virtualized-1m-rows
+cd examples/leptos-virtualized-1m-rows && trunk serve --open
 ```
 
 Requires [Trunk](https://trunkrs.dev): `cargo install trunk`

@@ -10,7 +10,7 @@ toggle controls for every v0.1 and v0.2.0 feature.
 trunk serve --open
 
 # Or from the workspace root:
-trunk serve --open --package leptos-qa-harness
+cd examples/leptos-qa-harness && trunk serve --open
 ```
 
 Requires [Trunk](https://trunkrs.dev): `cargo install trunk`

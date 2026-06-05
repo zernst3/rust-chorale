@@ -9,7 +9,7 @@ Leptos example demonstrating drag-to-resize column headers.
 trunk serve --open
 
 # Or from the workspace root:
-trunk serve --open --package leptos-with-column-resize
+cd examples/leptos-with-column-resize && trunk serve --open
 ```
 
 Requires [Trunk](https://trunkrs.dev): `cargo install trunk`

@@ -10,7 +10,7 @@ custom cell markup.
 trunk serve --open
 
 # Or from the workspace root:
-trunk serve --open --package leptos-with-custom-cells
+cd examples/leptos-with-custom-cells && trunk serve --open
 ```
 
 Requires [Trunk](https://trunkrs.dev): `cargo install trunk`
