@@ -191,7 +191,7 @@ impl<TRow: Clone + 'static> UseTableHandle<TRow> {
 
     /// Toggle the collapsed/expanded state of a group.
     ///
-    /// Obtain `key` from [`GroupedRow::Header::key`] in [`visible_grouped_view`] output.
+    /// Obtain `key` from `GroupedRow::Header::key` in `visible_grouped_view` output.
     #[allow(clippy::needless_pass_by_value)]
     pub fn toggle_group(&self, key: GroupKey) {
         self.dispatch(|s| toggle_group(s, &key));

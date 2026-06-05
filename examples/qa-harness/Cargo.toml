@@ -12,8 +12,8 @@ publish = false
 workspace = true
 
 [dependencies]
-chorale-core = { path = "../../chorale-core", version = "0.1.0" }
-chorale-dioxus = { path = "../../chorale-dioxus", version = "0.1.0" }
+chorale-core = { path = "../../chorale-core", version = "0.2.0" }
+chorale-dioxus = { path = "../../chorale-dioxus", version = "0.2.0" }
 dioxus = { version = "0.7", features = ["web"] }
 getrandom = { version = "0.2", features = ["js"] }
 rand = "0.8"

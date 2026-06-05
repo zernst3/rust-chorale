@@ -10,8 +10,8 @@ publish = false
 workspace = true
 
 [dependencies]
-chorale-core = { path = "../../chorale-core", version = "0.1.0" }
-chorale-leptos = { path = "../../chorale-leptos", version = "0.1.0" }
+chorale-core = { path = "../../chorale-core", version = "0.2.0" }
+chorale-leptos = { path = "../../chorale-leptos", version = "0.2.0" }
 leptos = { version = "0.8", features = ["csr"] }
 rand = "0.8"
 chrono = "0.4"

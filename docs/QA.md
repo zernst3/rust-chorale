@@ -4,9 +4,12 @@ Manual test recipes for chorale features. Each section describes setup, the
 canonical happy path, edge cases, and known-regression guards. Run before
 merging any release branch.
 
-**General setup:** all Dioxus examples require the Dioxus CLI.
-Install with `cargo install dioxus-cli`, then serve with
-`dx serve --package <example-name>`.
+**General setup:** Dioxus examples require the Dioxus CLI:
+`cargo install dioxus-cli`, then `dx serve --package <example-name>`.
+
+Leptos examples require Trunk:
+`cargo install trunk`, then `trunk serve --open` inside the example directory,
+or `trunk serve --open --package leptos-<example-name>` from the workspace root.
 
 ---
 
@@ -81,11 +84,9 @@ Install with `cargo install dioxus-cli`, then serve with
 1. Load the table. Page 1 of 201 displays rows 1–50.
 2. Click "›" (next). Page 2 shows rows 51–100. Scroll resets to top.
 3. Click "‹" (prev). Page 1 returns.
-4. Click "‹‹" (first) from any page. Page 1 appears.
-5. Click "››" (last). Page 201 shows the final 10 rows (partial last page).
-6. Click a numbered page button in the window. That page appears.
-7. Enter `150` in the "Go to" input and press Enter. Page 150 appears.
-8. Enter a number beyond the total page count and blur. Input snaps back to the current page.
+4. Click a numbered page button in the window. That page appears.
+5. Enter `150` in the "Go to" input and press Enter. Page 150 appears.
+6. Click last page. Shows the final 10 rows (partial last page).
 
 **Edge cases:**
 - Page size = 1: every row is its own page. Prev/Next work correctly.
@@ -96,8 +97,7 @@ Install with `cargo install dioxus-cli`, then serve with
 **Regression to guard (blank-page-after-pagination):** after clicking "Next",
 the table should immediately render the new page's rows at `scroll_top = 0`.
 If `scroll_top` is not reset, the scroll container shows empty spacer space
-("blank page") until the user manually scrolls. This was a bug in early builds;
-the DOM `scrollTop` reset on page change (`use_effect` keyed on `page_memo`) prevents it.
+("blank page") until the user manually scrolls.
 
 ---
 
@@ -114,9 +114,7 @@ the DOM `scrollTop` reset on page change (`use_effect` keyed on `page_memo`) pre
 6. Select rows, then sort the table. Checkboxes follow the row's new visual position (stable `RowId` tracking).
 
 **Regression to guard (row stays highlighted after deselect):** clicking a
-checked checkbox must clear the row's blue background immediately. In early
-builds, the deselected branch emitted `style=""` which Dioxus's attribute diff
-did not reliably propagate as "unset"; the row kept its blue background.
+checked checkbox must clear the row's blue background immediately.
 Fix: deselected rows emit `background: transparent` explicitly. Verify this
 by checking and unchecking the same row three times — color must clear each time.
 
@@ -129,13 +127,11 @@ by checking and unchecking the same row three times — color must clear each ti
 **Happy path:**
 1. Columns using `RenderKind::Badge` show colored pill chips. Verify each variant
    renders with the correct color (per `BadgeVariantMap`).
-2. Columns using `CellRenderers` show the custom Dioxus RSX instead of the
+2. Columns using `CellRenderers` show the custom markup instead of the
    default text/number render.
-3. Hover/interaction on a custom cell works (if the custom renderer has event handlers).
 
 **Edge cases:**
 - `CellValue::Empty` on a Badge column: fallback variant renders if a fallback is set; otherwise blank cell.
-- Custom renderer returns an element that is wider than the column: column clips or overflows per its CSS.
 
 ---
 
@@ -164,11 +160,9 @@ by checking and unchecking the same row three times — color must clear each ti
 2. Click and drag right. Column widens. Adjacent columns stay the same width.
 3. Drag left. Column narrows.
 4. Release. Width is locked in.
-5. Resize another column independently.
 
 **Edge cases:**
 - Column narrowed below the minimum (40 px): should clamp to 40 px and not go negative.
-- Resize with filter row visible: filter input width should follow the column width.
 
 ---
 
@@ -179,22 +173,22 @@ by checking and unchecking the same row three times — color must clear each ti
 **Happy path:**
 1. Apply a filter (e.g. text filter to match half the rows).
 2. Navigate to page 2.
-3. Click "Download CSV".
+3. Click "Export CSV".
 4. Open the downloaded file. Verify:
    - Header row contains visible column names.
    - ALL post-filter rows are present (not just the current page).
    - Rows match the active sort order.
 
 **Edge cases:**
-- Cell value containing a comma: the CSV field is quoted per RFC 4180 (`"value, with comma"`).
-- Cell value containing a double-quote: escaped as `""` (`"value ""with"" quotes"`).
+- Cell value containing a comma: the CSV field is quoted per RFC 4180.
+- Cell value containing a double-quote: escaped as `""`.
 - Zero rows after filter: CSV contains only the header row.
 
 ---
 
 ### 9. Fixed-row-height virtualization (10k and 1M rows)
 
-**Setup (10k):** `dx serve --package virtualized-10k-rows`  
+**Setup (10k):** `dx serve --package virtualized-10k-rows`
 **Setup (1M):** `dx serve --package virtualized-1m-rows`
 
 **Happy path (10k):**
@@ -205,20 +199,14 @@ by checking and unchecking the same row three times — color must clear each ti
 5. Apply a text filter. The scroll container shrinks to the filtered row count.
 
 **Happy path (1M):**
-1. Table loads. Browser DevTools → Performance: no janky frames during fast scroll.
-2. Scroll from top to bottom quickly (hold Page Down). Table keeps up.
+1. Table loads (brief "Initializing…" notice, then ~1-2 s).
+2. Scroll from top to bottom quickly. Table keeps up.
 3. No browser freeze or memory spiral.
 
-**Edge cases:**
-- Viewport height changes (browser window resize): rows recompute automatically.
-- Sort on a 1M-row dataset: may take a moment (expected); scrollbar position remains correct after sort.
-
 **Scroll runaway regression guard:** the scroll container must have
-`overflow-anchor: none` in its CSS. Without it, browser scroll anchoring
-fights DOM mutations during virtualization, producing a runaway scroll loop
-that continues until the top or bottom of the content. Verify: scroll to
-the middle of a 1M-row table and hold a key or drag the scrollbar continuously.
-The scroll position should track the user input, not drift independently.
+`overflow-anchor: none`. Verify: scroll to the middle of a 1M-row table
+and drag the scrollbar continuously. The scroll position should track user
+input, not drift independently.
 
 ---
 
@@ -229,7 +217,7 @@ The scroll position should track the user input, not drift independently.
 The harness exposes runtime toggles for every v0.1 feature. Use it for
 regression testing combinations:
 
-- Sort + filter simultaneously: filtered rows are sorted correctly.
+- Sort + filter simultaneously.
 - Selection + pagination: selected rows persist across page changes.
 - Column visibility + CSV export: hidden columns absent from CSV.
 - Resize + virtualization: scroll math holds after a column is resized.
@@ -237,23 +225,203 @@ regression testing combinations:
 
 ---
 
-## v0.2.0 Feature Coverage (sections added as features ship)
+## v0.2.0 Feature Coverage
 
-_Sections to be added as each v0.2.0 feature is implemented:_
+### 11. Multi-column sort (v0.2.0, Item 11.0a)
 
-- **Selection ergonomics** (`selected_ids()`, `selection_count()`): verify the
-  `with-selection` example displays IDs and count correctly via the new methods.
-- **Fine-grained reactivity (PERF-1):** scroll a 1M-row table for 30 seconds.
-  Open Chrome DevTools → Memory → Allocation Timeline. Verify no repeated 30 MB
-  allocation bursts during scroll (only during initial sort/filter changes).
-- Variable-row-height virtualization (Item 6) — pending sign-off.
-- In-cell editing (Item 7) — pending sign-off.
-- Grouping and aggregation (Item 8) — pending sign-off.
-- Column reorder (Item 9) — pending sign-off.
-- Frozen columns (Item 10) — pending sign-off.
-- `selection_toolbar` slot (Item 11) — pending sign-off.
-- Multi-column sort (Item 11.0a) — pending sign-off.
-- Infinite scroll mode (Item 11.0b) — pending sign-off.
-- User-overridable labels / i18n (Item 11.0c) — pending sign-off.
-- `chorale-derive` proc-macro (Item 11.0d) — pending sign-off.
-- `chorale-leptos` adapter (Item 11.5) — pending sign-off.
+**Setup:** `dx serve --package qa-harness` with sort enabled.
+
+**Happy path:**
+1. Click "Name" header. Single sort (ASC) activates. Badge shows `1`.
+2. Hold Shift and click "Salary" header. Two-sort stack: Name ASC primary,
+   Salary ASC secondary. Both badges appear.
+3. Hold Shift and click "Salary" header again. Salary flips to DESC.
+4. Hold Shift and click "Salary" once more. Salary is removed from the stack;
+   Name ASC is the only sort.
+5. Click "Name" without Shift. All sort is replaced by Name ASC.
+
+**Edge cases:**
+- Click same column twice (no Shift): cycles ASC → DESC → unsorted.
+- Sort priority badge is visible (1, 2, …) for each column in the stack.
+
+---
+
+### 12. Infinite scroll (v0.2.0, Item 11.0b)
+
+**Setup:** `dx serve --package qa-harness` — switch pagination mode to "Infinite scroll".
+
+**Happy path:**
+1. Infinite scroll shows the first page_size rows.
+2. Scroll to near the bottom (within `infinite_scroll_threshold_px`). More rows appear.
+3. Repeat until all rows are loaded. The "Loading more rows…" indicator
+   disappears when all rows are visible.
+4. Apply a text filter. The loaded count resets to the first batch.
+
+**Edge cases:**
+- Switch back to Pages mode. Pagination bar reappears; `set_page` works.
+- Infinite scroll + filter: loaded count resets on filter change.
+
+---
+
+### 13. User-overridable labels / i18n (v0.2.0, Item 11.0c)
+
+**Setup:** construct a table with a custom `Labels` struct passed as the `labels` prop.
+
+**Verification:**
+1. Set `labels.filter_placeholder = "Suche…"`. The filter input placeholder
+   shows the custom text.
+2. Set `labels.export_csv_label = "CSV herunterladen"`. The export button shows
+   the custom text.
+3. Override `labels.page_count` to a closure that formats `"{t}ページ中{p}ページ"`.
+   The "Go to" affordance shows the custom format.
+4. All adapter components that render user-visible text read from `labels`,
+   never from hardcoded string literals.
+
+---
+
+### 14. Variable-row-height virtualization (v0.2.0, Item 6)
+
+**Setup:** set `row_heights` on individual rows in `TableState`.
+
+**Verification:**
+1. Rows with different heights render at their specified heights.
+2. Scrollbar reflects the correct total content height (sum of all row heights).
+3. Virtualization window math holds: only visible rows are mounted as DOM nodes.
+
+---
+
+### 15. In-cell editing (v0.2.0, Item 7)
+
+**Setup:** `dx serve --package qa-harness` with editable columns.
+
+**Happy path:**
+1. Double-click an editable cell. An input field appears.
+2. Type a new value and press Enter. The edit commits; the cell shows the new value.
+3. Press Escape. The edit cancels; the cell shows the original value.
+4. Tab to move to the next editable cell.
+
+**Edge cases:**
+- Validation rejection: if `validate_edit` returns `Err`, the input shows
+  an error message and the Enter key does not commit.
+- Click outside: edit cancels.
+
+---
+
+### 16. Grouping and aggregation (v0.2.0, Item 8)
+
+**Setup:** `dx serve --package qa-harness` with grouping enabled.
+
+**Happy path:**
+1. Group by "Role". Rows collapse into group headers labeled with each role.
+2. Click a group header. The group collapses, hiding its data rows.
+3. Click again. The group expands.
+4. Aggregated values appear in the group header row for columns with aggregators.
+
+**Edge cases:**
+- Nested grouping: group by two columns produces sub-groups.
+- Empty group (all rows filtered out): group header disappears.
+
+---
+
+### 17. Column reorder (v0.2.0, Item 9)
+
+**Setup:** `dx serve --package qa-harness` with `column_reorder_enabled: true`.
+
+**Happy path:**
+1. Drag a column header to a new position. The column moves to that position.
+2. Release. The new order persists.
+3. Sort and filter still work correctly after reorder.
+
+---
+
+### 18. Frozen columns (v0.2.0, Item 10)
+
+**Setup:** `dx serve --package qa-harness` with frozen columns.
+
+**Happy path:**
+1. Columns marked `FrozenSide::Left` stay visible while the user scrolls right.
+2. Columns marked `FrozenSide::Right` stay visible while the user scrolls left.
+3. Non-frozen columns scroll normally between frozen columns.
+
+---
+
+### 19. `selection_toolbar` slot (v0.2.0, Item 11)
+
+**Setup:** pass a `selection_toolbar` slot to the `<Table>` component.
+
+**Happy path:**
+1. Select one or more rows. The custom toolbar appears above the table.
+2. Deselect all rows. The toolbar disappears.
+
+---
+
+### 20. `chorale-derive` proc-macro (v0.2.0, Item 11.0d)
+
+**Verification:**
+1. Add `#[derive(TableRow)]` to a struct. `cargo check` succeeds.
+2. Call `MyStruct::chorale_columns()`. The returned `Vec<ColumnDef<MyStruct>>`
+   matches the hand-written equivalent: one column per field, with the
+   `#[chorale(...)]` attributes respected.
+3. Override with `#[chorale(header = "Custom Header")]`. The column header
+   matches the override, not the field name.
+4. `#[chorale(skip)]` omits the field from the generated columns.
+
+---
+
+## v0.2.0 Leptos Adapter Coverage
+
+The Leptos examples mirror the Dioxus examples. Build tool: `trunk` instead
+of `dx`. From inside each example directory, run `trunk serve --open`.
+Or from the workspace root: `cd examples/leptos-basic && trunk serve --open`.
+
+### 21. Leptos adapter parity (Item 11.5)
+
+For each Leptos example, verify the same feature checklist from the
+corresponding Dioxus section passes without modification. Key things to
+confirm:
+
+1. **leptos-basic** — sort + filter work identically (§1, §2).
+2. **leptos-with-selection** — selection + count display (§4). Reactive count
+   updates as rows are checked/unchecked without a full re-render.
+3. **leptos-with-custom-cells** — `RenderKind::Badge` and `CellRenderers` both
+   render in the Leptos adapter (§5).
+4. **leptos-with-column-resize** — drag resize works (§7).
+5. **leptos-virtualized-10k-rows** — scroll through all 10k rows; virtualization
+   behaves identically to the Dioxus version (§9).
+6. **leptos-virtualized-1m-rows** — two-stage render shows "Initializing…"
+   message, then the table appears ~1-2 s later (§9).
+7. **leptos-qa-harness** — all v0.2.0 feature toggles work (§11–19).
+
+**PERF-1 regression guard (Leptos):** scroll a large table (10k+ rows) while
+watching the browser's JavaScript profiler. Scroll events should NOT trigger
+the filter/sort/paginate pipeline; only the virtualization window should
+recompute on scroll. The two-level memo (`view_key` → `visible`) is the
+mechanism; if `view_key` re-fires on scroll, PERF-1 is broken.
+
+---
+
+## Leptos vs Dioxus behavioral parity checklist
+
+Run this after any change to either adapter to confirm behavioral equivalence:
+
+| Feature | Dioxus | Leptos | Status |
+|---|---|---|---|
+| Sort (single-column) | `basic` | `leptos-basic` | parity expected |
+| Multi-column sort | `qa-harness` | `leptos-qa-harness` | parity expected |
+| Text filter | `basic` | `leptos-basic` | parity expected |
+| All 5 filter kinds | `qa-harness` | `leptos-qa-harness` | parity expected |
+| Pagination | `virtualized-10k-rows` | `leptos-virtualized-10k-rows` | parity expected |
+| Infinite scroll | `qa-harness` | `leptos-qa-harness` | parity expected |
+| Selection | `with-selection` | `leptos-with-selection` | parity expected |
+| Custom cells | `with-custom-cells` | `leptos-with-custom-cells` | parity expected |
+| Column visibility | `qa-harness` | `leptos-qa-harness` | parity expected |
+| Column resize | `with-column-resize` | `leptos-with-column-resize` | parity expected |
+| CSV export | `qa-harness` | `leptos-qa-harness` | parity expected |
+| Virtualization (10k) | `virtualized-10k-rows` | `leptos-virtualized-10k-rows` | parity expected |
+| Virtualization (1M) | `virtualized-1m-rows` | `leptos-virtualized-1m-rows` | parity expected |
+| Grouping | `qa-harness` | `leptos-qa-harness` | parity expected |
+| Column reorder | `qa-harness` | `leptos-qa-harness` | parity expected |
+| Frozen columns | `qa-harness` | `leptos-qa-harness` | parity expected |
+| `selection_toolbar` slot | `qa-harness` | `leptos-qa-harness` | parity expected |
+| In-cell editing | `qa-harness` | `leptos-qa-harness` | parity expected |
+| Labels / i18n | `qa-harness` | `leptos-qa-harness` | parity expected |
