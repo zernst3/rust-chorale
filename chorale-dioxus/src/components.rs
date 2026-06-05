@@ -111,6 +111,8 @@ impl PartialEq for ValidateEditFn {
 /// | `on_commit_edit` | `Option<EventHandler<CommittedEdit<TRow>>>` | `None` | Fired after a successful commit. Receives the new raw value and a `PriorEdit` snapshot for rollback. |
 /// | `selection_toolbar` | `Option<Element>` | `None` | Optional slot rendered above the table when `state.selection` is non-empty. Use for bulk-action bars. Wrapped in `div.chorale-selection-toolbar`. |
 /// | `labels` | `Option<Labels>` | `None` | All user-visible strings (filter placeholder, pagination labels, CSV button, etc.). `None` uses English defaults. Override for i18n. |
+/// | `column_reorder_enabled` | `bool` | `false` | Show drag handles on column headers. Drop fires `move_column` and triggers `on_column_order_change`. |
+/// | `on_column_order_change` | `Option<EventHandler<Vec<ColumnId>>>` | `None` | Called with the new `column_order` vec after a successful column drag-and-drop. |
 #[component]
 pub fn Table<TRow: Clone + PartialEq + 'static>(
     handle: UseTableHandle<TRow>,
@@ -126,11 +128,15 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     on_commit_edit: Option<EventHandler<CommittedEdit<TRow>>>,
     #[props(default)] selection_toolbar: Option<Element>,
     #[props(default)] labels: Option<Labels>,
+    #[props(default = false)] column_reorder_enabled: bool,
+    on_column_order_change: Option<EventHandler<Vec<ColumnId>>>,
 ) -> Element {
     let labels = labels.clone().unwrap_or_default();
 
     // drag_state: Some((col_id, start_x_px, start_width_px)) while a resize is active.
     let mut drag_state: Signal<Option<(ColumnId, f64, f64)>> = use_signal(|| None);
+    // drag_col_id: column being dragged for column-reorder (None when not reordering).
+    let drag_col_id: Signal<Option<ColumnId>> = use_signal(|| None);
     // In-cell editing state: current editor text and optional validation error.
     let mut editing_text: Signal<String> = use_signal(String::new);
     let mut edit_error: Signal<Option<String>> = use_signal(|| None);
@@ -275,9 +281,27 @@ dioxus.send(parts.join('\n'));"
     let view_read = view.read();
     let state = sig.read();
 
-    let visible_cols: Vec<ColumnDef<TRow>> = state
-        .columns
+    // Compute effective column order: explicit order first, then any unlisted columns appended.
+    let effective_order: Vec<ColumnId> = if state.column_order.is_empty() {
+        state.columns.iter().map(|c| c.id).collect()
+    } else {
+        let mut order: Vec<ColumnId> = state
+            .column_order
+            .iter()
+            .filter(|id| state.columns.iter().any(|c| c.id == **id))
+            .copied()
+            .collect();
+        for col in &state.columns {
+            if !state.column_order.contains(&col.id) {
+                order.push(col.id);
+            }
+        }
+        order
+    };
+
+    let visible_cols: Vec<ColumnDef<TRow>> = effective_order
         .iter()
+        .filter_map(|id| state.columns.iter().find(|c| c.id == *id))
         .filter(|c| state.is_column_visible(c.id))
         .cloned()
         .collect();
@@ -295,9 +319,9 @@ dioxus.send(parts.join('\n'));"
     let filters = state.filters.clone();
     let editing_target = state.editing;
 
-    let all_col_defs: Vec<(ColumnId, String)> = state
-        .columns
+    let all_col_defs: Vec<(ColumnId, String)> = effective_order
         .iter()
+        .filter_map(|id| state.columns.iter().find(|c| c.id == *id))
         .map(|c| (c.id, c.header.clone()))
         .collect();
     let col_visibility = state.column_visibility.clone();
@@ -379,7 +403,7 @@ dioxus.send(parts.join('\n'));"
                                 {select_all_th(handle, all_page_selected)}
                             }
                             for col in &visible_cols {
-                                {header_th(col, widths.get(&col.id).copied(), handle, sort_enabled, current_sort, resize_enabled, drag_state)}
+                                {header_th(col, widths.get(&col.id).copied(), handle, sort_enabled, current_sort, resize_enabled, drag_state, column_reorder_enabled, drag_col_id, on_column_order_change)}
                             }
                         }
                         if filter_enabled {
@@ -560,6 +584,7 @@ fn compute_window_slice<TRow: Clone>(
 // Row and cell helpers (not components — plain functions returning Element)
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn header_th<TRow: Clone + PartialEq + 'static>(
     col: &ColumnDef<TRow>,
     override_width: Option<f64>,
@@ -568,6 +593,9 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
     current_sort: &[SortState],
     resize_enabled: bool,
     mut drag_state: Signal<Option<(ColumnId, f64, f64)>>,
+    column_reorder_enabled: bool,
+    mut drag_col_id: Signal<Option<ColumnId>>,
+    on_column_order_change: Option<EventHandler<Vec<ColumnId>>>,
 ) -> Element {
     let w = col_width_style(override_width, col.initial_width);
     let align = alignment_css(col.alignment);
@@ -586,18 +614,80 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
         ""
     };
 
-    let extra = if is_sortable { "cursor: pointer; " } else { "" };
+    let drag_cursor = if column_reorder_enabled { "grab; " } else { "" };
+    let sort_cursor = if is_sortable { "pointer; " } else { "" };
+    let extra = format!("cursor: {drag_cursor}{sort_cursor}");
+    let is_drag_over = column_reorder_enabled && drag_col_id.read().is_some_and(|id| id != col_id);
+
+    let drag_over_style = if is_drag_over {
+        "outline: 2px dashed #4a90e2; outline-offset: -2px; "
+    } else {
+        ""
+    };
 
     rsx! {
         th {
             style: "{extra}padding: 0.5rem 1rem; border-bottom: 1px solid #ddd; \
                     text-align: {align}; white-space: nowrap; overflow: hidden; \
                     text-overflow: ellipsis; position: sticky; top: 0; \
-                    background: #f8f9fa; z-index: 1; {w}",
+                    background: #f8f9fa; z-index: 1; {w} {drag_over_style}",
+            draggable: column_reorder_enabled,
             onclick: move |_| {
                 if is_sortable {
                     handle.toggle_sort(col_id);
                 }
+            },
+            ondragstart: move |e| {
+                if column_reorder_enabled {
+                    e.stop_propagation();
+                    drag_col_id.set(Some(col_id));
+                }
+            },
+            ondragover: move |e| {
+                if column_reorder_enabled {
+                    e.prevent_default();
+                }
+            },
+            ondrop: move |e| {
+                if column_reorder_enabled {
+                    e.prevent_default();
+                    if let Some(dragged_id) = *drag_col_id.read() {
+                        if dragged_id != col_id {
+                            let sig = handle.signal();
+                            let state = sig.read();
+                            // Find the index of the drop target column in the effective order.
+                            let effective: Vec<ColumnId> = if state.column_order.is_empty() {
+                                state.columns.iter().map(|c| c.id).collect()
+                            } else {
+                                let mut order: Vec<ColumnId> = state
+                                    .column_order
+                                    .iter()
+                                    .filter(|id| state.columns.iter().any(|c| c.id == **id))
+                                    .copied()
+                                    .collect();
+                                for c in &state.columns {
+                                    if !state.column_order.contains(&c.id) {
+                                        order.push(c.id);
+                                    }
+                                }
+                                order
+                            };
+                            if let Some(to_idx) = effective.iter().position(|id| *id == col_id) {
+                                drop(state);
+                                if handle.move_column(dragged_id, to_idx).is_ok() {
+                                    if let Some(cb) = on_column_order_change {
+                                        let new_order = sig.read().column_order.clone();
+                                        cb.call(new_order);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    drag_col_id.set(None);
+                }
+            },
+            ondragend: move |_| {
+                drag_col_id.set(None);
             },
             "{header}{sort_arrow}"
             if resize_enabled {

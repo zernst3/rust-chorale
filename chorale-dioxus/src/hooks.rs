@@ -1,9 +1,9 @@
 //! Dioxus hooks for chorale tables.
 
 use chorale_core::{
-    set_column_visibility, set_column_width, set_filter, set_page, set_page_size, set_scroll,
-    set_selection, toggle_select_all, toggle_sort, update_row, ColumnId, FilterValue, RowId,
-    StateError, TableState,
+    move_column, set_column_visibility, set_column_width, set_filter, set_page, set_page_size,
+    set_scroll, set_selection, toggle_select_all, toggle_sort, update_row, ColumnId, FilterValue,
+    RowId, StateError, TableState,
 };
 use dioxus::prelude::*;
 
@@ -144,6 +144,15 @@ impl<TRow: Clone + 'static> UseTableHandle<TRow> {
     /// Replace `row_id`'s data in-place (cell-editing escape valve, recon-2 § 7d).
     pub fn update_row(&self, row_id: RowId, new_row: TRow) {
         self.dispatch(|s| update_row(s, row_id, new_row));
+    }
+
+    /// Move `column_id` to `to_index` in the render order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StateError::UnknownColumnId`] if `column_id` is not found.
+    pub fn move_column(&self, column_id: ColumnId, to_index: usize) -> Result<(), StateError> {
+        self.try_dispatch(|s| move_column(s, column_id, to_index))
     }
 
     // -------------------------------------------------------------------------

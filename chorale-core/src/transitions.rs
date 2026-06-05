@@ -461,6 +461,87 @@ pub fn prev_editable_cell<TRow: Clone>(state: &TableState<TRow>) -> TableState<T
 }
 
 // ---------------------------------------------------------------------------
+// Column order transitions (Item 9)
+// ---------------------------------------------------------------------------
+
+/// Set an explicit column render order.
+///
+/// Columns absent from `order` are appended at the end in definition order.
+/// Resets to definition order by passing an empty vec (or use
+/// [`reset_column_order`]).
+///
+/// # Errors
+///
+/// Returns [`StateError::UnknownColumnId`] if any id in `order` is not in
+/// `state.columns`. Returns [`StateError::DuplicateColumnId`] if `order`
+/// contains a duplicate id.
+pub fn set_column_order<TRow: Clone>(
+    state: &TableState<TRow>,
+    order: Vec<ColumnId>,
+) -> Result<TableState<TRow>, StateError> {
+    let mut seen = std::collections::HashSet::new();
+    for &id in &order {
+        if !state.columns.iter().any(|c| c.id == id) {
+            return Err(StateError::UnknownColumnId(id));
+        }
+        if !seen.insert(id) {
+            return Err(StateError::DuplicateColumnId(id));
+        }
+    }
+    let mut next = state.clone();
+    next.column_order = order;
+    Ok(next)
+}
+
+/// Move column `column_id` to `to_index` in the render order.
+///
+/// If `column_order` is currently empty it is initialized from definition
+/// order first. Out-of-bounds `to_index` is clamped to the last valid
+/// position.
+///
+/// # Errors
+///
+/// Returns [`StateError::UnknownColumnId`] if `column_id` is not found in
+/// `state.columns`.
+pub fn move_column<TRow: Clone>(
+    state: &TableState<TRow>,
+    column_id: ColumnId,
+    to_index: usize,
+) -> Result<TableState<TRow>, StateError> {
+    if !state.columns.iter().any(|c| c.id == column_id) {
+        return Err(StateError::UnknownColumnId(column_id));
+    }
+    let mut order: Vec<ColumnId> = if state.column_order.is_empty() {
+        state.columns.iter().map(|c| c.id).collect()
+    } else {
+        // Preserve the user-set order but ensure all columns are present.
+        let mut o = state.column_order.clone();
+        for col in &state.columns {
+            if !o.contains(&col.id) {
+                o.push(col.id);
+            }
+        }
+        o
+    };
+    if let Some(pos) = order.iter().position(|id| *id == column_id) {
+        order.remove(pos);
+    }
+    let clamped = to_index.min(order.len());
+    order.insert(clamped, column_id);
+    let mut next = state.clone();
+    next.column_order = order;
+    Ok(next)
+}
+
+/// Reset to definition order by clearing `column_order`.
+#[must_use]
+pub fn reset_column_order<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    let mut next = state.clone();
+    next.column_order = vec![];
+    next
+}
+
+// ---------------------------------------------------------------------------
 // Tests (TESTS-1: every transition has a unit test asserting the result)
 // ---------------------------------------------------------------------------
 
@@ -545,6 +626,7 @@ mod tests {
             page_size: 10,
             column_visibility: HashMap::new(),
             column_widths: HashMap::new(),
+            column_order: vec![],
             editing: None,
             row_heights: HashMap::new(),
             scroll_top: 0.0,
@@ -1119,5 +1201,113 @@ mod tests {
         assert!(s.editing.is_none());
         let s2 = next_editable_cell(&s);
         assert!(s2.editing.is_none());
+    }
+
+    // ---- column order (Item 9) ---------------------------------------------
+
+    fn col_a() -> ColumnId { ColumnId("a") }
+    fn col_b() -> ColumnId { ColumnId("b") }
+    fn col_c() -> ColumnId { ColumnId("c") }
+
+    fn make_order_state() -> TableState<TestRow> {
+        let rows = vec![(RowId::new(), TestRow { name: "R".into(), score: 1.0 })];
+        let columns = vec![
+            ColumnDef::new(col_a(), "A", |r: &TestRow| CellValue::Text(r.name.clone())),
+            ColumnDef::new(col_b(), "B", |r: &TestRow| CellValue::Float(r.score)),
+            ColumnDef::new(col_c(), "C", |r: &TestRow| CellValue::Float(r.score)),
+        ];
+        TableState::new(rows, columns)
+    }
+
+    #[test]
+    fn set_column_order_happy_path() {
+        let s = make_order_state();
+        let s2 = set_column_order(&s, vec![col_c(), col_a(), col_b()]).unwrap();
+        assert_eq!(s2.column_order, vec![col_c(), col_a(), col_b()]);
+    }
+
+    #[test]
+    fn set_column_order_unknown_id_returns_err() {
+        let s = make_order_state();
+        let result = set_column_order(&s, vec![ColumnId("unknown")]);
+        assert!(matches!(result, Err(crate::error::StateError::UnknownColumnId(_))));
+    }
+
+    #[test]
+    fn set_column_order_duplicate_returns_err() {
+        let s = make_order_state();
+        let result = set_column_order(&s, vec![col_a(), col_a()]);
+        assert!(matches!(result, Err(crate::error::StateError::DuplicateColumnId(_))));
+    }
+
+    #[test]
+    fn set_column_order_empty_is_definition_order() {
+        let s = make_order_state();
+        let s2 = set_column_order(&s, vec![]).unwrap();
+        assert!(s2.column_order.is_empty());
+    }
+
+    #[test]
+    fn set_column_order_idempotent() {
+        let s = make_order_state();
+        let order = vec![col_b(), col_a(), col_c()];
+        let s2 = set_column_order(&s, order.clone()).unwrap();
+        let s3 = set_column_order(&s2, order.clone()).unwrap();
+        assert_eq!(s2.column_order, s3.column_order);
+    }
+
+    #[test]
+    fn move_column_from_index_2_to_0() {
+        let s = make_order_state();
+        // move col_c (index 2 in definition order) to index 0
+        let s2 = move_column(&s, col_c(), 0).unwrap();
+        assert_eq!(s2.column_order[0], col_c());
+    }
+
+    #[test]
+    fn move_column_unknown_id_returns_err() {
+        let s = make_order_state();
+        let result = move_column(&s, ColumnId("nope"), 0);
+        assert!(matches!(result, Err(crate::error::StateError::UnknownColumnId(_))));
+    }
+
+    #[test]
+    fn move_column_same_position_is_noop() {
+        let s = make_order_state();
+        // col_a is at index 0; moving to 0 should produce same order.
+        let s2 = move_column(&s, col_a(), 0).unwrap();
+        assert_eq!(s2.column_order[0], col_a());
+        assert_eq!(s2.column_order[1], col_b());
+        assert_eq!(s2.column_order[2], col_c());
+    }
+
+    #[test]
+    fn move_column_out_of_bounds_index_clamped() {
+        let s = make_order_state();
+        // to_index = 999 should be clamped to last valid position (2).
+        let s2 = move_column(&s, col_a(), 999).unwrap();
+        assert_eq!(*s2.column_order.last().unwrap(), col_a());
+    }
+
+    #[test]
+    fn reset_column_order_clears_vec() {
+        let s = make_order_state();
+        let s2 = set_column_order(&s, vec![col_b(), col_a(), col_c()]).unwrap();
+        assert!(!s2.column_order.is_empty());
+        let s3 = reset_column_order(&s2);
+        assert!(s3.column_order.is_empty());
+    }
+
+    #[test]
+    fn move_column_with_existing_partial_order_appends_missing() {
+        // column_order has only [a, b]; c is not listed.
+        // moving c to index 0 should initialize order as [a, b, c] first,
+        // then remove c and insert at 0 → [c, a, b].
+        let s = make_order_state();
+        let s2 = set_column_order(&s, vec![col_a(), col_b()]).unwrap();
+        let s3 = move_column(&s2, col_c(), 0).unwrap();
+        assert_eq!(s3.column_order[0], col_c());
+        assert_eq!(s3.column_order[1], col_a());
+        assert_eq!(s3.column_order[2], col_b());
     }
 }
