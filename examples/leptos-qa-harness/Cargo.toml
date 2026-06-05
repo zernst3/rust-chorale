@@ -1,0 +1,17 @@
+[package]
+name = "leptos-qa-harness"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Run with: trunk serve --open --package leptos-qa-harness
+
+[lints]
+workspace = true
+
+[dependencies]
+chorale-core = { path = "../../chorale-core", version = "0.1.0" }
+chorale-leptos = { path = "../../chorale-leptos", version = "0.1.0" }
+leptos = { version = "0.8", features = ["csr"] }
+rand = "0.8"
+chrono = "0.4"
