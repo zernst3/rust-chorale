@@ -826,25 +826,7 @@ mod tests {
         TableState {
             rows,
             columns,
-            sort: vec![],
-            filters: HashMap::new(),
-            selection: vec![],
-            page: 0,
-            page_size: 10,
-            column_visibility: HashMap::new(),
-            column_widths: HashMap::new(),
-            column_order: vec![],
-            editing: None,
-            row_heights: HashMap::new(),
-            scroll_top: 0.0,
-            viewport_height: 500.0,
-            row_height: 40.0,
-            buffer_rows: 3,
-            pagination_mode: PaginationMode::Pages,
-            loaded_row_count: 0,
-            grouping: vec![],
-            collapsed_groups: std::collections::HashSet::new(),
-            grouped_pagination: GroupedPaginationMode::DataRowsOnly,
+            ..TableState::new(vec![], vec![])
         }
     }
 

@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use crate::error::StateError;
 use crate::state::TableState;
 use crate::types::{
-    ColumnId, EditTarget, FilterValue, GroupKey, PaginationMode, PriorEdit, RowId, SortAction,
-    SortDirection, SortState,
+    ActiveCell, ColumnId, EditTarget, FilterValue, GroupKey, NavDirection, PaginationMode,
+    PriorEdit, RowId, SortAction, SortDirection, SortState,
 };
 
 /// Cycle the sort state for `col` using `action` to determine replace vs append.
@@ -754,6 +754,383 @@ pub fn collapse_all_groups<TRow: Clone>(state: &TableState<TRow>) -> TableState<
 }
 
 // ---------------------------------------------------------------------------
+// Item 15: Active-cell + keyboard navigation transitions (CC-1, API-1)
+// ---------------------------------------------------------------------------
+
+/// Returns the ordered list of visible `ColumnId`s for keyboard navigation.
+fn visible_column_ids<TRow: Clone>(state: &TableState<TRow>) -> Vec<ColumnId> {
+    crate::views::effective_column_order(state)
+        .into_iter()
+        .filter(|c| state.is_column_visible(c.id))
+        .map(|c| c.id)
+        .collect()
+}
+
+/// Returns the visible row count (post-filter, post-sort, post-pagination).
+fn visible_row_count<TRow: Clone>(state: &TableState<TRow>) -> usize {
+    crate::views::visible_view(state).len()
+}
+
+/// Set the active cell to a specific visible-row index and column.
+///
+/// Returns `Err(StateError::RowIndexOutOfBounds)` if `row_idx >= visible_row_count`.
+/// Returns `Err(StateError::ColumnNotFound)` if `column_id` is not a visible column.
+///
+/// # Example
+///
+/// ```rust
+/// use chorale_core::{TableState, ColumnId, RowId, set_active_cell};
+///
+/// let state: TableState<String> = TableState::new(vec![(RowId::new(), "x".to_string())], vec![]);
+/// // No columns defined, so ColumnNotFound is returned.
+/// let result = set_active_cell(&state, 0, ColumnId("name"));
+/// assert!(result.is_err());
+/// ```
+///
+/// # Errors
+///
+/// Returns [`StateError::RowIndexOutOfBounds`] if `row_idx >= visible_row_count`.
+/// Returns [`StateError::ColumnNotFound`] if `column_id` is not in the visible columns.
+#[must_use = "transitions return a new TableState; the original is unchanged"]
+pub fn set_active_cell<TRow: Clone>(
+    state: &TableState<TRow>,
+    row_idx: usize,
+    column_id: ColumnId,
+) -> Result<TableState<TRow>, crate::error::StateError> {
+    let row_count = visible_row_count(state);
+    if row_idx >= row_count && row_count > 0 {
+        return Err(crate::error::StateError::RowIndexOutOfBounds);
+    }
+    let cols = visible_column_ids(state);
+    if !cols.contains(&column_id) {
+        return Err(crate::error::StateError::ColumnNotFound);
+    }
+    Ok(TableState {
+        active_cell: Some(ActiveCell::new(row_idx, column_id)),
+        ..state.clone()
+    })
+}
+
+/// Move the active cell one step in `direction`. Clamps at boundaries (no wrap).
+///
+/// If `active_cell` is `None`, moves to the first cell (top-left) for Down/Right
+/// and the last cell (bottom-right) for Up/Left. Returns the state unchanged when
+/// there are no visible rows or columns.
+#[must_use]
+pub fn move_active_cell<TRow: Clone>(
+    state: &TableState<TRow>,
+    direction: NavDirection,
+) -> TableState<TRow> {
+    let cols = visible_column_ids(state);
+    let row_count = visible_row_count(state);
+    if cols.is_empty() || row_count == 0 {
+        return state.clone();
+    }
+    let last_row = row_count - 1;
+    let last_col_idx = cols.len() - 1;
+
+    // When active_cell is None, pressing a key sets the cell to the logical
+    // "starting corner" (first for Down/Right, last for Up/Left) without
+    // applying an additional step.
+    if state.active_cell.is_none() {
+        let (r, ci) = match direction {
+            NavDirection::Up | NavDirection::Left => (last_row, last_col_idx),
+            _ => (0, 0),
+        };
+        return TableState {
+            active_cell: Some(ActiveCell::new(r, cols[ci])),
+            ..state.clone()
+        };
+    }
+
+    let (row, col_idx) = {
+        let ac = state.active_cell.as_ref().unwrap_or_else(|| unreachable!());
+        let ci = cols.iter().position(|c| *c == ac.column_id).unwrap_or(0);
+        (ac.row_idx.min(last_row), ci.min(last_col_idx))
+    };
+
+    let (new_row, new_col_idx) = match direction {
+        NavDirection::Up => (row.saturating_sub(1), col_idx),
+        NavDirection::Down => ((row + 1).min(last_row), col_idx),
+        NavDirection::Left => (row, col_idx.saturating_sub(1)),
+        NavDirection::Right => (row, (col_idx + 1).min(last_col_idx)),
+    };
+
+    TableState {
+        active_cell: Some(ActiveCell::new(new_row, cols[new_col_idx])),
+        ..state.clone()
+    }
+}
+
+/// Move the active cell to the data edge in `direction` (Ctrl+Arrow).
+///
+/// Stops at the last row (Down), first row (Up), first column (Left), or last
+/// column (Right). If already at the edge, returns the state unchanged.
+#[must_use]
+pub fn move_active_cell_to_edge<TRow: Clone>(
+    state: &TableState<TRow>,
+    direction: NavDirection,
+) -> TableState<TRow> {
+    let cols = visible_column_ids(state);
+    let row_count = visible_row_count(state);
+    if cols.is_empty() || row_count == 0 {
+        return state.clone();
+    }
+    let last_row = row_count - 1;
+    let last_col_idx = cols.len() - 1;
+
+    let (row, col_idx) = match &state.active_cell {
+        None => (0, 0),
+        Some(ac) => {
+            let ci = cols.iter().position(|c| *c == ac.column_id).unwrap_or(0);
+            (ac.row_idx.min(last_row), ci.min(last_col_idx))
+        }
+    };
+
+    let (new_row, new_col_idx) = match direction {
+        NavDirection::Up => (0, col_idx),
+        NavDirection::Down => (last_row, col_idx),
+        NavDirection::Left => (row, 0),
+        NavDirection::Right => (row, last_col_idx),
+    };
+
+    TableState {
+        active_cell: Some(ActiveCell::new(new_row, cols[new_col_idx])),
+        ..state.clone()
+    }
+}
+
+/// Move the active cell by `page_size` rows in Up or Down direction (Page Up/Down).
+///
+/// Clamps at the first/last visible row. Horizontal directions are ignored
+/// (state returned unchanged). `page_size` is caller-supplied, computed from
+/// `(viewport_height / row_height).floor()` in the adapter.
+#[must_use]
+pub fn move_active_cell_page<TRow: Clone>(
+    state: &TableState<TRow>,
+    direction: NavDirection,
+    page_size: usize,
+) -> TableState<TRow> {
+    let cols = visible_column_ids(state);
+    let row_count = visible_row_count(state);
+    if cols.is_empty() || row_count == 0 {
+        return state.clone();
+    }
+    let last_row = row_count - 1;
+    let last_col_idx = cols.len() - 1;
+
+    let (row, col_idx) = match &state.active_cell {
+        None => (0, 0),
+        Some(ac) => {
+            let ci = cols.iter().position(|c| *c == ac.column_id).unwrap_or(0);
+            (ac.row_idx.min(last_row), ci.min(last_col_idx))
+        }
+    };
+
+    let new_row = match direction {
+        NavDirection::Up => row.saturating_sub(page_size),
+        NavDirection::Down => (row + page_size).min(last_row),
+        _ => return state.clone(),
+    };
+
+    TableState {
+        active_cell: Some(ActiveCell::new(new_row, cols[col_idx])),
+        ..state.clone()
+    }
+}
+
+/// Move the active cell to the first column of the current row (Home key).
+///
+/// If `active_cell` is `None`, moves to row 0, column 0.
+#[must_use]
+pub fn move_active_cell_home<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    let cols = visible_column_ids(state);
+    let row_count = visible_row_count(state);
+    if cols.is_empty() || row_count == 0 {
+        return state.clone();
+    }
+    let row = if let Some(ac) = state.active_cell {
+        ac.row_idx.min(row_count - 1)
+    } else {
+        0
+    };
+    TableState {
+        active_cell: Some(ActiveCell::new(row, cols[0])),
+        ..state.clone()
+    }
+}
+
+/// Move the active cell to the last column of the current row (End key).
+///
+/// If `active_cell` is `None`, moves to row 0, last column.
+#[must_use]
+pub fn move_active_cell_end<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    let cols = visible_column_ids(state);
+    let row_count = visible_row_count(state);
+    if cols.is_empty() || row_count == 0 {
+        return state.clone();
+    }
+    let row = if let Some(ac) = state.active_cell {
+        ac.row_idx.min(row_count - 1)
+    } else {
+        0
+    };
+    let last_col = *cols.last().unwrap_or(&cols[0]);
+    TableState {
+        active_cell: Some(ActiveCell::new(row, last_col)),
+        ..state.clone()
+    }
+}
+
+/// Move the active cell to the absolute first visible cell (Ctrl+Home).
+#[must_use]
+pub fn move_active_cell_first<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    let cols = visible_column_ids(state);
+    let row_count = visible_row_count(state);
+    if cols.is_empty() || row_count == 0 {
+        return state.clone();
+    }
+    TableState {
+        active_cell: Some(ActiveCell::new(0, cols[0])),
+        ..state.clone()
+    }
+}
+
+/// Move the active cell to the absolute last visible cell (Ctrl+End).
+#[must_use]
+pub fn move_active_cell_last<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    let cols = visible_column_ids(state);
+    let row_count = visible_row_count(state);
+    if cols.is_empty() || row_count == 0 {
+        return state.clone();
+    }
+    let last_col = *cols.last().unwrap_or(&cols[0]);
+    TableState {
+        active_cell: Some(ActiveCell::new(row_count - 1, last_col)),
+        ..state.clone()
+    }
+}
+
+/// Clear the active cell (returns state with `active_cell: None`). Idempotent.
+#[must_use]
+pub fn clear_active_cell<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    TableState {
+        active_cell: None,
+        ..state.clone()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Item 16: Range selection transitions (CC-1, API-1)
+// ---------------------------------------------------------------------------
+
+use crate::range::RangeSelection;
+
+/// Begin a new range selection anchored at the given cell.
+///
+/// Replaces any existing `range_selection`. Also sets `active_cell` to the
+/// anchor (so active cell and range anchor stay in sync).
+/// Row index is clamped to `visible_row_count - 1` if out of bounds.
+#[must_use]
+pub fn start_range_selection<TRow: Clone>(
+    state: &TableState<TRow>,
+    anchor_row: usize,
+    anchor_col: ColumnId,
+) -> TableState<TRow> {
+    let row_count = visible_row_count(state);
+    let clamped_row = if row_count == 0 {
+        0
+    } else {
+        anchor_row.min(row_count - 1)
+    };
+    TableState {
+        range_selection: vec![RangeSelection::single(clamped_row, anchor_col)],
+        active_cell: Some(ActiveCell::new(clamped_row, anchor_col)),
+        ..state.clone()
+    }
+}
+
+/// Extend the active (last) range so its focus moves to the given cell.
+///
+/// If `range_selection` is empty, behaves like `start_range_selection`.
+/// Row index is clamped at boundary.
+#[must_use]
+pub fn extend_range_to<TRow: Clone>(
+    state: &TableState<TRow>,
+    row_idx: usize,
+    col: ColumnId,
+) -> TableState<TRow> {
+    let row_count = visible_row_count(state);
+    let clamped_row = if row_count == 0 {
+        0
+    } else {
+        row_idx.min(row_count - 1)
+    };
+    if state.range_selection.is_empty() {
+        return start_range_selection(state, clamped_row, col);
+    }
+    let mut ranges = state.range_selection.clone();
+    if let Some(last) = ranges.last_mut() {
+        last.focus = (clamped_row, col);
+    }
+    TableState {
+        range_selection: ranges,
+        active_cell: Some(ActiveCell::new(clamped_row, col)),
+        ..state.clone()
+    }
+}
+
+/// Add a disjoint range (Ctrl+click). Subsequent `extend_range_to` extends the new range.
+#[must_use]
+pub fn add_disjoint_range<TRow: Clone>(
+    state: &TableState<TRow>,
+    anchor_row: usize,
+    anchor_col: ColumnId,
+) -> TableState<TRow> {
+    let row_count = visible_row_count(state);
+    let clamped_row = if row_count == 0 {
+        0
+    } else {
+        anchor_row.min(row_count - 1)
+    };
+    let mut ranges = state.range_selection.clone();
+    ranges.push(RangeSelection::single(clamped_row, anchor_col));
+    TableState {
+        range_selection: ranges,
+        active_cell: Some(ActiveCell::new(clamped_row, anchor_col)),
+        ..state.clone()
+    }
+}
+
+/// Select all visible rows × all visible columns (Ctrl+A).
+///
+/// Produces a single range spanning all cells. Idempotent.
+#[must_use]
+pub fn select_all<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    let cols = visible_column_ids(state);
+    let row_count = visible_row_count(state);
+    if cols.is_empty() || row_count == 0 {
+        return state.clone();
+    }
+    let first_col = cols[0];
+    let last_col = *cols.last().unwrap_or(&cols[0]);
+    let range = RangeSelection::new((0, first_col), (row_count - 1, last_col));
+    TableState {
+        range_selection: vec![range],
+        ..state.clone()
+    }
+}
+
+/// Clear all ranges (Escape key when no editor is open). Idempotent.
+#[must_use]
+pub fn clear_range_selection<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    TableState {
+        range_selection: vec![],
+        ..state.clone()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests (TESTS-1: every transition has a unit test asserting the result)
 // ---------------------------------------------------------------------------
 
@@ -771,7 +1148,7 @@ mod tests {
     use crate::column::ColumnDef;
     use crate::state::TableState;
     use crate::types::{
-        Alignment, CellValue, ColumnId, FilterValue, GroupedPaginationMode, PaginationMode, RowId,
+        Alignment, CellValue, ColumnId, FilterValue, NavDirection, PaginationMode, RowId,
         SortAction, SortDirection,
     };
 
@@ -837,25 +1214,7 @@ mod tests {
         TableState {
             rows,
             columns: make_columns(),
-            sort: vec![],
-            filters: HashMap::new(),
-            selection: vec![],
-            page: 0,
-            page_size: 10,
-            column_visibility: HashMap::new(),
-            column_widths: HashMap::new(),
-            column_order: vec![],
-            editing: None,
-            row_heights: HashMap::new(),
-            scroll_top: 0.0,
-            viewport_height: 500.0,
-            row_height: 40.0,
-            buffer_rows: 3,
-            pagination_mode: PaginationMode::Pages,
-            loaded_row_count: 0,
-            grouping: vec![],
-            collapsed_groups: std::collections::HashSet::new(),
-            grouped_pagination: GroupedPaginationMode::DataRowsOnly,
+            ..TableState::new(vec![], vec![])
         }
     }
 
@@ -1928,5 +2287,354 @@ mod tests {
         let s = make_grouped_state(); // grouping is empty
         let s2 = collapse_all_groups(&s);
         assert!(s2.collapsed_groups.is_empty());
+    }
+
+    // ── Item 15: set_active_cell ─────────────────────────────────────────────
+
+    #[test]
+    fn set_active_cell_happy_path() {
+        let s = make_state();
+        let s2 = set_active_cell(&s, 0, col_name()).unwrap();
+        assert_eq!(
+            s2.active_cell,
+            Some(crate::types::ActiveCell::new(0, col_name()))
+        );
+    }
+
+    #[test]
+    fn set_active_cell_row_out_of_bounds_errors() {
+        let s = make_state();
+        let result = set_active_cell(&s, 999, col_name());
+        assert!(matches!(
+            result,
+            Err(crate::error::StateError::RowIndexOutOfBounds)
+        ));
+    }
+
+    #[test]
+    fn set_active_cell_unknown_column_errors() {
+        let s = make_state();
+        let result = set_active_cell(&s, 0, ColumnId("unknown"));
+        assert!(matches!(
+            result,
+            Err(crate::error::StateError::ColumnNotFound)
+        ));
+    }
+
+    #[test]
+    fn set_active_cell_hidden_column_errors() {
+        let mut s = make_state();
+        s.column_visibility.insert(col_name(), false);
+        let result = set_active_cell(&s, 0, col_name());
+        assert!(matches!(
+            result,
+            Err(crate::error::StateError::ColumnNotFound)
+        ));
+    }
+
+    #[test]
+    fn set_active_cell_replaces_previous() {
+        let s = make_state();
+        let s = set_active_cell(&s, 0, col_name()).unwrap();
+        let s2 = set_active_cell(&s, 1, col_score()).unwrap();
+        assert_eq!(
+            s2.active_cell,
+            Some(crate::types::ActiveCell::new(1, col_score()))
+        );
+    }
+
+    // ── Item 15: move_active_cell ────────────────────────────────────────────
+
+    #[test]
+    fn move_active_cell_down_one_step() {
+        let s = set_active_cell(&make_state(), 0, col_name()).unwrap();
+        let s2 = move_active_cell(&s, NavDirection::Down);
+        assert_eq!(s2.active_cell.unwrap().row_idx, 1);
+    }
+
+    #[test]
+    fn move_active_cell_up_one_step() {
+        let s = set_active_cell(&make_state(), 2, col_name()).unwrap();
+        let s2 = move_active_cell(&s, NavDirection::Up);
+        assert_eq!(s2.active_cell.unwrap().row_idx, 1);
+    }
+
+    #[test]
+    fn move_active_cell_left_one_step() {
+        let s = set_active_cell(&make_state(), 0, col_score()).unwrap();
+        let s2 = move_active_cell(&s, NavDirection::Left);
+        assert_eq!(s2.active_cell.unwrap().column_id, col_name());
+    }
+
+    #[test]
+    fn move_active_cell_right_one_step() {
+        let s = set_active_cell(&make_state(), 0, col_name()).unwrap();
+        let s2 = move_active_cell(&s, NavDirection::Right);
+        assert_eq!(s2.active_cell.unwrap().column_id, col_score());
+    }
+
+    #[test]
+    fn move_active_cell_clamps_at_top() {
+        let s = set_active_cell(&make_state(), 0, col_name()).unwrap();
+        let s2 = move_active_cell(&s, NavDirection::Up);
+        assert_eq!(s2.active_cell.unwrap().row_idx, 0);
+    }
+
+    #[test]
+    fn move_active_cell_clamps_at_bottom() {
+        let s = make_state(); // 3 rows
+        let s = set_active_cell(&s, 2, col_name()).unwrap();
+        let s2 = move_active_cell(&s, NavDirection::Down);
+        assert_eq!(s2.active_cell.unwrap().row_idx, 2);
+    }
+
+    #[test]
+    fn move_active_cell_clamps_at_left_column() {
+        let s = set_active_cell(&make_state(), 0, col_name()).unwrap();
+        let s2 = move_active_cell(&s, NavDirection::Left);
+        assert_eq!(s2.active_cell.unwrap().column_id, col_name());
+    }
+
+    #[test]
+    fn move_active_cell_clamps_at_right_column() {
+        let s = set_active_cell(&make_state(), 0, col_score()).unwrap();
+        let s2 = move_active_cell(&s, NavDirection::Right);
+        assert_eq!(s2.active_cell.unwrap().column_id, col_score());
+    }
+
+    #[test]
+    fn move_active_cell_none_down_goes_to_first() {
+        let s = make_state(); // active_cell is None
+        let s2 = move_active_cell(&s, NavDirection::Down);
+        let ac = s2.active_cell.unwrap();
+        assert_eq!(ac.row_idx, 0);
+        assert_eq!(ac.column_id, col_name());
+    }
+
+    #[test]
+    fn move_active_cell_none_up_goes_to_last() {
+        let s = make_state(); // 3 rows, active_cell None
+        let s2 = move_active_cell(&s, NavDirection::Up);
+        let ac = s2.active_cell.unwrap();
+        assert_eq!(ac.row_idx, 2);
+        assert_eq!(ac.column_id, col_score());
+    }
+
+    // ── Item 15: move_active_cell_to_edge ────────────────────────────────────
+
+    #[test]
+    fn move_active_cell_to_edge_down_goes_to_last_row() {
+        let s = set_active_cell(&make_state(), 0, col_name()).unwrap();
+        let s2 = move_active_cell_to_edge(&s, NavDirection::Down);
+        assert_eq!(s2.active_cell.unwrap().row_idx, 2);
+    }
+
+    #[test]
+    fn move_active_cell_to_edge_right_goes_to_last_col() {
+        let s = set_active_cell(&make_state(), 0, col_name()).unwrap();
+        let s2 = move_active_cell_to_edge(&s, NavDirection::Right);
+        assert_eq!(s2.active_cell.unwrap().column_id, col_score());
+    }
+
+    #[test]
+    fn move_active_cell_to_edge_up_goes_to_row_zero() {
+        let s = set_active_cell(&make_state(), 2, col_name()).unwrap();
+        let s2 = move_active_cell_to_edge(&s, NavDirection::Up);
+        assert_eq!(s2.active_cell.unwrap().row_idx, 0);
+    }
+
+    #[test]
+    fn move_active_cell_to_edge_left_goes_to_first_col() {
+        let s = set_active_cell(&make_state(), 0, col_score()).unwrap();
+        let s2 = move_active_cell_to_edge(&s, NavDirection::Left);
+        assert_eq!(s2.active_cell.unwrap().column_id, col_name());
+    }
+
+    // ── Item 15: move_active_cell_page ───────────────────────────────────────
+
+    #[test]
+    fn move_active_cell_page_down_by_page_size() {
+        let s = set_active_cell(&make_state(), 0, col_name()).unwrap(); // 3 rows
+        let s2 = move_active_cell_page(&s, NavDirection::Down, 2);
+        assert_eq!(s2.active_cell.unwrap().row_idx, 2); // clamped at 2
+    }
+
+    #[test]
+    fn move_active_cell_page_up_clamped_at_zero() {
+        let s = set_active_cell(&make_state(), 1, col_name()).unwrap();
+        let s2 = move_active_cell_page(&s, NavDirection::Up, 10);
+        assert_eq!(s2.active_cell.unwrap().row_idx, 0);
+    }
+
+    #[test]
+    fn move_active_cell_page_horizontal_is_noop() {
+        let s = set_active_cell(&make_state(), 1, col_name()).unwrap();
+        let s2 = move_active_cell_page(&s, NavDirection::Left, 2);
+        assert_eq!(s2.active_cell, s.active_cell);
+    }
+
+    // ── Item 15: home / end / first / last ───────────────────────────────────
+
+    #[test]
+    fn move_active_cell_home_goes_to_first_col_same_row() {
+        let s = set_active_cell(&make_state(), 1, col_score()).unwrap();
+        let s2 = move_active_cell_home(&s);
+        let ac = s2.active_cell.unwrap();
+        assert_eq!(ac.row_idx, 1);
+        assert_eq!(ac.column_id, col_name());
+    }
+
+    #[test]
+    fn move_active_cell_end_goes_to_last_col_same_row() {
+        let s = set_active_cell(&make_state(), 1, col_name()).unwrap();
+        let s2 = move_active_cell_end(&s);
+        let ac = s2.active_cell.unwrap();
+        assert_eq!(ac.row_idx, 1);
+        assert_eq!(ac.column_id, col_score());
+    }
+
+    #[test]
+    fn move_active_cell_first_goes_to_row0_col0() {
+        let s = set_active_cell(&make_state(), 2, col_score()).unwrap();
+        let s2 = move_active_cell_first(&s);
+        let ac = s2.active_cell.unwrap();
+        assert_eq!(ac.row_idx, 0);
+        assert_eq!(ac.column_id, col_name());
+    }
+
+    #[test]
+    fn move_active_cell_last_goes_to_last_row_last_col() {
+        let s = set_active_cell(&make_state(), 0, col_name()).unwrap();
+        let s2 = move_active_cell_last(&s);
+        let ac = s2.active_cell.unwrap();
+        assert_eq!(ac.row_idx, 2);
+        assert_eq!(ac.column_id, col_score());
+    }
+
+    // ── Item 15: clear_active_cell ───────────────────────────────────────────
+
+    #[test]
+    fn clear_active_cell_sets_none() {
+        let s = set_active_cell(&make_state(), 0, col_name()).unwrap();
+        let s2 = clear_active_cell(&s);
+        assert!(s2.active_cell.is_none());
+    }
+
+    #[test]
+    fn clear_active_cell_idempotent() {
+        let s = make_state();
+        let s2 = clear_active_cell(&s);
+        let s3 = clear_active_cell(&s2);
+        assert_eq!(s2.active_cell, s3.active_cell);
+    }
+
+    #[test]
+    fn move_active_cell_never_produces_out_of_bounds_row() {
+        let s = make_state(); // 3 rows
+                              // Move to row 2 (last) then try Down — must stay at 2
+        let s = set_active_cell(&s, 2, col_name()).unwrap();
+        for _ in 0..10 {
+            let s2 = move_active_cell(&s, NavDirection::Down);
+            assert!(s2.active_cell.unwrap().row_idx <= 2);
+        }
+    }
+
+    // ── Item 16: range selection ─────────────────────────────────────────────
+
+    #[test]
+    fn start_range_selection_creates_single_cell_range() {
+        let s = make_state();
+        let s2 = start_range_selection(&s, 1, col_name());
+        assert_eq!(s2.range_selection.len(), 1);
+        let r = &s2.range_selection[0];
+        assert_eq!(r.anchor, (1, col_name()));
+        assert_eq!(r.focus, (1, col_name()));
+        assert_eq!(
+            s2.active_cell,
+            Some(crate::types::ActiveCell::new(1, col_name()))
+        );
+    }
+
+    #[test]
+    fn start_range_selection_replaces_existing() {
+        let s = make_state();
+        let s = start_range_selection(&s, 0, col_name());
+        let s2 = start_range_selection(&s, 2, col_score());
+        assert_eq!(s2.range_selection.len(), 1);
+        assert_eq!(s2.range_selection[0].anchor.0, 2);
+    }
+
+    #[test]
+    fn start_range_selection_clamps_out_of_bounds_row() {
+        let s = make_state(); // 3 rows
+        let s2 = start_range_selection(&s, 999, col_name());
+        assert_eq!(s2.range_selection[0].anchor.0, 2); // clamped to last
+    }
+
+    #[test]
+    fn extend_range_to_changes_focus() {
+        let s = start_range_selection(&make_state(), 0, col_name());
+        let s2 = extend_range_to(&s, 2, col_score());
+        let r = &s2.range_selection[0];
+        assert_eq!(r.anchor, (0, col_name()));
+        assert_eq!(r.focus, (2, col_score()));
+    }
+
+    #[test]
+    fn extend_range_to_same_cell_anchor_equals_focus() {
+        let s = start_range_selection(&make_state(), 1, col_name());
+        let s2 = extend_range_to(&s, 1, col_name());
+        let r = &s2.range_selection[0];
+        assert_eq!(r.anchor, r.focus);
+    }
+
+    #[test]
+    fn extend_range_to_from_empty_creates_range() {
+        let s = make_state(); // range_selection is empty
+        let s2 = extend_range_to(&s, 1, col_name());
+        assert_eq!(s2.range_selection.len(), 1);
+    }
+
+    #[test]
+    fn add_disjoint_range_appends() {
+        let s = start_range_selection(&make_state(), 0, col_name());
+        let s2 = add_disjoint_range(&s, 2, col_score());
+        assert_eq!(s2.range_selection.len(), 2);
+    }
+
+    #[test]
+    fn extend_range_to_extends_last_rect_only() {
+        let s = start_range_selection(&make_state(), 0, col_name());
+        let s = add_disjoint_range(&s, 2, col_score());
+        let s2 = extend_range_to(&s, 1, col_score());
+        // first rect anchor unchanged
+        assert_eq!(s2.range_selection[0].anchor, (0, col_name()));
+        // second rect focus changed
+        assert_eq!(s2.range_selection[1].focus.0, 1);
+    }
+
+    #[test]
+    fn select_all_spans_all_rows_and_columns() {
+        let s = make_state(); // 3 rows, 2 columns
+        let s2 = select_all(&s);
+        assert_eq!(s2.range_selection.len(), 1);
+        let r = &s2.range_selection[0];
+        assert_eq!(r.anchor, (0, col_name()));
+        assert_eq!(r.focus, (2, col_score()));
+    }
+
+    #[test]
+    fn clear_range_selection_empties_vec() {
+        let s = start_range_selection(&make_state(), 0, col_name());
+        let s2 = clear_range_selection(&s);
+        assert!(s2.range_selection.is_empty());
+    }
+
+    #[test]
+    fn clear_range_selection_idempotent() {
+        let s = make_state();
+        let s2 = clear_range_selection(&s);
+        let s3 = clear_range_selection(&s2);
+        assert!(s3.range_selection.is_empty());
     }
 }

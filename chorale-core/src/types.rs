@@ -157,6 +157,51 @@ impl std::fmt::Display for GroupKey {
     }
 }
 
+/// Identifies the cell that currently holds keyboard focus.
+///
+/// Stored as `TableState::active_cell: Option<ActiveCell>`. Starts as `None`
+/// on mount; becomes `Some` on first click or arrow key press. Only one cell
+/// can hold focus at a time.
+///
+/// `row_idx` is the **post-filter, post-sort visible row index** (0 = first
+/// visible row on the current page). It is not a stable `RowId`; if the filter
+/// or sort changes, the adapter is responsible for clamping the index to the
+/// new visible row count.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ActiveCell {
+    /// Post-filter, post-sort visible row index (0 = first visible row).
+    pub row_idx: usize,
+    /// The column containing the focused cell.
+    pub column_id: ColumnId,
+}
+
+impl ActiveCell {
+    /// Create a new `ActiveCell`.
+    #[must_use]
+    pub fn new(row_idx: usize, column_id: ColumnId) -> Self {
+        Self { row_idx, column_id }
+    }
+}
+
+/// Direction for active-cell navigation transitions.
+///
+/// Passed to `move_active_cell`, `move_active_cell_to_edge`, and
+/// `move_active_cell_page`. `#[non_exhaustive]` so additional directions
+/// (e.g. `TabRight`, `ShiftTabLeft`) can be added without breaking matches.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NavDirection {
+    /// Move up (previous visible row).
+    Up,
+    /// Move down (next visible row).
+    Down,
+    /// Move left (previous visible column).
+    Left,
+    /// Move right (next visible column).
+    Right,
+}
+
 /// How pagination interacts with grouped rows.
 ///
 /// `GroupedPaginationMode` is `#[non_exhaustive]` so additional modes can be

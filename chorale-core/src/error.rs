@@ -34,4 +34,12 @@ pub enum StateError {
     /// or `load_more_rows` in `PaginationMode::Pages`.
     #[error("transition not valid in current pagination mode")]
     InvalidModeForTransition,
+
+    /// `set_active_cell` was called with a row index that exceeds the visible row count.
+    #[error("row index is out of bounds")]
+    RowIndexOutOfBounds,
+
+    /// `set_active_cell` was called with a column ID that is not in the visible column list.
+    #[error("column not found or not visible")]
+    ColumnNotFound,
 }

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use crate::column::ColumnDef;
 use crate::types::{
-    ColumnId, EditTarget, FilterValue, GroupKey, GroupedPaginationMode, PaginationMode, RowId,
-    SortState,
+    ActiveCell, ColumnId, EditTarget, FilterValue, GroupKey, GroupedPaginationMode, PaginationMode,
+    RowId, SortState,
 };
 
 /// The result of `visible_window()`: which rows to render and how large the
@@ -107,6 +107,20 @@ pub struct TableState<TRow: Clone> {
     /// each page that contains their rows. `Virtualized`: pagination disabled
     /// while grouping is active; the full grouped tree is rendered.
     pub grouped_pagination: GroupedPaginationMode,
+    /// The cell that currently holds keyboard focus, if any.
+    ///
+    /// `None` on mount; becomes `Some` on first arrow key press or cell click.
+    /// Set via `set_active_cell` / `move_active_cell` transitions. The adapter
+    /// renders a focus ring (CSS `--chorale-active-cell-outline`) on the cell
+    /// whose `(row_idx, column_id)` matches this field.
+    pub active_cell: Option<ActiveCell>,
+    /// Currently selected cell ranges (multi-rect).
+    ///
+    /// Empty vec = no range active. Each `RangeSelection` is an anchor/focus
+    /// pair of `(row_idx, ColumnId)`. Set via `start_range_selection` /
+    /// `extend_range_to` / `add_disjoint_range` / `select_all` /
+    /// `clear_range_selection`.
+    pub range_selection: Vec<crate::range::RangeSelection>,
 }
 
 impl<TRow: Clone + std::fmt::Debug> std::fmt::Debug for TableState<TRow> {
@@ -132,6 +146,8 @@ impl<TRow: Clone + std::fmt::Debug> std::fmt::Debug for TableState<TRow> {
             .field("grouping", &self.grouping)
             .field("collapsed_groups", &self.collapsed_groups)
             .field("grouped_pagination", &self.grouped_pagination)
+            .field("active_cell", &self.active_cell)
+            .field("range_selection", &self.range_selection)
             .finish_non_exhaustive()
     }
 }
@@ -160,6 +176,8 @@ impl<TRow: Clone> Clone for TableState<TRow> {
             grouping: self.grouping.clone(),
             collapsed_groups: self.collapsed_groups.clone(),
             grouped_pagination: self.grouped_pagination,
+            active_cell: self.active_cell,
+            range_selection: self.range_selection.clone(),
         }
     }
 }
@@ -171,6 +189,7 @@ impl<TRow: Clone> TableState<TRow> {
     /// - `row_height = 40.0` px, `viewport_height = 500.0` px
     /// - `buffer_rows = 3` (overscan rows rendered beyond the visible window)
     /// - No active sort, filters, selection, or column overrides.
+    /// - `active_cell = None`, `range_selection = []`.
     ///
     /// # Example
     ///
@@ -207,6 +226,8 @@ impl<TRow: Clone> TableState<TRow> {
             grouping: vec![],
             collapsed_groups: std::collections::HashSet::new(),
             grouped_pagination: GroupedPaginationMode::DataRowsOnly,
+            active_cell: None,
+            range_selection: vec![],
         }
     }
 

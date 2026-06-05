@@ -36,6 +36,7 @@
 mod column;
 mod error;
 mod labels;
+pub mod range;
 mod state;
 mod theme;
 pub mod transitions;
@@ -117,6 +118,18 @@ pub use types::RowId;
 /// `ColumnId("my_column")`.
 pub use types::ColumnId;
 
+/// The cell that currently holds keyboard focus (row + column), if any.
+///
+/// Stored in `TableState::active_cell: Option<ActiveCell>`. `None` on mount;
+/// set by `set_active_cell`, `move_active_cell`, and related transitions.
+pub use types::ActiveCell;
+
+/// Navigation direction for active-cell transitions.
+///
+/// Passed to `move_active_cell`, `move_active_cell_to_edge`, and
+/// `move_active_cell_page`.
+pub use types::NavDirection;
+
 /// The typed value returned by a column accessor.
 ///
 /// Used for sort comparisons, filter matching, CSV serialization, and
@@ -186,6 +199,24 @@ pub use types::CurrencyCode;
 /// `ColumnNotEditable`, `UnknownColumnId`, `DuplicateColumnId`,
 /// `InvalidModeForTransition`.
 pub use error::StateError;
+
+// ---- Range selection -------------------------------------------------------
+
+/// A rectangular cell range defined by an anchor and focus corner.
+///
+/// Stored in `TableState::range_selection: Vec<RangeSelection>`. An empty
+/// vec means no range is active. Multi-element vec = disjoint (Ctrl+click)
+/// ranges. Resolve to a row/column extent via [`RangeSelection::normalized`].
+pub use range::RangeSelection;
+
+/// The resolved min-row / max-row / ordered-columns extent of a `RangeSelection`.
+///
+/// Returned by [`RangeSelection::normalized`].
+pub use range::NormalizedRange;
+
+/// Errors from range operations: `NoRangeSelected`, `MultiRectNotSupportedForThisOperation`,
+/// `RangeTooSmallToFill`, `IndexOutOfBounds`.
+pub use range::RangeError;
 
 // ---- Labels ---------------------------------------------------------------
 
@@ -344,6 +375,58 @@ pub use transitions::expand_all_groups;
 ///
 /// No-op when `state.grouping` is empty.
 pub use transitions::collapse_all_groups;
+
+// ---- Item 15: Active-cell transitions -------------------------------------
+
+/// Set the active cell to a specific visible-row index and column.
+///
+/// Returns `Err(StateError::RowIndexOutOfBounds)` or `Err(StateError::ColumnNotFound)`
+/// on invalid input.
+pub use transitions::set_active_cell;
+
+/// Move the active cell one step in `direction`. Clamps at boundaries.
+/// If `active_cell` is `None`, moves to the first or last cell depending on direction.
+pub use transitions::move_active_cell;
+
+/// Move the active cell to the data edge in `direction` (Ctrl+Arrow behavior).
+pub use transitions::move_active_cell_to_edge;
+
+/// Move the active cell by `page_size` rows Up or Down (Page Up/Down behavior).
+pub use transitions::move_active_cell_page;
+
+/// Move the active cell to the first column of the current row (Home key).
+pub use transitions::move_active_cell_home;
+
+/// Move the active cell to the last column of the current row (End key).
+pub use transitions::move_active_cell_end;
+
+/// Move the active cell to the absolute first visible cell (Ctrl+Home).
+pub use transitions::move_active_cell_first;
+
+/// Move the active cell to the absolute last visible cell (Ctrl+End).
+pub use transitions::move_active_cell_last;
+
+/// Clear the active cell (returns state with `active_cell: None`). Idempotent.
+pub use transitions::clear_active_cell;
+
+// ---- Item 16: Range selection transitions ---------------------------------
+
+/// Begin a new range anchored at the given cell (replaces existing range).
+/// Also sets `active_cell` to the anchor. Row index is clamped to bounds.
+pub use transitions::start_range_selection;
+
+/// Extend the active (last) range so its focus moves to the given cell.
+/// If no range exists, behaves like `start_range_selection`.
+pub use transitions::extend_range_to;
+
+/// Add a disjoint range (Ctrl+click). Subsequent `extend_range_to` extends the new range.
+pub use transitions::add_disjoint_range;
+
+/// Select all visible rows × all visible columns (Ctrl+A). Idempotent.
+pub use transitions::select_all;
+
+/// Clear all ranges (Escape when not editing). Idempotent.
+pub use transitions::clear_range_selection;
 
 // ---- Views ----------------------------------------------------------------
 
