@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use crate::state::{TableState, VirtualWindow};
-use crate::types::RowId;
+use crate::types::{PaginationMode, RowId};
 
 /// Compute the fixed-height virtual window for a scroll offset.
 ///
@@ -148,30 +148,24 @@ pub fn visible_window_variable<S: std::hash::BuildHasher>(
 
 /// Returns the `RowId`s of rows on the current page (post-sort/post-filter).
 ///
+/// In `PaginationMode::InfiniteScroll`, returns the first `loaded_row_count` rows.
 /// Used by `toggle_select_all`.
 #[must_use]
 pub fn visible_row_ids<TRow: Clone>(state: &TableState<TRow>) -> Vec<RowId> {
-    let filtered_sorted = filtered_sorted_pairs(state);
-    let start = state.page * state.page_size;
-    let end = (start + state.page_size).min(filtered_sorted.len());
-    filtered_sorted[start..end]
-        .iter()
-        .map(|(id, _)| *id)
-        .collect()
+    visible_view(state).into_iter().map(|(id, _)| id).collect()
 }
 
 /// Returns the rows on the current page (post-sort/post-filter).
+///
+/// In `PaginationMode::InfiniteScroll`, returns the first `loaded_row_count` rows.
 ///
 /// Data pipeline per the work-queue spec and recon-2 § 5:
 ///   raw rows → filter → sort → paginate
 #[must_use]
 pub fn visible_rows<TRow: Clone>(state: &TableState<TRow>) -> Vec<TRow> {
-    let filtered_sorted = filtered_sorted_pairs(state);
-    let start = state.page * state.page_size;
-    let end = (start + state.page_size).min(filtered_sorted.len());
-    filtered_sorted[start..end]
-        .iter()
-        .map(|(_, row)| row.clone())
+    visible_view(state)
+        .into_iter()
+        .map(|(_, row)| row)
         .collect()
 }
 
@@ -195,6 +189,11 @@ pub fn filtered_sorted_rows<TRow: Clone>(state: &TableState<TRow>) -> Vec<TRow> 
 /// underlying filter-sort-paginate pipeline twice; calling `visible_view()`
 /// runs it once and lets the caller derive both shapes from the same Vec.
 ///
+/// In `PaginationMode::InfiniteScroll`, returns the first `loaded_row_count`
+/// rows instead of a page slice. The adapter grows `loaded_row_count` by
+/// calling [`load_more_rows`](crate::load_more_rows) when the user scrolls
+/// near the bottom.
+///
 /// Adapters should pair this with their framework's memoization primitive
 /// (Dioxus `use_memo`, Leptos `create_memo`, etc.) keyed on the table-state
 /// signal so scroll-only state changes don't reinvoke the pipeline.
@@ -212,9 +211,17 @@ pub fn filtered_sorted_rows<TRow: Clone>(state: &TableState<TRow>) -> Vec<TRow> 
 #[must_use]
 pub fn visible_view<TRow: Clone>(state: &TableState<TRow>) -> Vec<(RowId, TRow)> {
     let filtered_sorted = filtered_sorted_pairs(state);
-    let start = state.page * state.page_size;
-    let end = (start + state.page_size).min(filtered_sorted.len());
-    filtered_sorted[start..end].to_vec()
+    match state.pagination_mode {
+        PaginationMode::Pages => {
+            let start = state.page * state.page_size;
+            let end = (start + state.page_size).min(filtered_sorted.len());
+            filtered_sorted[start..end].to_vec()
+        }
+        PaginationMode::InfiniteScroll => {
+            let end = state.loaded_row_count.min(filtered_sorted.len());
+            filtered_sorted[..end].to_vec()
+        }
+    }
 }
 
 /// Compute the `VirtualWindow` for the current state and return the
@@ -286,9 +293,7 @@ pub fn frozen_left_columns<TRow: Clone>(
 ) -> Vec<&crate::column::ColumnDef<TRow>> {
     effective_column_order(state)
         .into_iter()
-        .filter(|c| {
-            c.frozen == crate::column::FrozenSide::Left && state.is_column_visible(c.id)
-        })
+        .filter(|c| c.frozen == crate::column::FrozenSide::Left && state.is_column_visible(c.id))
         .collect()
 }
 
@@ -302,9 +307,7 @@ pub fn frozen_right_columns<TRow: Clone>(
 ) -> Vec<&crate::column::ColumnDef<TRow>> {
     effective_column_order(state)
         .into_iter()
-        .filter(|c| {
-            c.frozen == crate::column::FrozenSide::Right && state.is_column_visible(c.id)
-        })
+        .filter(|c| c.frozen == crate::column::FrozenSide::Right && state.is_column_visible(c.id))
         .collect()
 }
 
@@ -319,9 +322,7 @@ pub fn scrollable_columns<TRow: Clone>(
 ) -> Vec<&crate::column::ColumnDef<TRow>> {
     effective_column_order(state)
         .into_iter()
-        .filter(|c| {
-            c.frozen == crate::column::FrozenSide::None && state.is_column_visible(c.id)
-        })
+        .filter(|c| c.frozen == crate::column::FrozenSide::None && state.is_column_visible(c.id))
         .collect()
 }
 
@@ -385,18 +386,17 @@ fn filtered_sorted_pairs<TRow: Clone>(state: &TableState<TRow>) -> Vec<(RowId, T
     if !state.sort.is_empty() {
         // Build a list of (accessor_ref, direction) pairs in priority order.
         // Columns not found in state.columns are silently skipped.
-        let sort_keys: Vec<(&crate::column::ColumnDef<TRow>, crate::types::SortDirection)> =
-            state
-                .sort
-                .iter()
-                .filter_map(|s| {
-                    state
-                        .columns
-                        .iter()
-                        .find(|c| c.id == s.column)
-                        .map(|c| (c, s.direction))
-                })
-                .collect();
+        let sort_keys: Vec<(&crate::column::ColumnDef<TRow>, crate::types::SortDirection)> = state
+            .sort
+            .iter()
+            .filter_map(|s| {
+                state
+                    .columns
+                    .iter()
+                    .find(|c| c.id == s.column)
+                    .map(|c| (c, s.direction))
+            })
+            .collect();
 
         pairs.sort_by(|(_, a), (_, b)| {
             for (col, direction) in &sort_keys {
@@ -440,7 +440,8 @@ mod tests {
     use crate::column::ColumnDef;
     use crate::state::TableState;
     use crate::types::{
-        Alignment, CellValue, ColumnId, FilterValue, RowId, SortDirection, SortState,
+        Alignment, CellValue, ColumnId, FilterValue, PaginationMode, RowId, SortDirection,
+        SortState,
     };
 
     use super::*;
@@ -506,6 +507,8 @@ mod tests {
             viewport_height: 500.0,
             row_height: 40.0,
             buffer_rows: 3,
+            pagination_mode: PaginationMode::Pages,
+            loaded_row_count: 0,
         }
     }
 
@@ -968,7 +971,13 @@ mod tests {
     use crate::column::FrozenSide;
 
     fn make_frozen_state() -> TableState<R> {
-        let rows = vec![(RowId::new(), R { name: "A".into(), score: 1 })];
+        let rows = vec![(
+            RowId::new(),
+            R {
+                name: "A".into(),
+                score: 1,
+            },
+        )];
         let columns = vec![
             ColumnDef::new(ColumnId("id"), "ID", |r: &R| CellValue::Integer(r.score))
                 .frozen(FrozenSide::Left),
@@ -1071,8 +1080,8 @@ mod tests {
 
     #[test]
     fn frozen_builder_sets_side() {
-        let col = ColumnDef::new(ColumnId("x"), "X", |_: &R| CellValue::Empty)
-            .frozen(FrozenSide::Left);
+        let col =
+            ColumnDef::new(ColumnId("x"), "X", |_: &R| CellValue::Empty).frozen(FrozenSide::Left);
         assert_eq!(col.frozen, FrozenSide::Left);
     }
 
@@ -1080,5 +1089,50 @@ mod tests {
     fn frozen_default_is_none() {
         let col = ColumnDef::new(ColumnId("x"), "X", |_: &R| CellValue::Empty);
         assert_eq!(col.frozen, FrozenSide::None);
+    }
+
+    // ---- InfiniteScroll mode (Item 11.0b) ------------------------------------
+
+    #[test]
+    fn visible_view_infinite_scroll_returns_loaded_count_rows() {
+        let mut s = make_state(); // 3 rows
+        s.pagination_mode = PaginationMode::InfiniteScroll;
+        s.loaded_row_count = 2;
+        let view = visible_view(&s);
+        assert_eq!(view.len(), 2);
+    }
+
+    #[test]
+    fn visible_view_infinite_scroll_loaded_count_zero_returns_empty() {
+        let mut s = make_state();
+        s.pagination_mode = PaginationMode::InfiniteScroll;
+        s.loaded_row_count = 0;
+        let view = visible_view(&s);
+        assert!(view.is_empty());
+    }
+
+    #[test]
+    fn visible_view_infinite_scroll_loaded_count_gt_total_clamps() {
+        let mut s = make_state(); // 3 rows
+        s.pagination_mode = PaginationMode::InfiniteScroll;
+        s.loaded_row_count = 999;
+        let view = visible_view(&s);
+        assert_eq!(view.len(), 3);
+    }
+
+    #[test]
+    fn visible_rows_and_ids_delegate_to_visible_view() {
+        let mut s = make_state();
+        s.pagination_mode = PaginationMode::InfiniteScroll;
+        s.loaded_row_count = 2;
+        let view = visible_view(&s);
+        let rows = visible_rows(&s);
+        let ids = visible_row_ids(&s);
+        assert_eq!(rows.len(), view.len());
+        assert_eq!(ids.len(), view.len());
+        for (i, (id, row)) in view.iter().enumerate() {
+            assert_eq!(ids[i], *id);
+            assert_eq!(rows[i], *row);
+        }
     }
 }

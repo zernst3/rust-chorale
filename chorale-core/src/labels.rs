@@ -74,6 +74,11 @@ pub struct Labels {
     // Empty state
     /// Message shown when all rows are filtered out. Default: `"No rows match the current filter."`.
     pub no_rows_label: String,
+
+    // Infinite scroll
+    /// Loading indicator shown at the bottom of an infinite-scroll table when
+    /// more rows are available. Default: `"Loading more rows…"`.
+    pub load_more_label: String,
 }
 
 impl Default for Labels {
@@ -95,6 +100,7 @@ impl Default for Labels {
             sort_descending_label: "Sort descending".into(),
             sort_none_label: "Unsorted".into(),
             no_rows_label: "No rows match the current filter.".into(),
+            load_more_label: "Loading more rows\u{2026}".into(),
         }
     }
 }
@@ -118,6 +124,7 @@ impl std::fmt::Debug for Labels {
             .field("sort_descending_label", &self.sort_descending_label)
             .field("sort_none_label", &self.sort_none_label)
             .field("no_rows_label", &self.no_rows_label)
+            .field("load_more_label", &self.load_more_label)
             .finish()
     }
 }
@@ -140,6 +147,7 @@ impl PartialEq for Labels {
             && self.sort_descending_label == other.sort_descending_label
             && self.sort_none_label == other.sort_none_label
             && self.no_rows_label == other.no_rows_label
+            && self.load_more_label == other.load_more_label
     }
 }
 
@@ -187,8 +195,7 @@ mod tests {
         let a = Labels::default();
         let b = Labels::default();
         assert_ne!(
-            a,
-            b,
+            a, b,
             "independently constructed defaults have different Arc pointers for page_count"
         );
     }

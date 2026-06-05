@@ -132,6 +132,24 @@ pub enum SortDirection {
     Desc,
 }
 
+/// How the table exposes rows to the user.
+///
+/// `PaginationMode` is `#[non_exhaustive]` so additional modes (e.g. cursor-based
+/// server pagination) can be added in future minor releases without breaking
+/// existing match arms.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PaginationMode {
+    /// Rows divided into fixed-size pages (v0.1.0 behavior). **Default.**
+    #[default]
+    Pages,
+    /// Rows accumulate as the user scrolls; no explicit page boundary.
+    ///
+    /// `loaded_row_count` in `TableState` tracks how many rows are currently
+    /// visible. `load_more_rows` increases it by `page_size` per call.
+    InfiniteScroll,
+}
+
 /// How a sort toggle should behave: replace the entire sort list or append to it.
 ///
 /// Passed as the `action` argument to [`crate::toggle_sort`].

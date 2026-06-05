@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::column::ColumnDef;
-use crate::types::{ColumnId, EditTarget, FilterValue, RowId, SortState};
+use crate::types::{ColumnId, EditTarget, FilterValue, PaginationMode, RowId, SortState};
 
 /// The result of `visible_window()`: which rows to render and how large the
 /// top/bottom spacer divs should be so the scrollbar reflects the full list.
@@ -50,6 +50,12 @@ pub struct TableState<TRow: Clone> {
     pub column_visibility: HashMap<ColumnId, bool>,
     /// Column width overrides in px. Missing entry = `initial_width` or auto.
     pub column_widths: HashMap<ColumnId, f64>,
+    /// Explicit column render order.
+    ///
+    /// Empty (default) = definition order. When non-empty, columns render in
+    /// this order; IDs not listed are appended at the end in definition order
+    /// so newly-added columns always appear.
+    pub column_order: Vec<ColumnId>,
     /// Which cell (if any) is currently open for in-cell editing.
     ///
     /// `start_edit` sets this; `commit_edit` and `cancel_edit` clear it.
@@ -73,6 +79,15 @@ pub struct TableState<TRow: Clone> {
     /// Number of rows to render beyond the visible window on each side
     /// (overscan). Defaults to 3 per recon-2 § 2.
     pub buffer_rows: usize,
+    /// Whether rows are shown in fixed-size pages or accumulated via scroll.
+    ///
+    /// Defaults to `PaginationMode::Pages` (v0.1.0 behavior). Set to
+    /// `PaginationMode::InfiniteScroll` to enable the accumulating-rows mode.
+    pub pagination_mode: PaginationMode,
+    /// In `PaginationMode::InfiniteScroll`, how many post-filter-sort rows are
+    /// currently "loaded" (visible to the user). Grows by `page_size` each
+    /// time `load_more_rows` is called. In `Pages` mode, always 0.
+    pub loaded_row_count: usize,
 }
 
 impl<TRow: Clone + std::fmt::Debug> std::fmt::Debug for TableState<TRow> {
@@ -86,12 +101,15 @@ impl<TRow: Clone + std::fmt::Debug> std::fmt::Debug for TableState<TRow> {
             .field("page_size", &self.page_size)
             .field("column_visibility", &self.column_visibility)
             .field("column_widths", &self.column_widths)
+            .field("column_order", &self.column_order)
             .field("editing", &self.editing)
             .field("row_heights", &self.row_heights)
             .field("scroll_top", &self.scroll_top)
             .field("viewport_height", &self.viewport_height)
             .field("row_height", &self.row_height)
             .field("buffer_rows", &self.buffer_rows)
+            .field("pagination_mode", &self.pagination_mode)
+            .field("loaded_row_count", &self.loaded_row_count)
             .finish_non_exhaustive()
     }
 }
@@ -108,12 +126,15 @@ impl<TRow: Clone> Clone for TableState<TRow> {
             page_size: self.page_size,
             column_visibility: self.column_visibility.clone(),
             column_widths: self.column_widths.clone(),
+            column_order: self.column_order.clone(),
             editing: self.editing,
             row_heights: self.row_heights.clone(),
             scroll_top: self.scroll_top,
             viewport_height: self.viewport_height,
             row_height: self.row_height,
             buffer_rows: self.buffer_rows,
+            pagination_mode: self.pagination_mode,
+            loaded_row_count: self.loaded_row_count,
         }
     }
 }
@@ -149,12 +170,15 @@ impl<TRow: Clone> TableState<TRow> {
             page_size: 50,
             column_visibility: HashMap::new(),
             column_widths: HashMap::new(),
+            column_order: vec![],
             editing: None,
             row_heights: HashMap::new(),
             scroll_top: 0.0,
             viewport_height: 500.0,
             row_height: 40.0,
             buffer_rows: 3,
+            pagination_mode: PaginationMode::Pages,
+            loaded_row_count: 0,
         }
     }
 

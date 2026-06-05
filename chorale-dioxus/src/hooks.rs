@@ -1,9 +1,10 @@
 //! Dioxus hooks for chorale tables.
 
 use chorale_core::{
-    clear_sort, move_column, remove_sort, set_column_visibility, set_column_width, set_filter,
-    set_page, set_page_size, set_scroll, set_selection, toggle_select_all, toggle_sort,
-    update_row, ColumnId, FilterValue, RowId, SortAction, StateError, TableState,
+    clear_sort, load_more_rows, move_column, remove_sort, set_column_visibility, set_column_width,
+    set_filter, set_page, set_page_size, set_pagination_mode, set_scroll, set_selection,
+    toggle_select_all, toggle_sort, update_row, ColumnId, FilterValue, PaginationMode, RowId,
+    SortAction, StateError, TableState,
 };
 use dioxus::prelude::*;
 
@@ -166,6 +167,18 @@ impl<TRow: Clone + 'static> UseTableHandle<TRow> {
     /// Returns [`StateError::UnknownColumnId`] if `column_id` is not found.
     pub fn move_column(&self, column_id: ColumnId, to_index: usize) -> Result<(), StateError> {
         self.try_dispatch(|s| move_column(s, column_id, to_index))
+    }
+
+    /// Switch between `PaginationMode::Pages` and `PaginationMode::InfiniteScroll`.
+    pub fn set_pagination_mode(&self, mode: PaginationMode) {
+        self.dispatch(|s| set_pagination_mode(s, mode));
+    }
+
+    /// Increase `loaded_row_count` by `page_size`, capped at filtered row count.
+    ///
+    /// No-op (silently discarded) in `PaginationMode::Pages`.
+    pub fn load_more_rows(&self) {
+        self.try_dispatch(load_more_rows).ok();
     }
 
     // -------------------------------------------------------------------------

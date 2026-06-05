@@ -5,11 +5,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use chorale_core::{
-    batch_record_row_heights, cancel_edit, commit_edit, frozen_left_columns,
-    frozen_right_columns, next_editable_cell, prev_editable_cell, scrollable_columns, to_csv,
-    visible_view, visible_window, visible_window_variable, Alignment, BadgeVariantMap, CellValue,
-    ColumnDef, ColumnId, CommittedEdit, CurrencyCode, EditorKind, FilterKind, FilterValue,
-    Labels, RenderKind, RowId, SortAction, SortDirection, SortState, TableState, VirtualWindow,
+    batch_record_row_heights, cancel_edit, commit_edit, frozen_left_columns, frozen_right_columns,
+    next_editable_cell, prev_editable_cell, scrollable_columns, to_csv, visible_view,
+    visible_window, visible_window_variable, Alignment, BadgeVariantMap, CellValue, ColumnDef,
+    ColumnId, CommittedEdit, CurrencyCode, EditorKind, FilterKind, FilterValue, Labels,
+    PaginationMode, RenderKind, RowId, SortAction, SortDirection, SortState, TableState,
+    VirtualWindow,
 };
 use dioxus::prelude::*;
 
@@ -134,7 +135,12 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     /// CSS `z-index` applied to frozen column cells (header, filter row, and body).
     /// Raise if custom cell renderers use `z-index` internally.
     /// Default is `2` (above scrollable columns, which use no explicit z-index).
-    #[props(default = 2)] frozen_column_z_index: i32,
+    #[props(default = 2)]
+    frozen_column_z_index: i32,
+    /// Distance from the scroll container bottom (px) at which to fire
+    /// `load_more_rows` in `PaginationMode::InfiniteScroll`. Default is `200`.
+    #[props(default = 200.0_f64)]
+    infinite_scroll_threshold_px: f64,
 ) -> Element {
     let labels = labels.clone().unwrap_or_default();
 
@@ -181,6 +187,7 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
         (
             s.page,
             s.page_size,
+            s.loaded_row_count,
             s.sort.clone(),
             s.filters.clone(),
             s.rows.len(),
@@ -310,18 +317,12 @@ dioxus.send(parts.join('\n'));"
     // Split into frozen-left, scrollable, frozen-right zones. Render order:
     // left-frozen | scrollable | right-frozen. This is required for CSS
     // `position: sticky` to work correctly (Decision #2 from Item 10 spec).
-    let left_frozen: Vec<ColumnDef<TRow>> = frozen_left_columns(&state)
-        .into_iter()
-        .cloned()
-        .collect();
-    let scrollable: Vec<ColumnDef<TRow>> = scrollable_columns(&state)
-        .into_iter()
-        .cloned()
-        .collect();
-    let right_frozen: Vec<ColumnDef<TRow>> = frozen_right_columns(&state)
-        .into_iter()
-        .cloned()
-        .collect();
+    let left_frozen: Vec<ColumnDef<TRow>> =
+        frozen_left_columns(&state).into_iter().cloned().collect();
+    let scrollable: Vec<ColumnDef<TRow>> =
+        scrollable_columns(&state).into_iter().cloned().collect();
+    let right_frozen: Vec<ColumnDef<TRow>> =
+        frozen_right_columns(&state).into_iter().cloned().collect();
 
     // Per-column sticky CSS (position + offset + z-index + optional divider shadow).
     // Two maps: header cells keep their own background (from base style) so we inject
@@ -335,7 +336,9 @@ dioxus.send(parts.join('\n'));"
         let mut left_offset = 0.0f64;
         let left_count = left_frozen.len();
         for (k, col) in left_frozen.iter().enumerate() {
-            let col_w = widths.get(&col.id).copied()
+            let col_w = widths
+                .get(&col.id)
+                .copied()
                 .or(col.initial_width)
                 .unwrap_or(150.0);
             let is_last = k + 1 == left_count;
@@ -360,7 +363,9 @@ dioxus.send(parts.join('\n'));"
     {
         let mut right_offset = 0.0f64;
         for (j, col) in right_frozen.iter().enumerate().rev() {
-            let col_w = widths.get(&col.id).copied()
+            let col_w = widths
+                .get(&col.id)
+                .copied()
                 .or(col.initial_width)
                 .unwrap_or(150.0);
             let is_first = j == 0;
@@ -394,6 +399,8 @@ dioxus.send(parts.join('\n'));"
     let total_pages = state.total_pages();
     let page_idx = state.page; // zero-based
     let total_rows = state.filtered_row_count();
+    let is_infinite_scroll = state.pagination_mode == PaginationMode::InfiniteScroll;
+    let has_more_rows = is_infinite_scroll && view_read.len() < total_rows;
     let col_count = visible_cols.len();
     let effective_col_count = col_count + usize::from(selection_enabled);
     let row_height = state.row_height;
@@ -473,7 +480,19 @@ dioxus.send(parts.join('\n'));"
                 style: "overflow-y: auto; overflow-x: auto; overflow-anchor: none; \
                         height: {viewport_height}px;",
                 onscroll: move |e| {
-                    handle.set_scroll(e.scroll_top());
+                    let st = e.scroll_top();
+                    handle.set_scroll(st);
+                    // Infinite scroll: trigger load_more_rows when within threshold of the bottom.
+                    let sig_for_scroll = handle.signal();
+                    let s = sig_for_scroll.read();
+                    if s.pagination_mode == PaginationMode::InfiniteScroll {
+                        let total_h = s.loaded_row_count as f64 * s.row_height;
+                        let dist = total_h - st - s.viewport_height;
+                        if dist < infinite_scroll_threshold_px {
+                            drop(s);
+                            handle.load_more_rows();
+                        }
+                    }
                 },
 
                 table {
@@ -544,60 +563,72 @@ dioxus.send(parts.join('\n'));"
                 }
             }
 
-            div {
-                style: "padding: 0.5rem 1rem; display: flex; align-items: center; \
-                        flex-wrap: wrap; gap: 0.25rem; border-top: 1px solid #ddd; \
-                        background: #fafafa; font-size: 0.875rem; color: #555;",
-                button {
-                    style: if prev_disabled { "{nav_btn_dis}" } else { "{nav_btn}" },
-                    disabled: prev_disabled,
-                    onclick: move |_| { handle.set_page(page_idx.saturating_sub(1)).ok(); },
-                    "{labels.previous_page_label}"
+            if is_infinite_scroll {
+                if has_more_rows {
+                    div {
+                        style: "padding: 0.75rem 1rem; text-align: center; \
+                                border-top: 1px solid #ddd; background: #fafafa; \
+                                font-size: 0.875rem; color: #999;",
+                        "{labels.load_more_label}"
+                    }
                 }
-                for item in page_buttons {
-                    {render_page_btn(item, page_idx, handle)}
-                }
-                button {
-                    style: if next_disabled { "{nav_btn_dis}" } else { "{nav_btn}" },
-                    disabled: next_disabled,
-                    onclick: move |_| {
-                        if page_idx + 1 < total_pages {
-                            handle.set_page(page_idx + 1).ok();
-                        }
-                    },
-                    "{labels.next_page_label}"
-                }
-                span { style: "margin-left: 0.5rem; color: #999;", "\u{00b7}" }
-                span { "{total_rows} rows" }
-                if total_pages > 1 {
-                    span { style: "margin-left: 0.5rem; color: #999;", "\u{00b7}" }
-                    GotoPageInput::<TRow> { handle, total_pages, labels: labels.clone() }
-                }
-                if csv_export {
-                    span { style: "flex: 1;" }
+            } else {
+                div {
+                    style: "padding: 0.5rem 1rem; display: flex; align-items: center; \
+                            flex-wrap: wrap; gap: 0.25rem; border-top: 1px solid #ddd; \
+                            background: #fafafa; font-size: 0.875rem; color: #555;",
                     button {
-                        style: "padding:0.25rem 0.75rem;border:1px solid #4a90e2;border-radius:3px;\
-                                font-size:0.875rem;cursor:pointer;background:white;color:#4a90e2;",
+                        style: if prev_disabled { "{nav_btn_dis}" } else { "{nav_btn}" },
+                        disabled: prev_disabled,
+                        onclick: move |_| { handle.set_page(page_idx.saturating_sub(1)).ok(); },
+                        "{labels.previous_page_label}"
+                    }
+                    for item in page_buttons {
+                        {render_page_btn(item, page_idx, handle)}
+                    }
+                    button {
+                        style: if next_disabled { "{nav_btn_dis}" } else { "{nav_btn}" },
+                        disabled: next_disabled,
                         onclick: move |_| {
-                            let sig = handle.signal();
-                            let csv = to_csv(&*sig.read());
-                            spawn(async move {
-                                let js = dioxus::document::eval(r"
-                                    const csv = await dioxus.recv();
-                                    const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
-                                    const url = URL.createObjectURL(blob);
-                                    const a = document.createElement('a');
-                                    a.href = url;
-                                    a.download = 'chorale-export.csv';
-                                    document.body.appendChild(a);
-                                    a.click();
-                                    document.body.removeChild(a);
-                                    URL.revokeObjectURL(url);
-                                ");
-                                let _ = js.send(csv);
-                            });
+                            if page_idx + 1 < total_pages {
+                                handle.set_page(page_idx + 1).ok();
+                            }
                         },
-                        "{labels.export_csv_label}"
+                        "{labels.next_page_label}"
+                    }
+                    span { style: "margin-left: 0.5rem; color: #999;", "\u{00b7}" }
+                    span { "{total_rows} rows" }
+                    if total_pages > 1 {
+                        span { style: "margin-left: 0.5rem; color: #999;", "\u{00b7}" }
+                        GotoPageInput::<TRow> { handle, total_pages, labels: labels.clone() }
+                    }
+                    if csv_export {
+                        span { style: "flex: 1;" }
+                        button {
+                            style: "padding:0.25rem 0.75rem;border:1px solid #4a90e2;\
+                                    border-radius:3px;font-size:0.875rem;cursor:pointer;\
+                                    background:white;color:#4a90e2;",
+                            onclick: move |_| {
+                                let sig = handle.signal();
+                                let csv = to_csv(&*sig.read());
+                                spawn(async move {
+                                    let js = dioxus::document::eval(r"
+                                        const csv = await dioxus.recv();
+                                        const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+                                        const url = URL.createObjectURL(blob);
+                                        const a = document.createElement('a');
+                                        a.href = url;
+                                        a.download = 'chorale-export.csv';
+                                        document.body.appendChild(a);
+                                        a.click();
+                                        document.body.removeChild(a);
+                                        URL.revokeObjectURL(url);
+                                    ");
+                                    let _ = js.send(csv);
+                                });
+                            },
+                            "{labels.export_csv_label}"
+                        }
                     }
                 }
             }
@@ -689,7 +720,10 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
     let initial_width = col.initial_width;
 
     // Find this column's sort entry (if any) across the whole multi-sort list.
-    let sort_entry = current_sort.iter().enumerate().find(|(_, s)| s.column == col_id);
+    let sort_entry = current_sort
+        .iter()
+        .enumerate()
+        .find(|(_, s)| s.column == col_id);
     let sort_arrow = if is_sortable {
         match sort_entry.map(|(_, s)| s.direction) {
             Some(SortDirection::Asc) => " \u{2191}",

@@ -9,7 +9,8 @@ use std::collections::HashMap;
 use crate::error::StateError;
 use crate::state::TableState;
 use crate::types::{
-    ColumnId, EditTarget, FilterValue, PriorEdit, RowId, SortAction, SortDirection, SortState,
+    ColumnId, EditTarget, FilterValue, PaginationMode, PriorEdit, RowId, SortAction, SortDirection,
+    SortState,
 };
 
 /// Cycle the sort state for `col` using `action` to determine replace vs append.
@@ -45,21 +46,21 @@ pub fn toggle_sort<TRow: Clone>(
     action: SortAction,
 ) -> TableState<TRow> {
     let next_sort = match action {
-        SortAction::Replace => {
-            match state.sort.first() {
-                Some(s) if s.column == col => match s.direction {
-                    SortDirection::Asc => vec![SortState::new(col, SortDirection::Desc)],
-                    SortDirection::Desc => vec![],
-                },
-                _ => vec![SortState::new(col, SortDirection::Asc)],
-            }
-        }
+        SortAction::Replace => match state.sort.first() {
+            Some(s) if s.column == col => match s.direction {
+                SortDirection::Asc => vec![SortState::new(col, SortDirection::Desc)],
+                SortDirection::Desc => vec![],
+            },
+            _ => vec![SortState::new(col, SortDirection::Asc)],
+        },
         SortAction::Append => {
             let mut next = state.sort.clone();
             if let Some(pos) = next.iter().position(|s| s.column == col) {
                 match next[pos].direction {
                     SortDirection::Asc => next[pos] = SortState::new(col, SortDirection::Desc),
-                    SortDirection::Desc => { next.remove(pos); }
+                    SortDirection::Desc => {
+                        next.remove(pos);
+                    }
                 }
             } else {
                 next.push(SortState::new(col, SortDirection::Asc));
@@ -67,11 +68,18 @@ pub fn toggle_sort<TRow: Clone>(
             next
         }
     };
+    // Reset loaded_row_count when in InfiniteScroll mode (filter set changes the row set).
+    let loaded_row_count = if state.pagination_mode == PaginationMode::InfiniteScroll {
+        state.page_size
+    } else {
+        0
+    };
     // Clear the variable-row-height cache: row indices shift on sort (VIRT-2).
     TableState {
         sort: next_sort,
         scroll_top: 0.0,
         page: 0,
+        loaded_row_count,
         row_heights: HashMap::new(),
         ..state.clone()
     }
@@ -84,10 +92,16 @@ pub fn toggle_sort<TRow: Clone>(
 pub fn remove_sort<TRow: Clone>(state: &TableState<TRow>, col: ColumnId) -> TableState<TRow> {
     let mut next_sort = state.sort.clone();
     next_sort.retain(|s| s.column != col);
+    let loaded_row_count = if state.pagination_mode == PaginationMode::InfiniteScroll {
+        state.page_size
+    } else {
+        0
+    };
     TableState {
         sort: next_sort,
         scroll_top: 0.0,
         page: 0,
+        loaded_row_count,
         row_heights: HashMap::new(),
         ..state.clone()
     }
@@ -96,10 +110,16 @@ pub fn remove_sort<TRow: Clone>(state: &TableState<TRow>, col: ColumnId) -> Tabl
 /// Clear all active sort columns.
 #[must_use]
 pub fn clear_sort<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    let loaded_row_count = if state.pagination_mode == PaginationMode::InfiniteScroll {
+        state.page_size
+    } else {
+        0
+    };
     TableState {
         sort: vec![],
         scroll_top: 0.0,
         page: 0,
+        loaded_row_count,
         row_heights: HashMap::new(),
         ..state.clone()
     }
@@ -109,7 +129,8 @@ pub fn clear_sort<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
 ///
 /// `filter = None` removes any existing filter on the column.
 /// Resets `scroll_top` and `page` to 0 because the row count may change
-/// (recon-2 § 5).
+/// (recon-2 § 5). In `PaginationMode::InfiniteScroll`, also resets
+/// `loaded_row_count` to `page_size` so the scroll list starts fresh.
 ///
 /// # Example
 ///
@@ -140,11 +161,17 @@ pub fn set_filter<TRow: Clone>(
             filters.remove(&col);
         }
     }
+    let loaded_row_count = if state.pagination_mode == PaginationMode::InfiniteScroll {
+        state.page_size
+    } else {
+        0
+    };
     // Clear the variable-row-height cache: filtered row set (and indices) change (VIRT-2).
     TableState {
         filters,
         scroll_top: 0.0,
         page: 0,
+        loaded_row_count,
         row_heights: HashMap::new(),
         ..state.clone()
     }
@@ -215,10 +242,14 @@ pub fn toggle_select_all<TRow: Clone>(state: &TableState<TRow>) -> TableState<TR
 /// # Errors
 ///
 /// Returns `Err(StateError::PageOutOfRange)` if `page >= total_pages()`.
+/// Returns `Err(StateError::InvalidModeForTransition)` in `PaginationMode::InfiniteScroll`.
 pub fn set_page<TRow: Clone>(
     state: &TableState<TRow>,
     page: usize,
 ) -> Result<TableState<TRow>, StateError> {
+    if state.pagination_mode == PaginationMode::InfiniteScroll {
+        return Err(StateError::InvalidModeForTransition);
+    }
     let total = state.total_pages();
     if page >= total {
         return Err(StateError::PageOutOfRange(page));
@@ -597,6 +628,59 @@ pub fn reset_column_order<TRow: Clone>(state: &TableState<TRow>) -> TableState<T
 }
 
 // ---------------------------------------------------------------------------
+// Pagination-mode transitions (Item 11.0b)
+// ---------------------------------------------------------------------------
+
+/// Switch between `PaginationMode::Pages` and `PaginationMode::InfiniteScroll`.
+///
+/// **Switching to `InfiniteScroll`:** `loaded_row_count` is initialised to
+/// `page_size` (so the first batch is visible immediately), `page` and
+/// `scroll_top` are reset to 0, and the row-height cache is cleared.
+///
+/// **Switching to `Pages`:** `loaded_row_count` is cleared, `page` is reset
+/// to 0, `scroll_top` to 0, and the row-height cache is cleared.
+#[must_use]
+pub fn set_pagination_mode<TRow: Clone>(
+    state: &TableState<TRow>,
+    mode: PaginationMode,
+) -> TableState<TRow> {
+    let (loaded_row_count, page) = match mode {
+        PaginationMode::InfiniteScroll => (state.page_size, 0),
+        PaginationMode::Pages => (0, 0),
+    };
+    TableState {
+        pagination_mode: mode,
+        loaded_row_count,
+        page,
+        scroll_top: 0.0,
+        row_heights: HashMap::new(),
+        ..state.clone()
+    }
+}
+
+/// Increase the number of loaded rows by `page_size`, capped at the total
+/// filtered row count. Used by adapters to implement "load more on scroll".
+///
+/// Only valid in `PaginationMode::InfiniteScroll`.
+///
+/// # Errors
+///
+/// Returns `Err(StateError::InvalidModeForTransition)` in `PaginationMode::Pages`.
+pub fn load_more_rows<TRow: Clone>(
+    state: &TableState<TRow>,
+) -> Result<TableState<TRow>, StateError> {
+    if state.pagination_mode == PaginationMode::Pages {
+        return Err(StateError::InvalidModeForTransition);
+    }
+    let total = state.filtered_row_count();
+    let next = (state.loaded_row_count + state.page_size).min(total);
+    Ok(TableState {
+        loaded_row_count: next,
+        ..state.clone()
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Tests (TESTS-1: every transition has a unit test asserting the result)
 // ---------------------------------------------------------------------------
 
@@ -614,7 +698,8 @@ mod tests {
     use crate::column::ColumnDef;
     use crate::state::TableState;
     use crate::types::{
-        Alignment, CellValue, ColumnId, FilterValue, RowId, SortAction, SortDirection,
+        Alignment, CellValue, ColumnId, FilterValue, PaginationMode, RowId, SortAction,
+        SortDirection,
     };
 
     // ---- helpers -----------------------------------------------------------
@@ -690,6 +775,8 @@ mod tests {
             viewport_height: 500.0,
             row_height: 40.0,
             buffer_rows: 3,
+            pagination_mode: PaginationMode::Pages,
+            loaded_row_count: 0,
         }
     }
 
@@ -854,10 +941,34 @@ mod tests {
             score: i64,
         }
         let rows = vec![
-            (RowId::new(), Row { dept: "B", score: 5 }),
-            (RowId::new(), Row { dept: "A", score: 20 }),
-            (RowId::new(), Row { dept: "B", score: 30 }),
-            (RowId::new(), Row { dept: "A", score: 10 }),
+            (
+                RowId::new(),
+                Row {
+                    dept: "B",
+                    score: 5,
+                },
+            ),
+            (
+                RowId::new(),
+                Row {
+                    dept: "A",
+                    score: 20,
+                },
+            ),
+            (
+                RowId::new(),
+                Row {
+                    dept: "B",
+                    score: 30,
+                },
+            ),
+            (
+                RowId::new(),
+                Row {
+                    dept: "A",
+                    score: 10,
+                },
+            ),
         ];
         let cols = vec![
             crate::column::ColumnDef::new(ColumnId("dept"), "Dept", |r: &Row| {
@@ -872,7 +983,7 @@ mod tests {
         let s = TableState::new(rows, cols);
         let s = toggle_sort(&s, ColumnId("dept"), SortAction::Append); // dept ASC
         let s = toggle_sort(&s, ColumnId("score"), SortAction::Append); // score ASC
-        // Flip score to DESC.
+                                                                        // Flip score to DESC.
         let s = toggle_sort(&s, ColumnId("score"), SortAction::Append);
         let view = visible_view(&s);
         let depts: Vec<&str> = view.iter().map(|(_, r)| r.dept).collect();
@@ -1382,12 +1493,24 @@ mod tests {
 
     // ---- column order (Item 9) ---------------------------------------------
 
-    fn col_a() -> ColumnId { ColumnId("a") }
-    fn col_b() -> ColumnId { ColumnId("b") }
-    fn col_c() -> ColumnId { ColumnId("c") }
+    fn col_a() -> ColumnId {
+        ColumnId("a")
+    }
+    fn col_b() -> ColumnId {
+        ColumnId("b")
+    }
+    fn col_c() -> ColumnId {
+        ColumnId("c")
+    }
 
     fn make_order_state() -> TableState<TestRow> {
-        let rows = vec![(RowId::new(), TestRow { name: "R".into(), score: 1.0 })];
+        let rows = vec![(
+            RowId::new(),
+            TestRow {
+                name: "R".into(),
+                score: 1.0,
+            },
+        )];
         let columns = vec![
             ColumnDef::new(col_a(), "A", |r: &TestRow| CellValue::Text(r.name.clone())),
             ColumnDef::new(col_b(), "B", |r: &TestRow| CellValue::Float(r.score)),
@@ -1407,14 +1530,20 @@ mod tests {
     fn set_column_order_unknown_id_returns_err() {
         let s = make_order_state();
         let result = set_column_order(&s, vec![ColumnId("unknown")]);
-        assert!(matches!(result, Err(crate::error::StateError::UnknownColumnId(_))));
+        assert!(matches!(
+            result,
+            Err(crate::error::StateError::UnknownColumnId(_))
+        ));
     }
 
     #[test]
     fn set_column_order_duplicate_returns_err() {
         let s = make_order_state();
         let result = set_column_order(&s, vec![col_a(), col_a()]);
-        assert!(matches!(result, Err(crate::error::StateError::DuplicateColumnId(_))));
+        assert!(matches!(
+            result,
+            Err(crate::error::StateError::DuplicateColumnId(_))
+        ));
     }
 
     #[test]
@@ -1445,7 +1574,10 @@ mod tests {
     fn move_column_unknown_id_returns_err() {
         let s = make_order_state();
         let result = move_column(&s, ColumnId("nope"), 0);
-        assert!(matches!(result, Err(crate::error::StateError::UnknownColumnId(_))));
+        assert!(matches!(
+            result,
+            Err(crate::error::StateError::UnknownColumnId(_))
+        ));
     }
 
     #[test]
@@ -1486,5 +1618,117 @@ mod tests {
         assert_eq!(s3.column_order[0], col_c());
         assert_eq!(s3.column_order[1], col_a());
         assert_eq!(s3.column_order[2], col_b());
+    }
+
+    // ---- set_pagination_mode (Item 11.0b) ------------------------------------
+
+    #[test]
+    fn set_pagination_mode_pages_to_infinite_scroll() {
+        let s = make_state(); // page_size=10
+        let s2 = set_pagination_mode(&s, PaginationMode::InfiniteScroll);
+        assert_eq!(s2.pagination_mode, PaginationMode::InfiniteScroll);
+        assert_eq!(s2.loaded_row_count, s.page_size); // initialised to page_size
+        assert_eq!(s2.page, 0);
+        assert!((s2.scroll_top - 0.0).abs() < f64::EPSILON);
+        assert!(s2.row_heights.is_empty());
+    }
+
+    #[test]
+    fn set_pagination_mode_infinite_scroll_to_pages() {
+        let mut s = make_state();
+        s.pagination_mode = PaginationMode::InfiniteScroll;
+        s.loaded_row_count = 30;
+        s.page = 2;
+        let s2 = set_pagination_mode(&s, PaginationMode::Pages);
+        assert_eq!(s2.pagination_mode, PaginationMode::Pages);
+        assert_eq!(s2.loaded_row_count, 0);
+        assert_eq!(s2.page, 0);
+    }
+
+    #[test]
+    fn set_pagination_mode_clears_row_height_cache() {
+        let s = record_row_height(&make_state(), 0, 55.0);
+        let s2 = set_pagination_mode(&s, PaginationMode::InfiniteScroll);
+        assert!(s2.row_heights.is_empty());
+    }
+
+    // ---- load_more_rows (Item 11.0b) -----------------------------------------
+
+    #[test]
+    fn load_more_rows_errors_in_pages_mode() {
+        let s = make_state();
+        assert_eq!(s.pagination_mode, PaginationMode::Pages);
+        let err = load_more_rows(&s).unwrap_err();
+        assert_eq!(err, StateError::InvalidModeForTransition);
+    }
+
+    #[test]
+    fn load_more_rows_increases_by_page_size() {
+        let mut s = make_state(); // 3 rows, page_size=10
+        s.pagination_mode = PaginationMode::InfiniteScroll;
+        s.loaded_row_count = 0;
+        let s2 = load_more_rows(&s).unwrap();
+        // capped at filtered_row_count (3) since page_size (10) > 3
+        assert_eq!(s2.loaded_row_count, 3);
+    }
+
+    #[test]
+    fn load_more_rows_caps_at_filtered_row_count() {
+        let mut s = make_state(); // 3 rows
+        s.pagination_mode = PaginationMode::InfiniteScroll;
+        s.page_size = 2;
+        s.loaded_row_count = 2; // already loaded first batch
+        let s2 = load_more_rows(&s).unwrap();
+        assert_eq!(s2.loaded_row_count, 3); // 2+2=4 capped at 3
+    }
+
+    #[test]
+    fn load_more_rows_at_max_does_not_exceed() {
+        let mut s = make_state(); // 3 rows
+        s.pagination_mode = PaginationMode::InfiniteScroll;
+        s.loaded_row_count = 3; // already at max
+        let s2 = load_more_rows(&s).unwrap();
+        assert_eq!(s2.loaded_row_count, 3);
+    }
+
+    // ---- set_page in InfiniteScroll mode (Item 11.0b) ------------------------
+
+    #[test]
+    fn set_page_errors_in_infinite_scroll_mode() {
+        let mut s = make_state();
+        s.pagination_mode = PaginationMode::InfiniteScroll;
+        let err = set_page(&s, 0).unwrap_err();
+        assert_eq!(err, StateError::InvalidModeForTransition);
+    }
+
+    // ---- set_filter resets loaded_row_count in InfiniteScroll (Item 11.0b) --
+
+    #[test]
+    fn set_filter_resets_loaded_row_count_in_infinite_scroll() {
+        let mut s = make_state(); // page_size=10
+        s.pagination_mode = PaginationMode::InfiniteScroll;
+        s.loaded_row_count = 30;
+        let s2 = set_filter(&s, col_name(), Some(FilterValue::Text("ali".into())));
+        assert_eq!(s2.loaded_row_count, s.page_size); // reset to page_size
+        assert_eq!(s2.page, 0);
+    }
+
+    #[test]
+    fn set_filter_loaded_row_count_unchanged_in_pages_mode() {
+        let s = make_state();
+        assert_eq!(s.pagination_mode, PaginationMode::Pages);
+        let s2 = set_filter(&s, col_name(), Some(FilterValue::Text("ali".into())));
+        assert_eq!(s2.loaded_row_count, 0); // Pages mode: always 0
+    }
+
+    // ---- toggle_sort resets loaded_row_count in InfiniteScroll (Item 11.0b) -
+
+    #[test]
+    fn toggle_sort_resets_loaded_row_count_in_infinite_scroll() {
+        let mut s = make_state(); // page_size=10
+        s.pagination_mode = PaginationMode::InfiniteScroll;
+        s.loaded_row_count = 30;
+        let s2 = toggle_sort(&s, col_name(), SortAction::Replace);
+        assert_eq!(s2.loaded_row_count, s.page_size);
     }
 }

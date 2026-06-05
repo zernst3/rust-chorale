@@ -157,6 +157,14 @@ pub use types::SortDirection;
 /// `Append` for Shift+click (multi-column: adds/flips/removes without clearing others).
 pub use types::SortAction;
 
+/// Whether the table renders in discrete pages or accumulates rows via infinite scroll.
+///
+/// `Pages` (default): the classic pager — `set_page`, `total_pages`, and the
+/// pagination bar are active. `InfiniteScroll`: `visible_view` returns the
+/// first `loaded_row_count` rows; `load_more_rows` grows that window by
+/// `page_size` on each adapter scroll-threshold event.
+pub use types::PaginationMode;
+
 /// Active sort on a single column: `column: ColumnId` + `direction: SortDirection`.
 pub use types::SortState;
 
@@ -171,12 +179,12 @@ pub use types::CurrencyCode;
 
 // ---- Errors ---------------------------------------------------------------
 
-/// Errors from fallible state transitions (`set_page`, `set_page_size`,
-/// `set_column_width`, `set_column_order`, `move_column`).
+/// Errors from fallible state transitions.
 ///
 /// One variant per distinct failure mode (ROBUSTNESS-1):
 /// `PageOutOfRange`, `PageSizeZero`, `InvalidColumnWidth`,
-/// `ColumnNotEditable`, `UnknownColumnId`, `DuplicateColumnId`.
+/// `ColumnNotEditable`, `UnknownColumnId`, `DuplicateColumnId`,
+/// `InvalidModeForTransition`.
 pub use error::StateError;
 
 // ---- Labels ---------------------------------------------------------------
@@ -303,6 +311,19 @@ pub use transitions::move_column;
 
 /// Reset to definition order by clearing `column_order`.
 pub use transitions::reset_column_order;
+
+/// Switch the table between `PaginationMode::Pages` and `PaginationMode::InfiniteScroll`.
+///
+/// Switching to `InfiniteScroll` initialises `loaded_row_count = page_size` and resets
+/// page/scroll. Switching to `Pages` clears `loaded_row_count` and resets page/scroll.
+pub use transitions::set_pagination_mode;
+
+/// Increase `loaded_row_count` by `page_size` (capped at filtered row count).
+///
+/// Only valid in `PaginationMode::InfiniteScroll`; returns
+/// `Err(InvalidModeForTransition)` in `Pages` mode. Adapters call this from
+/// a scroll-threshold handler to implement infinite-scroll load-more.
+pub use transitions::load_more_rows;
 
 // ---- Views ----------------------------------------------------------------
 
