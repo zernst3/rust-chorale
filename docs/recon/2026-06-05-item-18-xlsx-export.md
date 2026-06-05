@@ -314,3 +314,79 @@ Per TESTS-1:
    behavior for adapter users while keeping the core dep tree thin for non-WASM consumers
    of chorale-core (e.g., a server-side Rust app that uses chorale-core for table logic
    but doesn't need XLSX). Confirm feature-flag approach and name.
+
+## Decisions (signed off 2026-06-05)
+
+All 7 recommendations accepted, with **a substantive scope upgrade**: XLSX
+export ships with **auto-inferred styling** in v0.2.0 rather than
+values-only. The memo title remains "XLSX Export (Values-Only)" for
+historical traceability, but implementation goes beyond raw values.
+
+**Reasoning:** Zach's pushback — "if it's only exporting data and not
+styling, that can be deferred to v0.3.0 alongside CSV; otherwise it
+duplicates CSV with no differentiation." The way to ship styled XLSX in
+v0.2.0 without a declarative cell-style system is to **infer styles from
+chorale's existing concepts**. No new public API; column definitions and
+`CellValue` variants drive both the on-screen rendering AND the XLSX
+output.
+
+### Auto-inferred styling map (v0.2.0)
+
+| Source | XLSX style applied |
+|---|---|
+| `CellValue::Number(f64)` | Default number format |
+| `CellValue::Currency(f64, CurrencyCode)` | `"$#,##0.00"` for USD; locale-appropriate symbol for other ISO codes |
+| `CellValue::Percentage(f64)` | `"0.00%"` |
+| `CellValue::Date` / `chrono::NaiveDate` | `"yyyy-mm-dd"` |
+| `CellValue::Boolean(b)` | Center-aligned `"TRUE"` / `"FALSE"` |
+| `ColumnDef.alignment` | XLSX cell alignment (Left/Center/Right) |
+| `ColumnDef.initial_width` | XLSX column width |
+| `ColumnDef.frozen == FrozenSide::Left` | XLSX `freeze_panes` left of this column |
+| `ColumnDef.frozen == FrozenSide::Right` | XLSX `freeze_panes` right of this column |
+| Header row | Bold + background fill `#f8f9fa` (matches the on-screen sticky-header convention) |
+
+This gives users an XLSX they can open in Excel with number formats,
+currency symbols, frozen panes, and column widths preserved. Materially
+different from CSV.
+
+### What's NOT in v0.2.0 (deferred to v0.3.0+)
+- Conditional formatting (e.g., "red cells where value > 100")
+- Per-cell style overrides (declarative rule engine needed first)
+- Custom number format strings
+- Embedded images
+- Multiple sheets per export
+- Formulas
+- Cell comments
+
+Those require a declarative cell-style system in chorale-core that
+v0.2.0 does not introduce.
+
+### Per-question sign-off
+
+1. ✅ `rust_xlsxwriter` crate dep approved. BSD-2-Clause, same author
+   as Perl Excel::Writer::XLSX (25 years). Behind `xlsx` feature flag
+   per DEPS-1.
+2. ✅ Signature = `to_xlsx(state, options) -> Result<Vec<u8>, XlsxError>`
+   (bytes). `write_xlsx(state, options, &mut impl Write)` can layer in
+   additively in v0.3 for server-side streaming.
+3. ✅ `XlsxOptions` struct marked `#[non_exhaustive]` with `Default`
+   impl. Allows v0.3.0 to add fields without breaking callers.
+4. ✅ Sheet name = prop on `XlsxOptions` with default `"Sheet1"`.
+5. ✅ Empty state = headers + empty body (not error). Consistent w/
+   `to_csv`. Filter-to-zero export is a valid result.
+6. ✅ Bold headers default = `true`. Plus header-row background fill
+   (per the auto-inferred styling map above). `bold_headers: false`
+   opts out of bold but keeps the background fill.
+7. ✅ Feature flag = `xlsx`, enabled by default in adapter crates
+   (`chorale-dioxus`, `chorale-leptos`). Thin core for server-side
+   consumers.
+
+### Implementation note for the bot
+
+The XLSX styling inference is mechanical — pattern-match on `CellValue`
+variants and `ColumnDef` fields, map to `rust_xlsxwriter::Format` objects,
+apply per-cell at write time. Reuse the existing column-iteration code
+path from `to_csv`. The header-row styling is one-time at the top of the
+sheet. Frozen panes: at most one freeze split per direction
+(left-frozen + right-frozen are not simultaneously expressible in XLSX;
+prefer left if both are set, log a doc-comment about the limitation).

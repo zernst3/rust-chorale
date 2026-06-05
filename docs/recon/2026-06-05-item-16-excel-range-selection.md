@@ -327,3 +327,39 @@ Per TESTS-1:
    implicitly sets `active_cell` to the anchor as a single combined return. This keeps
    active-cell and range anchor in sync without the adapter having to call two transitions.
    Confirm combined update in one returned state.
+
+## Decisions (signed off 2026-06-05)
+
+All 9 recommendations accepted, with a 10th constraint added: **the fill
+handle routes every filled cell through the existing edit pipeline** so
+backend coordination stays the only source of truth for cell mutations.
+
+1. ✅ `range_selection: Vec<RangeSelection>` (multi-rect from day one).
+2. ✅ Multi-rect copy explicitly errors with
+   `PasteError::MultiRectCopyNotSupported`. Multi-rect supported for
+   visual-select + Delete-to-clear only. Matches Excel + AG Grid.
+3. ✅ Fill handle scope = numeric arithmetic progression only. Date /
+   day-name / month-name progressions defer to v0.3.0.
+4. ✅ Shift+Arrow at boundary = clamp + scroll into view. No wrap.
+5. ✅ Drag-to-select auto-scroll when cursor crosses table rect (rAF
+   loop, 8px/frame).
+6. ✅ Header click selects whole column = respects current filter.
+   Range spans `(0, col_id)` to `(visible_row_count - 1, col_id)`.
+7. ✅ Group headers excluded from range selection. Drag-through skips.
+8. ✅ `start_range_selection` with out-of-bounds row idx = clamp (not
+   error). Robust to adapter coordinate-math off-by-one.
+9. ✅ `start_range_selection` implicitly sets `active_cell` to the
+   anchor as a combined return.
+
+10. ⚙️ **Fill handle write semantics (added 2026-06-05 follow-up):**
+    every cell written by the fill handle routes through the existing
+    Item 7 edit pipeline. Specifically, the fill handle generates a
+    sequence of cells-to-write (numeric arithmetic progression per #3),
+    then writes each via `commit_edit` semantics, which triggers the
+    host's `on_validate_edit` (host may reject) and `on_commit_edit`
+    callbacks. The host handles backend persistence the same way it
+    handles a single-cell edit or a paste. Fill handle does NOT mutate
+    cells autonomously; it generates the to-write list and pumps it
+    through the same single edit pathway. This keeps backend
+    coordination as the only source of truth for cell mutations across
+    paste, fill handle, and (future) cut / delete / Ctrl+D in v0.3.0.

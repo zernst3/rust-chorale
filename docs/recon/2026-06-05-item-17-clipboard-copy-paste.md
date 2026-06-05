@@ -290,3 +290,53 @@ Per TESTS-1:
    Recommendation: include. These let hosts wire persistence (save after paste), analytics,
    and undo history without polling the signal. The API surface is small and additive.
    Confirm v0.2.0.
+
+## Decisions (signed off 2026-06-05)
+
+**Item 17 v0.2.0 scope is narrowed** to copy + paste only. Cut,
+delete-range (Delete key), and Ctrl+D fill-down all DEFER to v0.3.0.
+**Reasoning:** Zach wants the grid to *feel* like Excel but not
+*function* autonomously like Excel — all cell mutations route through
+the backend. Copy is read-only (no backend involvement). Paste's per-cell
+writes route through the existing Item 7 edit pipeline
+(`on_validate_edit` + `on_commit_edit`), so the host controls each API
+call. Cut, delete-range, and Ctrl+D fill-down are deferred until a
+v0.3.0 design pass can decide how multi-cell-clear-via-shortcut should
+hook into the backend.
+
+**Renamed for clarity:** the memo's title remains "Clipboard (Copy /
+Paste / Cut / Delete-Range)" for historical traceability, but
+implementation scope is **Copy + Paste only**.
+
+1. ✅ TSV escaping = minimal Excel-compatible. Tab between cells,
+   newlines-in-cell replaced with spaces, tab-in-cell wrapped in double
+   quotes. Full RFC-4180 can upgrade in v0.3 additively.
+2. ✅ Paste shape mismatch = Excel behavior. Smaller-than-range tiles;
+   larger-than-range expands selection. Both match Excel intuition.
+3. ✅ Per-cell `processCellForClipboard` / `processCellFromClipboard`
+   hooks defer to v0.3.0. v0.2.0 ships a single
+   `clipboard_value_formatter: Option<Arc<dyn Fn(&CellValue, &ColumnId) -> String>>`
+   prop on the adapter component.
+4. ✅ Async `navigator.clipboard` only — no `execCommand` fallback.
+   chorale targets modern browsers (97% async-clipboard coverage as of 2026).
+5. ⏸ DEFERRED — Cut on read-only cells. (Cut itself deferred to v0.3.0.)
+6. ✅ Empty paste payload = no-op. Not "clear range."
+7. ⚙️ **Event props scope-cut:** `on_copy` + `on_paste` props ship in
+   v0.2.0. `on_cut` prop deferred to v0.3.0 alongside cut. Hosts wire
+   persistence on paste, analytics on copy.
+
+**Paste write semantics (added 2026-06-05 follow-up):** every cell
+written by paste routes through the existing Item 7 edit pipeline.
+Specifically, paste decomposes the clipboard TSV into a per-cell
+write list, then for each cell calls `commit_edit` semantics, which
+triggers `on_validate_edit` (host may reject) and `on_commit_edit`
+(host calls backend). The host gets the same hook as a single-cell
+edit, one per pasted cell. Paste does NOT mutate cells autonomously;
+the backend remains the source of truth.
+
+**Items deferred to v0.3.0** (out of this memo's implementation scope):
+- Cut (Ctrl+X)
+- Delete-range (Delete key)
+- Ctrl+D fill-down
+- `on_cut` event prop
+- Per-cell processCellForClipboard / processCellFromClipboard hooks

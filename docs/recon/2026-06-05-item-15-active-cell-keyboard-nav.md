@@ -258,3 +258,25 @@ Per TESTS-1:
    `--chorale-active-cell-outline: 2px solid #0078d4` as a CSS custom property on the
    table container. Hosts override it with their design system color without re-theming the
    whole component. Confirm this approach (vs a prop-based class override).
+
+## Decisions (signed off 2026-06-05)
+
+All 6 recommendations accepted as written. Implementation may proceed.
+
+1. ✅ `active_cell: Option<ActiveCell>` starts as `None` on mount; becomes
+   `Some` on first arrow key OR first click. No auto-focus on mount.
+2. ✅ Row index = `row_idx: usize` (visible position). On filter/sort
+   change, adapter clamps to bounds. Sticky-row-across-sort deferrable
+   to v0.3 if requested.
+3. ✅ Tab merges: single Tab handler moves active cell to next column.
+   Optional `on_tab_to_editable: Option<EventHandler<ActiveCell>>` prop
+   lets host open editor automatically. Supersedes Item 7's
+   editing-only Tab behavior.
+4. ✅ `move_active_cell_page` takes adapter-supplied `page_size: usize`
+   computed from `(viewport_height / row_height).floor() as usize`.
+   Keeps core testable without DOM.
+5. ✅ Ctrl+Home / Ctrl+End = "visible-data-absolute" — first/last cell
+   in the current filter/sort view. Matches Excel filter-aware behavior.
+6. ✅ Focus ring via CSS custom property
+   `--chorale-active-cell-outline: 2px solid #0078d4` on the table
+   container. Hosts override without re-theming.
