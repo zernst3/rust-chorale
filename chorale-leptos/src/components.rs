@@ -9,10 +9,13 @@ use chorale_core::{
     move_active_cell_first, move_active_cell_home, move_active_cell_last, move_active_cell_page,
     move_active_cell_to_edge, scrollable_columns, select_all as select_all_range,
     start_range_selection, to_csv, visible_grouped_view, visible_view, visible_window, ActiveCell,
-    Alignment, CellValue, ColumnDef, ColumnId, CommittedEdit, EditorKind, FilterKind, FilterValue,
-    GroupKey, GroupedPaginationMode, GroupedRow, Labels, NaiveDate, NavDirection, PaginationMode,
-    RenderKind, RowId, SortAction, SortDirection, SortState, TableState, VirtualWindow,
+    Alignment, CellValue, ClipboardCopyEvent, ClipboardPasteEvent, ColumnDef, ColumnId,
+    CommittedEdit, EditorKind, FilterKind, FilterValue, GroupKey, GroupedPaginationMode,
+    GroupedRow, Labels, NaiveDate, NavDirection, PaginationMode, RenderKind, RowId, SortAction,
+    SortDirection, SortState, TableState, VirtualWindow,
 };
+#[cfg(target_arch = "wasm32")]
+use chorale_core::{paste_tsv_into_range, to_clipboard_tsv};
 use leptos::html;
 use leptos::prelude::*;
 
@@ -1196,6 +1199,13 @@ pub fn Table<TRow>(
     /// Fired when Tab key moves focus to a cell whose column has `EditorKind` configured.
     #[prop(optional)]
     on_tab_to_editable: Option<Callback<ActiveCell>>,
+    /// Fired after Ctrl+C successfully writes the selected range to the system clipboard.
+    #[prop(optional)]
+    on_copy: Option<Callback<ClipboardCopyEvent>>,
+    /// Fired after Ctrl+V reads from the system clipboard and adjusts the active range.
+    /// The host should apply the per-cell writes from `evt.tsv` via its persistence layer.
+    #[prop(optional)]
+    on_paste: Option<Callback<ClipboardPasteEvent>>,
     #[prop(optional)] selection_toolbar: Option<ChildrenFn>,
     #[prop(optional)] labels: Option<Labels>,
     #[prop(default = false)] column_reorder_enabled: bool,
@@ -1214,6 +1224,11 @@ where
     TRow: Clone + PartialEq + Send + Sync + 'static,
 {
     let labels = Arc::new(labels.unwrap_or_default());
+
+    // on_copy / on_paste are only used inside #[cfg(target_arch = "wasm32")] blocks.
+    // Silence unused-variable warnings on non-WASM targets.
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = (on_copy, on_paste);
 
     let drag_state: RwSignal<Option<(ColumnId, f64, f64)>> = RwSignal::new(None);
     let drag_col_id: RwSignal<Option<ColumnId>> = RwSignal::new(None);
@@ -1396,6 +1411,67 @@ where
                         ev.prevent_default();
                         let new_s = handle.signal.with_untracked(select_all_range);
                         handle.signal.set(new_s);
+                    }
+                    "c" | "C" if ctrl => {
+                        ev.prevent_default();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            let tsv_result = handle.signal.with_untracked(to_clipboard_tsv);
+                            if let Ok(tsv) = tsv_result {
+                                if !tsv.is_empty() {
+                                    let range =
+                                        handle.signal.with_untracked(|s| {
+                                            s.range_selection.first().cloned()
+                                        });
+                                    if let Some(range) = range {
+                                        let tsv2 = tsv.clone();
+                                        leptos::task::spawn_local(async move {
+                                            if let Some(clipboard) = web_sys::window()
+                                                .and_then(|w| w.navigator().clipboard())
+                                            {
+                                                let _ = wasm_bindgen_futures::JsFuture::from(
+                                                    clipboard.write_text(&tsv2),
+                                                )
+                                                .await;
+                                            }
+                                        });
+                                        if let Some(cb) = on_copy {
+                                            cb.run(ClipboardCopyEvent { tsv, range });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    "v" | "V" if ctrl => {
+                        ev.prevent_default();
+                        #[cfg(target_arch = "wasm32")]
+                        leptos::task::spawn_local(async move {
+                            let clipboard = web_sys::window()
+                                .and_then(|w| w.navigator().clipboard());
+                            if let Some(clipboard) = clipboard {
+                                if let Ok(tsv_val) = wasm_bindgen_futures::JsFuture::from(
+                                    clipboard.read_text(),
+                                )
+                                .await
+                                {
+                                    let tsv = tsv_val.as_string().unwrap_or_default();
+                                    if !tsv.trim().is_empty() {
+                                        let new_s = handle.signal.with_untracked(|s| {
+                                            paste_tsv_into_range(s, &tsv)
+                                        });
+                                        if let Ok(new_state) = new_s {
+                                            let range =
+                                                new_state.range_selection.first().cloned();
+                                            handle.signal.set(new_state);
+                                            if let (Some(range), Some(cb)) = (range, on_paste) {
+                                                cb.run(ClipboardPasteEvent { tsv, range });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
                     }
                     "Tab" => {
                         ev.prevent_default();

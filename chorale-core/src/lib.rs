@@ -435,6 +435,12 @@ pub use transitions::clear_range_selection;
 /// `MultiRectPasteNotSupported`.
 pub use clipboard::ClipboardError;
 
+/// Payload for the adapter's `on_copy` callback: the TSV string and the copied range.
+pub use clipboard::ClipboardCopyEvent;
+
+/// Payload for the adapter's `on_paste` callback: the TSV string and the effective target range.
+pub use clipboard::ClipboardPasteEvent;
+
 /// Serialize the active single-rect range selection to a tab-separated (TSV) string.
 ///
 /// Returns `Ok("")` when no range is selected. Returns

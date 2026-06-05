@@ -9,11 +9,12 @@ use chorale_core::{
     clear_range_selection, commit_edit, extend_range_to, frozen_left_columns, frozen_right_columns,
     move_active_cell, move_active_cell_end, move_active_cell_first, move_active_cell_home,
     move_active_cell_last, move_active_cell_page, move_active_cell_to_edge, next_editable_cell,
-    prev_editable_cell, scrollable_columns, select_all as select_all_range, start_range_selection,
-    to_csv, visible_grouped_view, visible_view, visible_window, visible_window_variable,
-    ActiveCell, Alignment, BadgeVariantMap, CellValue, ColumnDef, ColumnId, CommittedEdit,
-    CurrencyCode, EditorKind, FilterKind, FilterValue, GroupKey, GroupedPaginationMode, GroupedRow,
-    Labels, NavDirection, PaginationMode, RenderKind, RowId, SortAction, SortDirection, SortState,
+    paste_tsv_into_range, prev_editable_cell, scrollable_columns, select_all as select_all_range,
+    start_range_selection, to_clipboard_tsv, to_csv, visible_grouped_view, visible_view,
+    visible_window, visible_window_variable, ActiveCell, Alignment, BadgeVariantMap, CellValue,
+    ClipboardCopyEvent, ClipboardPasteEvent, ColumnDef, ColumnId, CommittedEdit, CurrencyCode,
+    EditorKind, FilterKind, FilterValue, GroupKey, GroupedPaginationMode, GroupedRow, Labels,
+    NavDirection, PaginationMode, RenderKind, RowId, SortAction, SortDirection, SortState,
     TableState, VirtualWindow,
 };
 use dioxus::prelude::*;
@@ -94,6 +95,31 @@ impl PartialEq for ValidateEditFn {
     }
 }
 
+/// Encode `s` as a JSON string literal suitable for embedding in a JavaScript expression.
+///
+/// Wraps the value in double-quotes and escapes special characters so the result
+/// is safe to pass directly to `navigator.clipboard.writeText(...)`.
+fn js_string_literal(s: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// The primary chorale Dioxus table component.
 ///
 /// Renders column headers, an optional filter row, virtualized data rows,
@@ -139,6 +165,11 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     /// Fired when the Tab key moves focus to a cell whose column has `EditorKind` configured.
     /// The parent can use this to call `handle.start_edit(row_id, col_id)`.
     on_tab_to_editable: Option<EventHandler<ActiveCell>>,
+    /// Fired after Ctrl+C successfully writes the selected range to the system clipboard.
+    on_copy: Option<EventHandler<ClipboardCopyEvent>>,
+    /// Fired after Ctrl+V reads from the system clipboard and adjusts the active range.
+    /// The host should apply the per-cell writes from `evt.tsv` via its persistence layer.
+    on_paste: Option<EventHandler<ClipboardPasteEvent>>,
     /// CSS `z-index` applied to frozen column cells (header, filter row, and body).
     /// Raise if custom cell renderers use `z-index` internally.
     /// Default is `2` (above scrollable columns, which use no explicit z-index).
@@ -595,6 +626,52 @@ dioxus.send(parts.join('\n'));"
                             let mut sig_w = handle.signal();
                             let new_s = select_all_range(&*sig_w.peek());
                             sig_w.set(new_s);
+                        }
+                        Key::Character(ref ch) if ch.to_lowercase() == "c" && ctrl => {
+                            e.prevent_default();
+                            let sig_r = handle.signal();
+                            let s = sig_r.peek();
+                            if let Ok(tsv) = to_clipboard_tsv(&*s) {
+                                if !tsv.is_empty() {
+                                    let range = s.range_selection.first().cloned();
+                                    drop(s);
+                                    let js = format!(
+                                        "navigator.clipboard.writeText({}).catch(()=>{{}})",
+                                        js_string_literal(&tsv)
+                                    );
+                                    dioxus::document::eval(&js);
+                                    if let (Some(range), Some(cb)) = (range, on_copy) {
+                                        cb.call(ClipboardCopyEvent { tsv, range });
+                                    }
+                                }
+                            }
+                        }
+                        Key::Character(ref ch) if ch.to_lowercase() == "v" && ctrl => {
+                            e.prevent_default();
+                            spawn(async move {
+                                let mut eval = dioxus::document::eval(
+                                    "navigator.clipboard.readText()\
+                                     .then(t=>dioxus.send(t))\
+                                     .catch(()=>dioxus.send(''))",
+                                );
+                                if let Ok(tsv) = eval.recv::<String>().await {
+                                    if !tsv.trim().is_empty() {
+                                        let mut sig_w = handle.signal();
+                                        let new_s = {
+                                            let s = sig_w.peek();
+                                            paste_tsv_into_range(&*s, &tsv)
+                                        };
+                                        if let Ok(new_state) = new_s {
+                                            let range =
+                                                new_state.range_selection.first().cloned();
+                                            sig_w.set(new_state);
+                                            if let (Some(range), Some(cb)) = (range, on_paste) {
+                                                cb.call(ClipboardPasteEvent { tsv, range });
+                                            }
+                                        }
+                                    }
+                                }
+                            });
                         }
                         Key::Tab => {
                             e.prevent_default();

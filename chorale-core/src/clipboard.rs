@@ -18,6 +18,28 @@ use crate::types::ColumnId;
 use crate::views::{effective_column_order, visible_view};
 
 // ---------------------------------------------------------------------------
+// Event payload types (used by adapter on_copy / on_paste callbacks)
+// ---------------------------------------------------------------------------
+
+/// Payload delivered to an adapter's `on_copy` callback after a successful Ctrl+C.
+#[derive(Clone, Debug)]
+pub struct ClipboardCopyEvent {
+    /// The TSV string that was written to the system clipboard.
+    pub tsv: String,
+    /// The range that was serialized.
+    pub range: RangeSelection,
+}
+
+/// Payload delivered to an adapter's `on_paste` callback after a successful Ctrl+V.
+#[derive(Clone, Debug)]
+pub struct ClipboardPasteEvent {
+    /// The TSV string that was read from the system clipboard.
+    pub tsv: String,
+    /// The effective target range (may be expanded from the original selection).
+    pub range: RangeSelection,
+}
+
+// ---------------------------------------------------------------------------
 // Public error type
 // ---------------------------------------------------------------------------
 
