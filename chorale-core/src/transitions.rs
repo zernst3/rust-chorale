@@ -789,6 +789,9 @@ mod tests {
     fn col_score() -> ColumnId {
         ColumnId("score")
     }
+    fn col_age() -> ColumnId {
+        ColumnId("age")
+    }
 
     fn make_columns() -> Vec<ColumnDef<TestRow>> {
         vec![
@@ -977,6 +980,21 @@ mod tests {
         assert_eq!(name_entry.direction, SortDirection::Desc);
         let score_entry = s2.sort.iter().find(|e| e.column == col_score()).unwrap();
         assert_eq!(score_entry.direction, SortDirection::Asc);
+    }
+
+    #[test]
+    fn toggle_sort_append_supports_three_plus_columns() {
+        // TESTS-1: 3 consecutive Append calls must grow state.sort to length 3.
+        // col_age is not defined in make_columns(); toggle_sort(Append) does
+        // not validate column existence — it only manages the sort list.
+        let s = make_state();
+        let s = toggle_sort(&s, col_name(), SortAction::Append);
+        let s = toggle_sort(&s, col_score(), SortAction::Append);
+        let s = toggle_sort(&s, col_age(), SortAction::Append);
+        assert_eq!(s.sort.len(), 3, "expected 3 sort columns, got {}", s.sort.len());
+        assert_eq!(s.sort[0].column, col_name());
+        assert_eq!(s.sort[1].column, col_score());
+        assert_eq!(s.sort[2].column, col_age());
     }
 
     #[test]
