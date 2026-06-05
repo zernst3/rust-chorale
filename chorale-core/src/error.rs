@@ -15,4 +15,8 @@ pub enum StateError {
     /// `set_column_width` was called with a non-positive value.
     #[error("column width must be positive, got {0}")]
     InvalidColumnWidth(String),
+
+    /// `start_edit` was called for a column that has no `EditorKind` configured.
+    #[error("column {0} is not editable")]
+    ColumnNotEditable(crate::types::ColumnId),
 }

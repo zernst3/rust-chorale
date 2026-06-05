@@ -116,6 +116,33 @@ pub enum FilterKind {
     Boolean,
 }
 
+/// What kind of inline editor the adapter should render for an editable column.
+///
+/// Set via `ColumnDef::editor(kind)`. A column with `editor: None` (the default)
+/// is read-only — `start_edit` will return `Err(ColumnNotEditable)` for it.
+#[non_exhaustive]
+#[derive(Clone, Debug)]
+pub enum EditorKind {
+    /// Free-text `<input type="text">`.
+    Text,
+    /// Numeric `<input type="number">` with optional bounds and step.
+    Number {
+        /// Inclusive minimum value, or `None` for unbounded.
+        min: Option<f64>,
+        /// Inclusive maximum value, or `None` for unbounded.
+        max: Option<f64>,
+        /// Step increment for the spin-button UI, or `None` to let the browser decide.
+        step: Option<f64>,
+    },
+    /// Date picker `<input type="date">`.
+    Date,
+    /// Boolean toggle `<input type="checkbox">`.
+    BoolToggle,
+    /// Custom: the host supplies a renderer via the adapter's `cell_renderers` prop.
+    /// The adapter falls back to a text input if no custom renderer is provided.
+    Custom,
+}
+
 /// How the adapter renders a cell's value by default.
 ///
 /// `Custom` is intentionally absent: custom cell rendering requires Dioxus
@@ -173,6 +200,10 @@ pub struct ColumnDef<TRow> {
     /// Optional dynamic CSS class resolver for body cells of this column.
     /// See `CellClassFn` in `crate::theme`.
     pub cell_class: Option<crate::theme::CellClassFn<TRow>>,
+    /// What kind of inline editor to render when this cell is in edit mode.
+    /// `None` (default) means the column is read-only; `start_edit` will return
+    /// `Err(StateError::ColumnNotEditable)` for it.
+    pub editor: Option<EditorKind>,
 }
 
 impl<TRow> ColumnDef<TRow> {
@@ -194,6 +225,7 @@ impl<TRow> ColumnDef<TRow> {
             render_kind: RenderKind::Text,
             header_class: None,
             cell_class: None,
+            editor: None,
         }
     }
 
@@ -247,6 +279,16 @@ impl<TRow> ColumnDef<TRow> {
         self
     }
 
+    /// Mark this column as editable with the given editor kind.
+    ///
+    /// A column without `.editor(...)` is read-only: `start_edit` returns
+    /// `Err(StateError::ColumnNotEditable)` for it.
+    #[must_use]
+    pub fn editor(mut self, kind: EditorKind) -> Self {
+        self.editor = Some(kind);
+        self
+    }
+
     /// True if the column has any filter UI configured (anything other than
     /// `FilterKind::None`).
     #[must_use]
@@ -268,6 +310,7 @@ impl<TRow> Clone for ColumnDef<TRow> {
             render_kind: self.render_kind.clone(),
             header_class: self.header_class.clone(),
             cell_class: self.cell_class.clone(),
+            editor: self.editor.clone(),
         }
     }
 }

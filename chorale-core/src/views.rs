@@ -398,6 +398,7 @@ mod tests {
             page_size: 10,
             column_visibility: HashMap::new(),
             column_widths: HashMap::new(),
+            editing: None,
             row_heights: HashMap::new(),
             scroll_top: 0.0,
             viewport_height: 500.0,

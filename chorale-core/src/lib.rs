@@ -67,6 +67,12 @@ pub use state::VirtualWindow;
 /// `chorale-core` that knows the row type's internal structure.
 pub use column::ColumnDef;
 
+/// What kind of inline editor the adapter should render for an editable column.
+///
+/// Set via `ColumnDef::editor(kind)`. Default is `None` (column read-only).
+/// Variants: `Text`, `Number { min, max, step }`, `Date`, `BoolToggle`, `Custom`.
+pub use column::EditorKind;
+
 /// Declares the filter UI and matching strategy for a column.
 ///
 /// Pair with a [`FilterValue`] variant of the same kind. Default is
@@ -108,6 +114,24 @@ pub use types::ColumnId;
 /// adapter rendering. Variants: `Text`, `Integer`, `Float`, `Boolean`,
 /// `Date`, `DateTime`, `Empty`.
 pub use types::CellValue;
+
+/// Identifies the cell currently open for in-cell editing.
+///
+/// Stored in `TableState::editing: Option<EditTarget>`.
+/// `start_edit` sets it; `commit_edit` and `cancel_edit` clear it.
+pub use types::EditTarget;
+
+/// Snapshot of a cell's prior state for optimistic-edit rollback.
+///
+/// Returned in [`CommittedEdit::prior`]. Pass back to [`revert_edit`] from an
+/// async persistence-failure path to undo the committed change.
+pub use types::PriorEdit;
+
+/// Payload delivered to the adapter's `on_commit_edit` callback.
+///
+/// Contains the raw string value the user typed and a [`PriorEdit`] snapshot
+/// for optional rollback via [`revert_edit`].
+pub use types::CommittedEdit;
 
 /// Current filter value for a column, paired with a [`FilterKind`].
 ///
@@ -201,6 +225,30 @@ pub use transitions::update_row;
 /// `visible_view` output. The cache is invalidated automatically by
 /// [`toggle_sort`], [`set_filter`], and [`set_page`].
 pub use transitions::record_row_height;
+
+/// Open an editor for a cell. Returns `Err(ColumnNotEditable)` if the column
+/// has no `EditorKind`. Opening a second cell cancels the first implicitly.
+pub use transitions::start_edit;
+
+/// Close the editor after a commit. Clears `editing`; does not update row data
+/// (the host's `on_commit_edit` callback is responsible for persistence).
+pub use transitions::commit_edit;
+
+/// Cancel the editor without persisting. Clears `editing`. No-op if no edit
+/// is in progress.
+pub use transitions::cancel_edit;
+
+/// Roll back a previously-committed edit using the [`PriorEdit`] snapshot.
+/// No-op if the row was deleted between commit and the persistence callback.
+pub use transitions::revert_edit;
+
+/// Move the edit cursor to the next editable column in the same row (Tab).
+/// Wraps to the first after the last. No-op if no edit is in progress.
+pub use transitions::next_editable_cell;
+
+/// Move the edit cursor to the previous editable column in the same row
+/// (Shift+Tab). Wraps to the last before the first. No-op if no edit in progress.
+pub use transitions::prev_editable_cell;
 
 /// Merge a batch of measured row heights into the cache in one transition.
 ///

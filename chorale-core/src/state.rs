@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::column::ColumnDef;
-use crate::types::{ColumnId, FilterValue, RowId, SortState};
+use crate::types::{ColumnId, EditTarget, FilterValue, RowId, SortState};
 
 /// The result of `visible_window()`: which rows to render and how large the
 /// top/bottom spacer divs should be so the scrollbar reflects the full list.
@@ -50,6 +50,12 @@ pub struct TableState<TRow: Clone> {
     pub column_visibility: HashMap<ColumnId, bool>,
     /// Column width overrides in px. Missing entry = `initial_width` or auto.
     pub column_widths: HashMap<ColumnId, f64>,
+    /// Which cell (if any) is currently open for in-cell editing.
+    ///
+    /// `start_edit` sets this; `commit_edit` and `cancel_edit` clear it.
+    /// Only one cell can be in edit mode at a time; opening a second cell
+    /// implicitly cancels the first (no orphaned lock).
+    pub editing: Option<EditTarget>,
     /// Per-row height cache for variable-row-height virtualization (VIRT-2).
     ///
     /// Keyed by row index within the current post-filter/sort/paginated page view.
@@ -80,6 +86,7 @@ impl<TRow: Clone + std::fmt::Debug> std::fmt::Debug for TableState<TRow> {
             .field("page_size", &self.page_size)
             .field("column_visibility", &self.column_visibility)
             .field("column_widths", &self.column_widths)
+            .field("editing", &self.editing)
             .field("row_heights", &self.row_heights)
             .field("scroll_top", &self.scroll_top)
             .field("viewport_height", &self.viewport_height)
@@ -101,6 +108,7 @@ impl<TRow: Clone> Clone for TableState<TRow> {
             page_size: self.page_size,
             column_visibility: self.column_visibility.clone(),
             column_widths: self.column_widths.clone(),
+            editing: self.editing,
             row_heights: self.row_heights.clone(),
             scroll_top: self.scroll_top,
             viewport_height: self.viewport_height,
@@ -141,6 +149,7 @@ impl<TRow: Clone> TableState<TRow> {
             page_size: 50,
             column_visibility: HashMap::new(),
             column_widths: HashMap::new(),
+            editing: None,
             row_heights: HashMap::new(),
             scroll_top: 0.0,
             viewport_height: 500.0,

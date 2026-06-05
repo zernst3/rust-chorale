@@ -5,8 +5,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use chorale_core::{
-    batch_record_row_heights, to_csv, visible_view, visible_window, visible_window_variable,
-    Alignment, BadgeVariantMap, CellValue, ColumnDef, ColumnId, CurrencyCode, FilterKind,
+    batch_record_row_heights, cancel_edit, commit_edit, next_editable_cell, prev_editable_cell,
+    to_csv, visible_view, visible_window, visible_window_variable, Alignment, BadgeVariantMap,
+    CellValue, ColumnDef, ColumnId, CommittedEdit, CurrencyCode, EditorKind, FilterKind,
     FilterValue, RenderKind, RowId, SortDirection, SortState, TableState, VirtualWindow,
 };
 use dioxus::prelude::*;
@@ -42,6 +43,51 @@ impl PartialEq for CellRenderers {
     }
 }
 
+/// Input passed to the `validate_edit` callback before a cell edit is committed.
+///
+/// Return `Ok(())` to allow the commit, or `Err(msg)` to show `msg` as an inline
+/// validation error and keep the editor open.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EditValidation {
+    /// The row being edited.
+    pub row_id: RowId,
+    /// The column being edited.
+    pub column_id: ColumnId,
+    /// The raw string value the user typed.
+    pub raw_value: String,
+}
+
+type ValidateClosure = Arc<dyn Fn(EditValidation) -> Result<(), String> + Send + Sync + 'static>;
+
+/// Optional synchronous validation function for in-cell editing.
+///
+/// Build with `ValidateEditFn::new(|v| { ... })`. Default is "no validation"
+/// (all commits are allowed). Compared by pointer identity for prop diffing.
+#[derive(Clone, Default)]
+pub struct ValidateEditFn(Option<ValidateClosure>);
+
+impl ValidateEditFn {
+    /// Wrap a validation closure.
+    #[must_use]
+    pub fn new(f: impl Fn(EditValidation) -> Result<(), String> + Send + Sync + 'static) -> Self {
+        Self(Some(Arc::new(f)))
+    }
+
+    fn call(&self, v: EditValidation) -> Result<(), String> {
+        self.0.as_ref().map_or(Ok(()), |f| f(v))
+    }
+}
+
+impl PartialEq for ValidateEditFn {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
 /// The primary chorale Dioxus table component.
 ///
 /// Renders column headers, an optional filter row, virtualized data rows,
@@ -61,6 +107,8 @@ impl PartialEq for CellRenderers {
 /// | `csv_export` | `bool` | `false` | Show a "Download CSV" button above the table. Exports the full post-filter/post-sort dataset (not just the current page). |
 /// | `resize_enabled` | `bool` | `false` | Show drag handles on column header borders. Dragging adjusts `column_widths` in the table state. |
 /// | `variable_row_height` | `bool` | `false` | Enable variable-row-height virtualization (VIRT-2). When `true`, the component measures each rendered row's height after mount via a DOM eval and caches the result in `state.row_heights`. The `row_height` prop (or `state.row_height`) is used as the fallback for unmeasured rows. Requires a web target. |
+/// | `validate_edit` | `ValidateEditFn` | no-op | Optional synchronous validator called before a cell edit is committed. Return `Ok(())` to allow, `Err(msg)` to show an inline error. |
+/// | `on_commit_edit` | `Option<EventHandler<CommittedEdit<TRow>>>` | `None` | Fired after a successful commit. Receives the new raw value and a `PriorEdit` snapshot for rollback. |
 #[component]
 pub fn Table<TRow: Clone + PartialEq + 'static>(
     handle: UseTableHandle<TRow>,
@@ -72,9 +120,14 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     #[props(default = false)] csv_export: bool,
     #[props(default = false)] resize_enabled: bool,
     #[props(default = false)] variable_row_height: bool,
+    #[props(default)] validate_edit: ValidateEditFn,
+    on_commit_edit: Option<EventHandler<CommittedEdit<TRow>>>,
 ) -> Element {
     // drag_state: Some((col_id, start_x_px, start_width_px)) while a resize is active.
     let mut drag_state: Signal<Option<(ColumnId, f64, f64)>> = use_signal(|| None);
+    // In-cell editing state: current editor text and optional validation error.
+    let mut editing_text: Signal<String> = use_signal(String::new);
+    let mut edit_error: Signal<Option<String>> = use_signal(|| None);
 
     let sig = handle.signal();
 
@@ -138,6 +191,32 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
             "const el = document.getElementById('{id}'); if (el) el.scrollTop = 0;"
         ));
     });
+
+    // In-cell editing: reset editor text and error when the active cell changes.
+    // Unconditional use_effect (Dioxus hook ordering rules); no-op when no edit target.
+    {
+        let edit_target_memo = use_memo(move || sig.read().editing);
+        use_effect(move || {
+            let target = *edit_target_memo.read();
+            if let Some(target) = target {
+                let state = sig.read();
+                let init_text = state
+                    .columns
+                    .iter()
+                    .find(|c| c.id == target.column_id)
+                    .and_then(|col| {
+                        state
+                            .rows
+                            .iter()
+                            .find(|(id, _)| *id == target.row_id)
+                            .map(|(_, row)| (col.accessor)(row).to_csv_string())
+                    })
+                    .unwrap_or_default();
+                editing_text.set(init_text);
+                edit_error.set(None);
+            }
+        });
+    }
 
     // VIRT-2: variable-row-height measurement loop.
     // Always called (hooks must be unconditional); no-op when variable_row_height=false.
@@ -208,6 +287,7 @@ dioxus.send(parts.join('\n'));"
     let widths = state.column_widths.clone();
     let current_sort: &[SortState] = &state.sort;
     let filters = state.filters.clone();
+    let editing_target = state.editing;
 
     let all_col_defs: Vec<(ColumnId, String)> = state
         .columns
@@ -311,7 +391,12 @@ dioxus.send(parts.join('\n'));"
                             }
                         }
                         for (i, (row_id, row)) in id_slice.iter().zip(row_slice.iter()).enumerate() {
-                            {data_tr(row, *row_id, win.start_index + i, variable_row_height, &visible_cols, row_height, &widths, selection_enabled, selection_set.contains(row_id), handle, &cell_renderers)}
+                            {
+                                let editing_col = editing_target
+                                    .filter(|t| t.row_id == *row_id)
+                                    .map(|t| t.column_id);
+                                data_tr(row, *row_id, win.start_index + i, variable_row_height, &visible_cols, row_height, &widths, selection_enabled, selection_set.contains(row_id), handle, &cell_renderers, editing_col, editing_text, edit_error, &validate_edit, on_commit_edit)
+                            }
                         }
                         if win.bottom_pad_px > 0.0 {
                             tr {
@@ -1048,6 +1133,11 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
     is_selected: bool,
     handle: UseTableHandle<TRow>,
     cell_renderers: &CellRenderers,
+    editing_col: Option<ColumnId>,
+    editing_text: Signal<String>,
+    edit_error: Signal<Option<String>>,
+    validate_edit: &ValidateEditFn,
+    on_commit_edit: Option<EventHandler<CommittedEdit<TRow>>>,
 ) -> Element {
     // Row separator is rendered as a 1px inset box-shadow on each TD instead
     // of `border-bottom: 1px` on the TR. Reason: with `border-collapse: collapse`
@@ -1086,7 +1176,140 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
                 }
             }
             for col in visible_cols {
-                {data_td(row, col, row_height, variable_row_height, widths.get(&col.id).copied(), cell_renderers.get(col.id), separator_color)}
+                if editing_col == Some(col.id) {
+                    {editor_td(
+                        row,
+                        row_id,
+                        col,
+                        row_height,
+                        variable_row_height,
+                        widths.get(&col.id).copied(),
+                        separator_color,
+                        editing_text,
+                        edit_error,
+                        validate_edit,
+                        on_commit_edit,
+                        handle,
+                    )}
+                } else {
+                    {data_td(row, col, row_height, variable_row_height, widths.get(&col.id).copied(), cell_renderers.get(col.id), separator_color)}
+                }
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::if_not_else)]
+fn editor_td<TRow: Clone + PartialEq + 'static>(
+    row: &TRow,
+    row_id: RowId,
+    col: &ColumnDef<TRow>,
+    row_height: f64,
+    variable_row_height: bool,
+    override_width: Option<f64>,
+    separator_color: &str,
+    mut editing_text: Signal<String>,
+    mut edit_error: Signal<Option<String>>,
+    validate: &ValidateEditFn,
+    on_commit_edit: Option<EventHandler<CommittedEdit<TRow>>>,
+    handle: UseTableHandle<TRow>,
+) -> Element {
+    let col_id = col.id;
+    let editor_kind = col.editor.clone().unwrap_or(EditorKind::Text);
+    let w = col_width_style(override_width, col.initial_width);
+    let style = if variable_row_height {
+        format!(
+            "padding: 0.25rem 0.5rem; box-sizing: border-box; \
+             box-shadow: inset 0 -1px 0 {separator_color}; {w}"
+        )
+    } else {
+        format!(
+            "padding: 0.25rem 0.5rem; height: {row_height}px; box-sizing: border-box; \
+             box-shadow: inset 0 -1px 0 {separator_color}; {w}"
+        )
+    };
+    let input_type = match &editor_kind {
+        EditorKind::Number { .. } => "number",
+        EditorKind::Date => "date",
+        EditorKind::BoolToggle => "checkbox",
+        _ => "text",
+    };
+    let (num_min, num_max, num_step) = match &editor_kind {
+        EditorKind::Number { min, max, step } => (
+            min.map(|v| v.to_string()).unwrap_or_default(),
+            max.map(|v| v.to_string()).unwrap_or_default(),
+            step.map(|v| v.to_string()).unwrap_or_default(),
+        ),
+        _ => (String::new(), String::new(), String::new()),
+    };
+    let prior_row = row.clone();
+    let text_val = editing_text.read().clone();
+    let err_val = edit_error.read().clone();
+    let validate = validate.clone();
+
+    rsx! {
+        td {
+            style: "{style}",
+            input {
+                r#type: "{input_type}",
+                value: "{text_val}",
+                min: if !num_min.is_empty() { "{num_min}" },
+                max: if !num_max.is_empty() { "{num_max}" },
+                step: if !num_step.is_empty() { "{num_step}" },
+                style: "width: 100%; box-sizing: border-box; font: inherit; \
+                        padding: 1px 4px; border: 1px solid #4a90e2; border-radius: 2px;",
+                oninput: move |e| editing_text.set(e.value()),
+                onkeydown: move |e: KeyboardEvent| {
+                    match e.key() {
+                        Key::Enter => {
+                            let raw = editing_text.read().clone();
+                            let result = validate.call(EditValidation {
+                                row_id,
+                                column_id: col_id,
+                                raw_value: raw.clone(),
+                            });
+                            match result {
+                                Ok(()) => {
+                                    edit_error.set(None);
+                                    if let Some(handler) = &on_commit_edit {
+                                        handler.call(CommittedEdit::new(
+                                            row_id,
+                                            col_id,
+                                            raw,
+                                            prior_row.clone(),
+                                        ));
+                                    }
+                                    let mut sig = handle.signal();
+                                    let new_state = commit_edit(&*sig.read());
+                                    sig.set(new_state);
+                                }
+                                Err(msg) => edit_error.set(Some(msg)),
+                            }
+                        }
+                        Key::Escape => {
+                            let mut sig = handle.signal();
+                            let new_state = cancel_edit(&*sig.read());
+                            sig.set(new_state);
+                        }
+                        Key::Tab => {
+                            e.prevent_default();
+                            let mut sig = handle.signal();
+                            let new_state = if e.modifiers().contains(Modifiers::SHIFT) {
+                                prev_editable_cell(&*sig.read())
+                            } else {
+                                next_editable_cell(&*sig.read())
+                            };
+                            sig.set(new_state);
+                        }
+                        _ => {}
+                    }
+                },
+            }
+            if let Some(err) = err_val {
+                div {
+                    style: "color: #c0392b; font-size: 0.75rem; margin-top: 2px;",
+                    "{err}"
+                }
             }
         }
     }

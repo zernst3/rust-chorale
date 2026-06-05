@@ -52,6 +52,77 @@ impl std::fmt::Display for ColumnId {
     }
 }
 
+/// Identifies the cell currently open for in-cell editing.
+///
+/// Stored as `TableState::editing: Option<EditTarget>`. `start_edit` sets it;
+/// `commit_edit` and `cancel_edit` clear it.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EditTarget {
+    /// The row containing the cell being edited.
+    pub row_id: RowId,
+    /// The column containing the cell being edited.
+    pub column_id: ColumnId,
+}
+
+/// Snapshot of a cell's prior state, sufficient to roll back an optimistic
+/// commit if the host's persistence call fails.
+///
+/// Returned to the host as part of [`CommittedEdit`] so that the host can
+/// pass it back to [`crate::transitions::revert_edit`] from an async error path.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PriorEdit<TRow: Clone> {
+    /// Row that was edited.
+    pub row_id: RowId,
+    /// Column that was edited.
+    pub column_id: ColumnId,
+    /// Full row snapshot before the edit — pass this to `revert_edit` on failure.
+    pub prior_row: TRow,
+}
+
+/// Payload delivered to the adapter's `on_commit_edit` callback.
+///
+/// Contains both the new raw value the user typed and a [`PriorEdit`] snapshot
+/// for optional rollback via `revert_edit`.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommittedEdit<TRow: Clone> {
+    /// Row that was edited.
+    pub row_id: RowId,
+    /// Column that was edited.
+    pub column_id: ColumnId,
+    /// The raw string value the user typed in the editor input.
+    pub value: String,
+    /// Prior state snapshot for rollback.
+    pub prior: PriorEdit<TRow>,
+}
+
+impl<TRow: Clone> PriorEdit<TRow> {
+    /// Construct a `PriorEdit` snapshot.
+    #[must_use]
+    pub fn new(row_id: RowId, column_id: ColumnId, prior_row: TRow) -> Self {
+        Self {
+            row_id,
+            column_id,
+            prior_row,
+        }
+    }
+}
+
+impl<TRow: Clone> CommittedEdit<TRow> {
+    /// Construct a `CommittedEdit` payload.
+    #[must_use]
+    pub fn new(row_id: RowId, column_id: ColumnId, value: String, prior_row: TRow) -> Self {
+        Self {
+            row_id,
+            column_id,
+            value,
+            prior: PriorEdit::new(row_id, column_id, prior_row),
+        }
+    }
+}
+
 /// Sort direction for a column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SortDirection {

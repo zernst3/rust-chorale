@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use crate::error::StateError;
 use crate::state::TableState;
-use crate::types::{ColumnId, FilterValue, RowId, SortDirection, SortState};
+use crate::types::{ColumnId, EditTarget, FilterValue, PriorEdit, RowId, SortDirection, SortState};
 
 /// Cycle through sort states for `col`: none → ASC → DESC → none.
 ///
@@ -323,6 +323,144 @@ pub fn clear_row_height_cache<TRow: Clone>(state: &TableState<TRow>) -> TableSta
 }
 
 // ---------------------------------------------------------------------------
+// In-cell editing transitions (v0.2.0 Item 7)
+// ---------------------------------------------------------------------------
+
+/// Open an editor for the cell at (`row_id`, `column_id`).
+///
+/// Opening a second cell while one is already open implicitly cancels the
+/// first (no orphaned edit lock).
+///
+/// # Errors
+///
+/// Returns `Err(StateError::ColumnNotEditable)` if the target column has no
+/// `EditorKind` configured.
+#[must_use = "returns a new state; the original is unchanged"]
+pub fn start_edit<TRow: Clone>(
+    state: &TableState<TRow>,
+    row_id: RowId,
+    column_id: ColumnId,
+) -> Result<TableState<TRow>, StateError> {
+    let has_editor = state
+        .columns
+        .iter()
+        .any(|c| c.id == column_id && c.editor.is_some());
+    if !has_editor {
+        return Err(StateError::ColumnNotEditable(column_id));
+    }
+    Ok(TableState {
+        editing: Some(EditTarget { row_id, column_id }),
+        ..state.clone()
+    })
+}
+
+/// Close the editor after a successful commit. Returns a state with
+/// `editing: None`. Does **not** update row data; the caller is responsible
+/// for calling `update_row` (or letting the host's `on_commit_edit` callback
+/// handle persistence).
+#[must_use]
+pub fn commit_edit<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    TableState {
+        editing: None,
+        ..state.clone()
+    }
+}
+
+/// Cancel the editor without persisting. Returns a state with `editing: None`.
+/// No-op (returns a clone) if no edit is in progress.
+#[must_use]
+pub fn cancel_edit<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    if state.editing.is_none() {
+        return state.clone();
+    }
+    TableState {
+        editing: None,
+        ..state.clone()
+    }
+}
+
+/// Roll back a previously-committed edit. Restores the full prior row so the
+/// host can call this from an async persistence-failure path.
+///
+/// No-op (returns a clone) if the row is no longer present (it was deleted
+/// between commit and the persistence callback firing).
+#[must_use]
+pub fn revert_edit<TRow: Clone>(
+    state: &TableState<TRow>,
+    prior: &PriorEdit<TRow>,
+) -> TableState<TRow> {
+    if !state.rows.iter().any(|(id, _)| *id == prior.row_id) {
+        return state.clone();
+    }
+    update_row(state, prior.row_id, prior.prior_row.clone())
+}
+
+/// Move the edit cursor to the next editable column in the same row (Tab).
+///
+/// Cycles within the row's editable columns: after the last editable column,
+/// wraps to the first. No-op if no edit is currently in progress or if there
+/// are no editable columns.
+#[must_use]
+pub fn next_editable_cell<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    let Some(current) = state.editing else {
+        return state.clone();
+    };
+    let editable: Vec<ColumnId> = state
+        .columns
+        .iter()
+        .filter(|c| c.editor.is_some())
+        .map(|c| c.id)
+        .collect();
+    if editable.is_empty() {
+        return state.clone();
+    }
+    let next = match editable.iter().position(|&c| c == current.column_id) {
+        Some(i) if i + 1 < editable.len() => editable[i + 1],
+        _ => editable[0],
+    };
+    TableState {
+        editing: Some(EditTarget {
+            row_id: current.row_id,
+            column_id: next,
+        }),
+        ..state.clone()
+    }
+}
+
+/// Move the edit cursor to the previous editable column in the same row
+/// (Shift+Tab).
+///
+/// Cycles within the row's editable columns: before the first editable column,
+/// wraps to the last. No-op if no edit is currently in progress or if there
+/// are no editable columns.
+#[must_use]
+pub fn prev_editable_cell<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    let Some(current) = state.editing else {
+        return state.clone();
+    };
+    let editable: Vec<ColumnId> = state
+        .columns
+        .iter()
+        .filter(|c| c.editor.is_some())
+        .map(|c| c.id)
+        .collect();
+    if editable.is_empty() {
+        return state.clone();
+    }
+    let prev = match editable.iter().position(|&c| c == current.column_id) {
+        Some(0) | None => editable[editable.len() - 1],
+        Some(i) => editable[i - 1],
+    };
+    TableState {
+        editing: Some(EditTarget {
+            row_id: current.row_id,
+            column_id: prev,
+        }),
+        ..state.clone()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests (TESTS-1: every transition has a unit test asserting the result)
 // ---------------------------------------------------------------------------
 
@@ -407,12 +545,36 @@ mod tests {
             page_size: 10,
             column_visibility: HashMap::new(),
             column_widths: HashMap::new(),
+            editing: None,
             row_heights: HashMap::new(),
             scroll_top: 0.0,
             viewport_height: 500.0,
             row_height: 40.0,
             buffer_rows: 3,
         }
+    }
+
+    fn make_editable_columns() -> Vec<ColumnDef<TestRow>> {
+        vec![
+            ColumnDef::new(col_name(), "Name", |r: &TestRow| {
+                CellValue::Text(r.name.clone())
+            })
+            .editor(crate::column::EditorKind::Text),
+            ColumnDef::new(col_score(), "Score", |r: &TestRow| {
+                CellValue::Float(r.score)
+            })
+            .editor(crate::column::EditorKind::Number {
+                min: Some(0.0),
+                max: Some(100.0),
+                step: Some(1.0),
+            }),
+        ]
+    }
+
+    fn make_editable_state() -> TableState<TestRow> {
+        let mut s = make_state();
+        s.columns = make_editable_columns();
+        s
     }
 
     // ---- toggle_sort -------------------------------------------------------
@@ -763,5 +925,199 @@ mod tests {
         let heights: HashMap<usize, f64> = [(0, 40.0)].into();
         let _ = batch_record_row_heights(&s, &heights);
         assert!(s.row_heights.is_empty());
+    }
+
+    // ---- in-cell editing transitions (Item 7) -----------------------------
+
+    #[test]
+    fn start_edit_happy_path() {
+        let s = make_editable_state();
+        let row_id = s.rows[0].0;
+        let s2 = start_edit(&s, row_id, col_name()).expect("col_name is editable");
+        assert_eq!(
+            s2.editing,
+            Some(EditTarget {
+                row_id,
+                column_id: col_name()
+            })
+        );
+    }
+
+    #[test]
+    fn start_edit_non_editable_column_returns_err() {
+        let s = make_state(); // columns have no editor
+        let row_id = s.rows[0].0;
+        let err = start_edit(&s, row_id, col_name()).unwrap_err();
+        assert_eq!(err, StateError::ColumnNotEditable(col_name()));
+    }
+
+    #[test]
+    fn start_edit_replaces_prior_edit_without_orphan() {
+        let s = make_editable_state();
+        let row_id = s.rows[0].0;
+        let s2 = start_edit(&s, row_id, col_name()).unwrap();
+        let s3 = start_edit(&s2, row_id, col_score()).unwrap();
+        assert_eq!(
+            s3.editing,
+            Some(EditTarget {
+                row_id,
+                column_id: col_score()
+            })
+        );
+    }
+
+    #[test]
+    fn commit_edit_clears_editing() {
+        let s = make_editable_state();
+        let row_id = s.rows[0].0;
+        let s2 = start_edit(&s, row_id, col_name()).unwrap();
+        let s3 = commit_edit(&s2);
+        assert_eq!(s3.editing, None);
+        assert_eq!(s3.rows.len(), s.rows.len()); // other fields unchanged
+    }
+
+    #[test]
+    fn cancel_edit_clears_editing() {
+        let s = make_editable_state();
+        let row_id = s.rows[0].0;
+        let s2 = start_edit(&s, row_id, col_name()).unwrap();
+        let s3 = cancel_edit(&s2);
+        assert_eq!(s3.editing, None);
+    }
+
+    #[test]
+    fn cancel_edit_when_no_edit_in_progress_is_noop() {
+        let s = make_state();
+        assert!(s.editing.is_none());
+        let s2 = cancel_edit(&s);
+        assert!(s2.editing.is_none());
+        assert_eq!(s2.rows.len(), s.rows.len());
+    }
+
+    #[test]
+    fn commit_cancel_idempotent() {
+        let s = make_editable_state();
+        let row_id = s.rows[0].0;
+        let s2 = start_edit(&s, row_id, col_name()).unwrap();
+        let cancelled = cancel_edit(&s2);
+        let committed_then_cancelled = commit_edit(&cancel_edit(&s2));
+        assert_eq!(cancelled.editing, committed_then_cancelled.editing);
+    }
+
+    #[test]
+    fn revert_edit_restores_prior_row() {
+        let s = make_editable_state();
+        let row_id = s.rows[0].0;
+        let prior_row = s.rows[0].1.clone();
+        // Simulate: the host calls update_row with new data, then revert_edit to undo
+        let modified = update_row(
+            &s,
+            row_id,
+            TestRow {
+                name: "Alice Updated".into(),
+                score: 99.0,
+            },
+        );
+        let prior = PriorEdit {
+            row_id,
+            column_id: col_name(),
+            prior_row: prior_row.clone(),
+        };
+        let reverted = revert_edit(&modified, &prior);
+        assert_eq!(reverted.rows[0].1, prior_row);
+    }
+
+    #[test]
+    fn revert_edit_noop_when_row_missing() {
+        let s = make_editable_state();
+        let ghost_id = RowId::new(); // not in the table
+        let prior = PriorEdit {
+            row_id: ghost_id,
+            column_id: col_name(),
+            prior_row: TestRow {
+                name: "Ghost".into(),
+                score: 0.0,
+            },
+        };
+        let s2 = revert_edit(&s, &prior);
+        assert_eq!(s2.rows.len(), s.rows.len());
+    }
+
+    #[test]
+    fn column_def_editor_builder() {
+        use crate::column::EditorKind;
+        let col = ColumnDef::new(col_name(), "Name", |r: &TestRow| {
+            CellValue::Text(r.name.clone())
+        })
+        .editor(EditorKind::Text);
+        assert!(matches!(col.editor, Some(EditorKind::Text)));
+    }
+
+    #[test]
+    fn next_editable_cell_advances_within_row() {
+        let s = make_editable_state();
+        let row_id = s.rows[0].0;
+        let s2 = start_edit(&s, row_id, col_name()).unwrap();
+        let s3 = next_editable_cell(&s2);
+        assert_eq!(
+            s3.editing,
+            Some(EditTarget {
+                row_id,
+                column_id: col_score()
+            })
+        );
+    }
+
+    #[test]
+    fn next_editable_cell_wraps_to_first_after_last() {
+        let s = make_editable_state();
+        let row_id = s.rows[0].0;
+        let s2 = start_edit(&s, row_id, col_score()).unwrap(); // last editable
+        let s3 = next_editable_cell(&s2);
+        assert_eq!(
+            s3.editing,
+            Some(EditTarget {
+                row_id,
+                column_id: col_name()
+            })
+        );
+    }
+
+    #[test]
+    fn prev_editable_cell_moves_backwards() {
+        let s = make_editable_state();
+        let row_id = s.rows[0].0;
+        let s2 = start_edit(&s, row_id, col_score()).unwrap();
+        let s3 = prev_editable_cell(&s2);
+        assert_eq!(
+            s3.editing,
+            Some(EditTarget {
+                row_id,
+                column_id: col_name()
+            })
+        );
+    }
+
+    #[test]
+    fn prev_editable_cell_wraps_to_last_before_first() {
+        let s = make_editable_state();
+        let row_id = s.rows[0].0;
+        let s2 = start_edit(&s, row_id, col_name()).unwrap(); // first editable
+        let s3 = prev_editable_cell(&s2);
+        assert_eq!(
+            s3.editing,
+            Some(EditTarget {
+                row_id,
+                column_id: col_score()
+            })
+        );
+    }
+
+    #[test]
+    fn next_editable_cell_noop_when_no_edit_in_progress() {
+        let s = make_editable_state();
+        assert!(s.editing.is_none());
+        let s2 = next_editable_cell(&s);
+        assert!(s2.editing.is_none());
     }
 }
