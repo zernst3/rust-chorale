@@ -195,6 +195,25 @@ pub use transitions::set_scroll;
 /// Replace a row's data in-place by `RowId` (the cell-editing escape valve).
 pub use transitions::update_row;
 
+/// Record a measured row height (px) for the variable-row-height cache.
+///
+/// `index` is the row's zero-based position in the current page's
+/// `visible_view` output. The cache is invalidated automatically by
+/// [`toggle_sort`], [`set_filter`], and [`set_page`].
+pub use transitions::record_row_height;
+
+/// Merge a batch of measured row heights into the cache in one transition.
+///
+/// Equivalent to calling [`record_row_height`] for every entry but produces
+/// only one `TableState` clone. The adapter measurement loop uses this to
+/// avoid N signal writes for an N-row virtual window.
+pub use transitions::batch_record_row_heights;
+
+/// Clear the variable-row-height cache (e.g. on data reload).
+///
+/// [`toggle_sort`], [`set_filter`], and [`set_page`] call this implicitly.
+pub use transitions::clear_row_height_cache;
+
 // ---- Views ----------------------------------------------------------------
 
 /// Post-filter / post-sort / post-pagination `(RowId, TRow)` pairs for the
@@ -219,6 +238,16 @@ pub use views::visible_window;
 
 /// Convenience: compute the virtual window AND the row slice for the current state.
 pub use views::visible_window_for_state;
+
+/// Compute the variable-height virtual window using a per-row height cache.
+///
+/// Drop-in companion to [`visible_window`] for tables where rows may have
+/// different heights. Pass `&state.row_heights` as the first argument.
+/// Rows not yet measured fall back to `default_row_height`. The window
+/// geometry uses a prefix-sum array (O(n)) and binary search.
+///
+/// Per VIRT-2 (v0.2.0 Item 6, signed off 2026-06-04).
+pub use views::visible_window_variable;
 
 /// Serialize the post-filter / post-sort view (all pages) to an RFC 4180 CSV string.
 pub use views::to_csv;

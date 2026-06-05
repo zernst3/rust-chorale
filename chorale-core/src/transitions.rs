@@ -4,6 +4,8 @@
 //! `fn name(state: &TableState<TRow>, ...) -> TableState<TRow>`.
 //! No `&mut self`. No signals. No async. Unit-testable without a framework.
 
+use std::collections::HashMap;
+
 use crate::error::StateError;
 use crate::state::TableState;
 use crate::types::{ColumnId, FilterValue, RowId, SortDirection, SortState};
@@ -38,10 +40,12 @@ pub fn toggle_sort<TRow: Clone>(state: &TableState<TRow>, col: ColumnId) -> Tabl
         },
         _ => vec![SortState::new(col, SortDirection::Asc)],
     };
+    // Clear the variable-row-height cache: row indices shift on sort (VIRT-2).
     TableState {
         sort: next_sort,
         scroll_top: 0.0,
         page: 0,
+        row_heights: HashMap::new(),
         ..state.clone()
     }
 }
@@ -81,10 +85,12 @@ pub fn set_filter<TRow: Clone>(
             filters.remove(&col);
         }
     }
+    // Clear the variable-row-height cache: filtered row set (and indices) change (VIRT-2).
     TableState {
         filters,
         scroll_top: 0.0,
         page: 0,
+        row_heights: HashMap::new(),
         ..state.clone()
     }
 }
@@ -162,9 +168,11 @@ pub fn set_page<TRow: Clone>(
     if page >= total {
         return Err(StateError::PageOutOfRange(page));
     }
+    // Clear the variable-row-height cache: page boundary shifts all view indices (VIRT-2).
     Ok(TableState {
         page,
         scroll_top: 0.0,
+        row_heights: HashMap::new(),
         ..state.clone()
     })
 }
@@ -259,6 +267,61 @@ pub fn update_row<TRow: Clone>(
     }
 }
 
+/// Record the measured height (px) for row at `index` in the current page view.
+///
+/// The adapter calls this after DOM measurement (VIRT-2). `index` is the row's
+/// zero-based position in the post-filter/sort/paginated `visible_view` output
+/// for the current page. The cache is invalidated automatically by
+/// [`toggle_sort`], [`set_filter`], and [`set_page`].
+#[must_use]
+pub fn record_row_height<TRow: Clone>(
+    state: &TableState<TRow>,
+    index: usize,
+    height: f64,
+) -> TableState<TRow> {
+    let mut row_heights = state.row_heights.clone();
+    row_heights.insert(index, height);
+    TableState {
+        row_heights,
+        ..state.clone()
+    }
+}
+
+/// Merge a batch of measured row heights into the cache in a single transition.
+///
+/// Equivalent to calling [`record_row_height`] for every entry in `heights`
+/// but produces only one clone of `TableState` instead of one per entry.
+/// The adapter measurement loop uses this to avoid N signal writes for an
+/// N-row virtual window.
+#[must_use]
+pub fn batch_record_row_heights<TRow: Clone, S: std::hash::BuildHasher>(
+    state: &TableState<TRow>,
+    heights: &HashMap<usize, f64, S>,
+) -> TableState<TRow> {
+    if heights.is_empty() {
+        return state.clone();
+    }
+    let mut row_heights = state.row_heights.clone();
+    row_heights.extend(heights.iter().map(|(k, v)| (*k, *v)));
+    TableState {
+        row_heights,
+        ..state.clone()
+    }
+}
+
+/// Clear the variable-row-height cache.
+///
+/// Called when the row set changes in a way that invalidates cached heights
+/// (e.g., after a data reload or a transition not already covered by
+/// [`toggle_sort`] / [`set_filter`] / [`set_page`]).
+#[must_use]
+pub fn clear_row_height_cache<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    TableState {
+        row_heights: HashMap::new(),
+        ..state.clone()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests (TESTS-1: every transition has a unit test asserting the result)
 // ---------------------------------------------------------------------------
@@ -344,6 +407,7 @@ mod tests {
             page_size: 10,
             column_visibility: HashMap::new(),
             column_widths: HashMap::new(),
+            row_heights: HashMap::new(),
             scroll_top: 0.0,
             viewport_height: 500.0,
             row_height: 40.0,
@@ -583,5 +647,121 @@ mod tests {
         let s1 = set_scroll(&s, 100.0);
         let s2 = set_scroll(&s1, 100.0);
         assert!((s2.scroll_top - 100.0).abs() < f64::EPSILON);
+    }
+
+    // ---- record_row_height ------------------------------------------------
+
+    #[test]
+    fn record_row_height_inserts_entry() {
+        let s = make_state();
+        let s2 = record_row_height(&s, 3, 55.5);
+        assert_eq!(s2.row_heights.get(&3), Some(&55.5));
+        // All other fields unchanged.
+        assert_eq!(s2.rows.len(), s.rows.len());
+        assert!(s2.sort.is_empty());
+    }
+
+    #[test]
+    fn record_row_height_overwrites_existing_entry() {
+        let s = make_state();
+        let s = record_row_height(&s, 0, 40.0);
+        let s2 = record_row_height(&s, 0, 60.0);
+        assert_eq!(s2.row_heights.get(&0), Some(&60.0));
+    }
+
+    #[test]
+    fn record_row_height_does_not_mutate_input() {
+        let s = make_state();
+        let _ = record_row_height(&s, 0, 50.0);
+        assert!(s.row_heights.is_empty());
+    }
+
+    // ---- clear_row_height_cache -------------------------------------------
+
+    #[test]
+    fn clear_row_height_cache_empties_map() {
+        let s = make_state();
+        let s = record_row_height(&s, 0, 40.0);
+        let s = record_row_height(&s, 1, 80.0);
+        assert_eq!(s.row_heights.len(), 2);
+        let s2 = clear_row_height_cache(&s);
+        assert!(s2.row_heights.is_empty());
+    }
+
+    #[test]
+    fn clear_row_height_cache_idempotent_on_empty() {
+        let s = make_state();
+        assert!(s.row_heights.is_empty());
+        let s2 = clear_row_height_cache(&s);
+        assert!(s2.row_heights.is_empty());
+    }
+
+    #[test]
+    fn clear_row_height_cache_preserves_other_fields() {
+        let s = make_state();
+        let s = record_row_height(&s, 0, 50.0);
+        let s2 = clear_row_height_cache(&s);
+        assert_eq!(s2.rows.len(), s.rows.len());
+        assert_eq!(s2.page, s.page);
+    }
+
+    // ---- cache-invalidation on sort / filter / page -----------------------
+
+    #[test]
+    fn toggle_sort_clears_row_height_cache() {
+        let s = make_state();
+        let s = record_row_height(&s, 0, 60.0);
+        let s2 = toggle_sort(&s, col_name());
+        assert!(s2.row_heights.is_empty());
+    }
+
+    #[test]
+    fn set_filter_clears_row_height_cache() {
+        let s = make_state();
+        let s = record_row_height(&s, 0, 60.0);
+        let s2 = set_filter(&s, col_name(), Some(FilterValue::Text("ali".into())));
+        assert!(s2.row_heights.is_empty());
+    }
+
+    #[test]
+    fn set_page_clears_row_height_cache() {
+        let mut s = make_state();
+        s.page_size = 2; // 3 rows → 2 pages
+        let s = record_row_height(&s, 0, 60.0);
+        let s2 = set_page(&s, 1).expect("page 1 valid");
+        assert!(s2.row_heights.is_empty());
+    }
+
+    #[test]
+    fn batch_record_row_heights_merges_entries() {
+        let s = make_state();
+        let heights: HashMap<usize, f64> = [(0, 40.0), (1, 60.0), (2, 50.0)].into();
+        let s2 = batch_record_row_heights(&s, &heights);
+        assert_eq!(s2.row_heights.get(&0), Some(&40.0));
+        assert_eq!(s2.row_heights.get(&1), Some(&60.0));
+        assert_eq!(s2.row_heights.get(&2), Some(&50.0));
+    }
+
+    #[test]
+    fn batch_record_row_heights_empty_batch_is_no_op() {
+        let s = record_row_height(&make_state(), 0, 55.0);
+        let s2 = batch_record_row_heights(&s, &HashMap::new());
+        assert_eq!(s2.row_heights, s.row_heights);
+    }
+
+    #[test]
+    fn batch_record_row_heights_overwrites_existing_entries() {
+        let s = record_row_height(&make_state(), 0, 40.0);
+        let heights: HashMap<usize, f64> = [(0, 80.0)].into();
+        let s2 = batch_record_row_heights(&s, &heights);
+        assert_eq!(s2.row_heights.get(&0), Some(&80.0));
+    }
+
+    #[test]
+    fn batch_record_row_heights_does_not_mutate_input() {
+        let s = make_state();
+        let heights: HashMap<usize, f64> = [(0, 40.0)].into();
+        let _ = batch_record_row_heights(&s, &heights);
+        assert!(s.row_heights.is_empty());
     }
 }

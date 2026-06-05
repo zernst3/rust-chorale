@@ -3,6 +3,8 @@
 //! Unlike transitions these functions do not return a new state; they
 //! compute read-only projections for the adapter to render.
 
+use std::collections::HashMap;
+
 use crate::state::{TableState, VirtualWindow};
 use crate::types::RowId;
 
@@ -55,6 +57,86 @@ pub fn visible_window(
     let top_pad_px = start_index as f64 * row_height;
     #[allow(clippy::cast_precision_loss)]
     let bottom_pad_px = (total_rows - 1 - end_index) as f64 * row_height;
+
+    VirtualWindow {
+        start_index,
+        end_index,
+        top_pad_px,
+        bottom_pad_px,
+    }
+}
+
+/// Compute the variable-height virtual window for a scroll offset.
+///
+/// Unlike [`visible_window`], this function reads per-row heights from
+/// `row_heights` (keyed by row index within the current page view). Rows
+/// not yet in the cache fall back to `default_row_height`. The window math
+/// uses a prefix-sum array built on-the-fly from the cached heights and
+/// binary search to locate the first and last visible rows.
+///
+/// The complexity is O(n) over `total_rows` for the prefix-sum build.
+/// If profiling later shows cost above 2 ms at scale, the prefix-sum can
+/// be cached in `TableState` as a subsequent non-breaking field addition.
+///
+/// Per VIRT-2: introduced in v0.2.0 (Item 6 — variable-row-height
+/// virtualization, signed off 2026-06-04).
+#[must_use]
+pub fn visible_window_variable<S: std::hash::BuildHasher>(
+    row_heights: &HashMap<usize, f64, S>,
+    scroll_top: f64,
+    viewport_height: f64,
+    default_row_height: f64,
+    total_rows: usize,
+    buffer_rows: usize,
+) -> VirtualWindow {
+    if total_rows == 0 || default_row_height <= 0.0 {
+        return VirtualWindow {
+            start_index: 0,
+            end_index: 0,
+            top_pad_px: 0.0,
+            bottom_pad_px: 0.0,
+        };
+    }
+
+    // prefix[i] = y-offset of row i's top edge.
+    // prefix[i+1] = y-offset of row i's bottom edge (= prefix[i] + height(i)).
+    let mut prefix: Vec<f64> = Vec::with_capacity(total_rows + 1);
+    prefix.push(0.0_f64);
+    for i in 0..total_rows {
+        let h = row_heights
+            .get(&i)
+            .copied()
+            .unwrap_or(default_row_height)
+            .max(0.0);
+        prefix.push(prefix[i] + h);
+    }
+
+    let bottom = scroll_top + viewport_height;
+
+    // Number of rows whose bottom edge is ≤ scroll_top (rows fully above viewport).
+    // prefix[i+1] is the bottom of row i; prefix[1..] partition_point gives this count.
+    let raw_start = prefix[1..]
+        .partition_point(|&x| x <= scroll_top)
+        .min(total_rows - 1);
+
+    // Last row whose top edge is strictly below the viewport bottom.
+    // prefix.partition_point(< bottom) gives count of prefix entries < bottom;
+    // subtract 1 to get the row index of the last visible row's top.
+    let raw_end = {
+        let idx = prefix.partition_point(|&x| x < bottom);
+        idx.saturating_sub(1).min(total_rows - 1)
+    };
+
+    // Ensure end >= start (degenerate case: viewport height < smallest row height).
+    let raw_end = raw_end.max(raw_start);
+
+    // Apply buffer (overscan rows rendered beyond the visible edge).
+    let start_index = raw_start.saturating_sub(buffer_rows);
+    let end_index = (raw_end + buffer_rows).min(total_rows - 1);
+
+    #[allow(clippy::cast_precision_loss)]
+    let top_pad_px = prefix[start_index];
+    let bottom_pad_px = (prefix[total_rows] - prefix[end_index + 1]).max(0.0);
 
     VirtualWindow {
         start_index,
@@ -316,6 +398,7 @@ mod tests {
             page_size: 10,
             column_visibility: HashMap::new(),
             column_widths: HashMap::new(),
+            row_heights: HashMap::new(),
             scroll_top: 0.0,
             viewport_height: 500.0,
             row_height: 40.0,
@@ -615,5 +698,121 @@ mod tests {
         s.row_height = row_height;
         s.viewport_height = viewport;
         s
+    }
+
+    // ---- visible_window_variable -------------------------------------------
+
+    /// Helper: build a heights map from a slice of (index, height) pairs.
+    fn heights(pairs: &[(usize, f64)]) -> HashMap<usize, f64> {
+        pairs.iter().copied().collect()
+    }
+
+    #[test]
+    fn visible_window_variable_zero_rows_returns_empty() {
+        let win = visible_window_variable(&HashMap::new(), 0.0, 500.0, 40.0, 0, 0);
+        assert_eq!(win.start_index, 0);
+        assert_eq!(win.end_index, 0);
+        assert!((win.top_pad_px - 0.0).abs() < f64::EPSILON);
+        assert!((win.bottom_pad_px - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn visible_window_variable_all_default_height_matches_fixed() {
+        // When all rows use the default height, variable-height must equal
+        // the fixed-height result for the same inputs.
+        let total = 100usize;
+        let row_h = 40.0_f64;
+        let scroll = 800.0_f64;
+        let vp = 200.0_f64;
+        let buf = 3usize;
+        let fixed = super::visible_window(scroll, vp, row_h, total, buf);
+        let variable = visible_window_variable(&HashMap::new(), scroll, vp, row_h, total, buf);
+        assert_eq!(fixed.start_index, variable.start_index, "start mismatch");
+        assert_eq!(fixed.end_index, variable.end_index, "end mismatch");
+        assert!(
+            (fixed.top_pad_px - variable.top_pad_px).abs() < f64::EPSILON,
+            "top_pad mismatch: fixed={} variable={}",
+            fixed.top_pad_px,
+            variable.top_pad_px
+        );
+        assert!(
+            (fixed.bottom_pad_px - variable.bottom_pad_px).abs() < f64::EPSILON,
+            "bottom_pad mismatch"
+        );
+    }
+
+    #[test]
+    fn visible_window_variable_all_measured_precise_window() {
+        // 5 rows with heights [40, 80, 40, 60, 40]. Total = 260px.
+        // prefix = [0, 40, 120, 160, 220, 260].
+        // scroll_top=40, viewport=80: visible range [40, 120).
+        // Row 1 spans [40, 120): its top=40 is exactly scroll_top.
+        // Only row 1 is visible (top 40, bottom 120; viewport bottom 120 exclusive).
+        let h = heights(&[(0, 40.0), (1, 80.0), (2, 40.0), (3, 60.0), (4, 40.0)]);
+        let win = visible_window_variable(&h, 40.0, 80.0, 40.0, 5, 0);
+        assert_eq!(win.start_index, 1);
+        assert_eq!(win.end_index, 1);
+        assert!(
+            (win.top_pad_px - 40.0).abs() < f64::EPSILON,
+            "top_pad={}",
+            win.top_pad_px
+        );
+        // bottom_pad = 260 - 120 = 140
+        assert!(
+            (win.bottom_pad_px - 140.0).abs() < f64::EPSILON,
+            "bot_pad={}",
+            win.bottom_pad_px
+        );
+    }
+
+    #[test]
+    fn visible_window_variable_partial_measurement_uses_fallback() {
+        // 5 rows. Rows 1 and 3 measured at 80px; rows 0,2,4 use default 40px.
+        // prefix = [0, 40, 120, 160, 240, 280].
+        let h = heights(&[(1, 80.0), (3, 80.0)]);
+        // scroll_top=0, viewport=200: rows 0-3 visible (tops 0,40,120,160 all < 200).
+        let win = visible_window_variable(&h, 0.0, 200.0, 40.0, 5, 0);
+        assert_eq!(win.start_index, 0);
+        assert_eq!(win.end_index, 3);
+        assert!((win.top_pad_px - 0.0).abs() < f64::EPSILON);
+        // bottom_pad = 280 - prefix[4] = 280 - 240 = 40
+        assert!(
+            (win.bottom_pad_px - 40.0).abs() < f64::EPSILON,
+            "bot_pad={}",
+            win.bottom_pad_px
+        );
+    }
+
+    #[test]
+    fn visible_window_variable_buffer_expands_range() {
+        // 10 uniform rows of 40px. scroll_top=80, viewport=40 → raw [2, 2].
+        // With buffer=2: start=0, end=4.
+        let win = visible_window_variable(&HashMap::new(), 80.0, 40.0, 40.0, 10, 2);
+        assert_eq!(win.start_index, 0);
+        assert_eq!(win.end_index, 4);
+    }
+
+    #[test]
+    fn visible_window_variable_pad_sums_equal_unrendered_height() {
+        // All 20 uniform rows of 40px = 800px total.
+        // scroll_top=0, viewport=100, buffer=0 → rows 0..2 rendered.
+        let win = visible_window_variable(&HashMap::new(), 0.0, 100.0, 40.0, 20, 0);
+        let rendered = win.end_index - win.start_index + 1;
+        let total_h = 20.0 * 40.0;
+        let rendered_h = rendered as f64 * 40.0;
+        assert!(
+            (win.top_pad_px + win.bottom_pad_px - (total_h - rendered_h)).abs() < f64::EPSILON,
+            "pad_sum={} expected={}",
+            win.top_pad_px + win.bottom_pad_px,
+            total_h - rendered_h
+        );
+    }
+
+    #[test]
+    fn visible_window_variable_scroll_past_content_clamps_to_last_row() {
+        // scroll_top way beyond total content height → last valid window.
+        let win = visible_window_variable(&HashMap::new(), 100_000.0, 500.0, 40.0, 10, 0);
+        assert_eq!(win.end_index, 9);
+        assert!(win.bottom_pad_px >= 0.0);
     }
 }

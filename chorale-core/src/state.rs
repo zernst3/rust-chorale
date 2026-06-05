@@ -50,6 +50,13 @@ pub struct TableState<TRow: Clone> {
     pub column_visibility: HashMap<ColumnId, bool>,
     /// Column width overrides in px. Missing entry = `initial_width` or auto.
     pub column_widths: HashMap<ColumnId, f64>,
+    /// Per-row height cache for variable-row-height virtualization (VIRT-2).
+    ///
+    /// Keyed by row index within the current post-filter/sort/paginated page view.
+    /// Empty map → all rows use the fixed `row_height` fallback.
+    /// Invalidated automatically by `toggle_sort`, `set_filter`, and `set_page`
+    /// (indices shift on any of those transitions).
+    pub row_heights: HashMap<usize, f64>,
     // --- Virtualization fields (VIRT-1) ---
     /// Current scroll offset of the scroll container in px.
     pub scroll_top: f64,
@@ -73,6 +80,7 @@ impl<TRow: Clone + std::fmt::Debug> std::fmt::Debug for TableState<TRow> {
             .field("page_size", &self.page_size)
             .field("column_visibility", &self.column_visibility)
             .field("column_widths", &self.column_widths)
+            .field("row_heights", &self.row_heights)
             .field("scroll_top", &self.scroll_top)
             .field("viewport_height", &self.viewport_height)
             .field("row_height", &self.row_height)
@@ -93,6 +101,7 @@ impl<TRow: Clone> Clone for TableState<TRow> {
             page_size: self.page_size,
             column_visibility: self.column_visibility.clone(),
             column_widths: self.column_widths.clone(),
+            row_heights: self.row_heights.clone(),
             scroll_top: self.scroll_top,
             viewport_height: self.viewport_height,
             row_height: self.row_height,
@@ -132,6 +141,7 @@ impl<TRow: Clone> TableState<TRow> {
             page_size: 50,
             column_visibility: HashMap::new(),
             column_widths: HashMap::new(),
+            row_heights: HashMap::new(),
             scroll_top: 0.0,
             viewport_height: 500.0,
             row_height: 40.0,

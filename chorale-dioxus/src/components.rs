@@ -5,9 +5,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use chorale_core::{
-    to_csv, visible_view, visible_window, Alignment, BadgeVariantMap, CellValue, ColumnDef,
-    ColumnId, CurrencyCode, FilterKind, FilterValue, RenderKind, RowId, SortDirection, SortState,
-    TableState, VirtualWindow,
+    batch_record_row_heights, to_csv, visible_view, visible_window, visible_window_variable,
+    Alignment, BadgeVariantMap, CellValue, ColumnDef, ColumnId, CurrencyCode, FilterKind,
+    FilterValue, RenderKind, RowId, SortDirection, SortState, TableState, VirtualWindow,
 };
 use dioxus::prelude::*;
 
@@ -60,6 +60,7 @@ impl PartialEq for CellRenderers {
 /// | `column_toolbar` | `bool` | `false` | Show a column visibility toolbar above the table. Each column gets a toggle checkbox. |
 /// | `csv_export` | `bool` | `false` | Show a "Download CSV" button above the table. Exports the full post-filter/post-sort dataset (not just the current page). |
 /// | `resize_enabled` | `bool` | `false` | Show drag handles on column header borders. Dragging adjusts `column_widths` in the table state. |
+/// | `variable_row_height` | `bool` | `false` | Enable variable-row-height virtualization (VIRT-2). When `true`, the component measures each rendered row's height after mount via a DOM eval and caches the result in `state.row_heights`. The `row_height` prop (or `state.row_height`) is used as the fallback for unmeasured rows. Requires a web target. |
 #[component]
 pub fn Table<TRow: Clone + PartialEq + 'static>(
     handle: UseTableHandle<TRow>,
@@ -70,6 +71,7 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     #[props(default = false)] column_toolbar: bool,
     #[props(default = false)] csv_export: bool,
     #[props(default = false)] resize_enabled: bool,
+    #[props(default = false)] variable_row_height: bool,
 ) -> Element {
     // drag_state: Some((col_id, start_x_px, start_width_px)) while a resize is active.
     let mut drag_state: Signal<Option<(ColumnId, f64, f64)>> = use_signal(|| None);
@@ -137,6 +139,54 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
         ));
     });
 
+    // VIRT-2: variable-row-height measurement loop.
+    // Always called (hooks must be unconditional); no-op when variable_row_height=false.
+    // After each render, queries rendered rows by data-chorale-index attribute,
+    // measures their heights via getBoundingClientRect, and dispatches a batch
+    // state update if any measurement differs from the cached value by > 0.5px.
+    // The threshold prevents convergence loops caused by sub-pixel float rounding.
+    {
+        let scroll_id_meas = scroll_id.clone();
+        use_effect(move || {
+            if !variable_row_height {
+                return;
+            }
+            let cid = scroll_id_meas.clone();
+            let mut sig2 = handle.signal();
+            spawn(async move {
+                let mut js = dioxus::document::eval(&format!(
+                    r"const rs=document.querySelectorAll('#{cid} [data-chorale-index]');
+const parts=[];
+rs.forEach(r=>{{parts.push(r.getAttribute('data-chorale-index')+':'+r.getBoundingClientRect().height);}});
+dioxus.send(parts.join('\n'));"
+                ));
+                if let Ok(data) = js.recv::<String>().await {
+                    let measurements: std::collections::HashMap<usize, f64> = data
+                        .lines()
+                        .filter_map(|line| {
+                            let mut it = line.splitn(2, ':');
+                            let k = it.next()?.parse::<usize>().ok()?;
+                            let v = it.next()?.parse::<f64>().ok()?;
+                            Some((k, v))
+                        })
+                        .collect();
+                    if measurements.is_empty() {
+                        return;
+                    }
+                    let cur = sig2.read();
+                    let any_changed = measurements
+                        .iter()
+                        .any(|(k, v)| cur.row_heights.get(k).map_or(true, |h| (h - v).abs() > 0.5));
+                    if any_changed {
+                        let new_state = batch_record_row_heights(&cur, &measurements);
+                        drop(cur);
+                        sig2.set(new_state);
+                    }
+                }
+            });
+        });
+    }
+
     let view_read = view.read();
     let state = sig.read();
 
@@ -147,7 +197,7 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
         .cloned()
         .collect();
 
-    let (win, id_slice, row_slice) = compute_window_slice(&state, &view_read);
+    let (win, id_slice, row_slice) = compute_window_slice(&state, &view_read, variable_row_height);
     let total_pages = state.total_pages();
     let page_idx = state.page; // zero-based
     let total_rows = state.filtered_row_count();
@@ -260,8 +310,8 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
                                 }
                             }
                         }
-                        for (row_id, row) in id_slice.iter().zip(row_slice.iter()) {
-                            {data_tr(row, *row_id, &visible_cols, row_height, &widths, selection_enabled, selection_set.contains(row_id), handle, &cell_renderers)}
+                        for (i, (row_id, row)) in id_slice.iter().zip(row_slice.iter()).enumerate() {
+                            {data_tr(row, *row_id, win.start_index + i, variable_row_height, &visible_cols, row_height, &widths, selection_enabled, selection_set.contains(row_id), handle, &cell_renderers)}
                         }
                         if win.bottom_pad_px > 0.0 {
                             tr {
@@ -343,6 +393,9 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
 /// Given a memoized `visible_view` and the current state, returns the
 /// virtualization window plus the windowed row and id slices in a single pass.
 ///
+/// When `variable` is `true`, dispatches to [`visible_window_variable`]
+/// (VIRT-2); otherwise uses the fixed-height [`visible_window`] (VIRT-1).
+///
 /// **Wiring-bug regression guard.** Before this helper existed, the table
 /// component called `visible_window_for_state` (which internally computes
 /// the filtered/sorted/paginated view) AND `visible_row_ids` (which does
@@ -360,15 +413,27 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
 fn compute_window_slice<TRow: Clone>(
     state: &TableState<TRow>,
     view: &[(RowId, TRow)],
+    variable: bool,
 ) -> (VirtualWindow, Vec<RowId>, Vec<TRow>) {
     let total = view.len();
-    let win = visible_window(
-        state.scroll_top,
-        state.viewport_height,
-        state.row_height,
-        total,
-        state.buffer_rows,
-    );
+    let win = if variable {
+        visible_window_variable(
+            &state.row_heights,
+            state.scroll_top,
+            state.viewport_height,
+            state.row_height,
+            total,
+            state.buffer_rows,
+        )
+    } else {
+        visible_window(
+            state.scroll_top,
+            state.viewport_height,
+            state.row_height,
+            total,
+            state.buffer_rows,
+        )
+    };
     if total == 0 {
         return (win, vec![], vec![]);
     }
@@ -974,6 +1039,8 @@ fn select_all_th<TRow: Clone + PartialEq + 'static>(
 fn data_tr<TRow: Clone + PartialEq + 'static>(
     row: &TRow,
     row_id: RowId,
+    row_index: usize,
+    variable_row_height: bool,
     visible_cols: &[ColumnDef<TRow>],
     row_height: f64,
     widths: &HashMap<ColumnId, f64>,
@@ -1006,6 +1073,7 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
     rsx! {
         tr {
             style: "{row_bg}",
+            "data-chorale-index": "{row_index}",
             if selection_enabled {
                 td {
                     style: "padding: 0.25rem 0.5rem; width: 2.5rem; text-align: center; \
@@ -1018,7 +1086,7 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
                 }
             }
             for col in visible_cols {
-                {data_td(row, col, row_height, widths.get(&col.id).copied(), cell_renderers.get(col.id), separator_color)}
+                {data_td(row, col, row_height, variable_row_height, widths.get(&col.id).copied(), cell_renderers.get(col.id), separator_color)}
             }
         }
     }
@@ -1028,6 +1096,7 @@ fn data_td<TRow: Clone>(
     row: &TRow,
     col: &ColumnDef<TRow>,
     row_height: f64,
+    variable_row_height: bool,
     override_width: Option<f64>,
     custom_renderer: Option<CellRenderer>,
     separator_color: &str,
@@ -1035,11 +1104,20 @@ fn data_td<TRow: Clone>(
     let val = (col.accessor)(row);
     let align = alignment_css(col.alignment);
     let w = col_width_style(override_width, col.initial_width);
-    let style = format!(
-        "padding: 0.5rem 1rem; height: {row_height}px; text-align: {align}; \
-         white-space: nowrap; overflow: hidden; text-overflow: ellipsis; \
-         box-sizing: border-box; box-shadow: inset 0 -1px 0 {separator_color}; {w}"
-    );
+    // In variable-height mode, omit the explicit height constraint so that the
+    // TD sizes to its content and getBoundingClientRect() returns the true height.
+    let style = if variable_row_height {
+        format!(
+            "padding: 0.5rem 1rem; text-align: {align}; \
+             box-sizing: border-box; box-shadow: inset 0 -1px 0 {separator_color}; {w}"
+        )
+    } else {
+        format!(
+            "padding: 0.5rem 1rem; height: {row_height}px; text-align: {align}; \
+             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; \
+             box-sizing: border-box; box-shadow: inset 0 -1px 0 {separator_color}; {w}"
+        )
+    };
     let content = if let Some(renderer) = custom_renderer {
         renderer(&val)
     } else {
@@ -1326,7 +1404,7 @@ mod tests {
         let state = make_state(200.0, 40.0, 300.0);
         let view = visible_view(&state);
 
-        let (helper_win, helper_ids, helper_rows) = compute_window_slice(&state, &view);
+        let (helper_win, helper_ids, helper_rows) = compute_window_slice(&state, &view, false);
 
         // Legacy reference path: two independent calls into chorale-core that
         // collectively did the work compute_window_slice now does once.
@@ -1351,7 +1429,7 @@ mod tests {
         let mut state = make_state(0.0, 40.0, 300.0);
         state.rows.clear();
         let view = visible_view(&state);
-        let (win, ids, rows) = compute_window_slice(&state, &view);
+        let (win, ids, rows) = compute_window_slice(&state, &view, false);
         assert_eq!(win.start_index, 0);
         assert_eq!(win.end_index, 0);
         assert!(ids.is_empty());
@@ -1365,8 +1443,8 @@ mod tests {
     fn compute_window_slice_is_deterministic() {
         let state = make_state(120.0, 30.0, 200.0);
         let view = visible_view(&state);
-        let (w1, i1, r1) = compute_window_slice(&state, &view);
-        let (w2, i2, r2) = compute_window_slice(&state, &view);
+        let (w1, i1, r1) = compute_window_slice(&state, &view, false);
+        let (w2, i2, r2) = compute_window_slice(&state, &view, false);
         assert_eq!(w1, w2);
         assert_eq!(i1, i2);
         assert_eq!(r1, r2);
@@ -1380,7 +1458,7 @@ mod tests {
         // produce a negative-arithmetic out-of-bounds slice.
         let state = make_state(10_000.0, 40.0, 300.0);
         let view = visible_view(&state);
-        let (win, ids, rows) = compute_window_slice(&state, &view);
+        let (win, ids, rows) = compute_window_slice(&state, &view, false);
         assert!(win.end_index < view.len());
         assert!(ids.len() == rows.len());
     }
@@ -1757,7 +1835,7 @@ mod tests {
         // Large viewport compared to row count → all rows returned.
         let s = make_state(0.0, 40.0, 10_000.0);
         let view = visible_view(&s);
-        let (_win, _ids, rows) = super::compute_window_slice(&s, &view);
+        let (_win, _ids, rows) = super::compute_window_slice(&s, &view, false);
         assert_eq!(rows.len(), view.len());
     }
 
