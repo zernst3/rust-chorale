@@ -4,11 +4,14 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chorale_core::{
-    frozen_left_columns, frozen_right_columns, scrollable_columns, to_csv, visible_grouped_view,
-    visible_view, visible_window, Alignment, CellValue, ColumnDef, ColumnId, CommittedEdit,
-    EditorKind, FilterKind, FilterValue, GroupKey, GroupedPaginationMode, GroupedRow, Labels,
-    NaiveDate, PaginationMode, RenderKind, RowId, SortAction, SortDirection, SortState, TableState,
-    VirtualWindow,
+    add_disjoint_range, clear_active_cell, clear_range_selection, extend_range_to,
+    frozen_left_columns, frozen_right_columns, move_active_cell, move_active_cell_end,
+    move_active_cell_first, move_active_cell_home, move_active_cell_last, move_active_cell_page,
+    move_active_cell_to_edge, scrollable_columns, select_all as select_all_range,
+    start_range_selection, to_csv, visible_grouped_view, visible_view, visible_window, ActiveCell,
+    Alignment, CellValue, ColumnDef, ColumnId, CommittedEdit, EditorKind, FilterKind, FilterValue,
+    GroupKey, GroupedPaginationMode, GroupedRow, Labels, NaiveDate, NavDirection, PaginationMode,
+    RenderKind, RowId, SortAction, SortDirection, SortState, TableState, VirtualWindow,
 };
 use leptos::html;
 use leptos::prelude::*;
@@ -787,7 +790,7 @@ fn filter_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
 // Data row rendering
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
     row: &TRow,
     row_id: RowId,
@@ -801,6 +804,10 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
     validate_fn: &ValidateEditFn,
     on_commit_edit: Option<&Callback<CommittedEdit<TRow>>>,
     sticky_css: &str,
+    is_active_cell: bool,
+    is_in_range: bool,
+    row_index: usize,
+    handle: UseTableHandle<TRow>,
 ) -> AnyView {
     let val = (col.accessor)(row);
     let col_id = col.id;
@@ -813,6 +820,18 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
     let validate_fn = validate_fn.clone();
     let _on_commit_edit = on_commit_edit.copied();
     let _row_clone = row.clone();
+
+    // Active cell outline and range background (placed after sticky_css to override frozen bg).
+    let active_css = if is_active_cell {
+        "outline:2px solid var(--chorale-active-cell-outline,#0078d4);outline-offset:-2px;"
+    } else {
+        ""
+    };
+    let range_css = if is_in_range && !is_active_cell {
+        "background:rgba(0,120,212,0.1);"
+    } else {
+        ""
+    };
 
     if is_editing {
         if let Some(EditorKind::Text) = &col.editor {
@@ -872,11 +891,27 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
 
     let cell_content = render_cell_value(&val, &render_kind, renderer.as_ref());
     view! {
-        <td style=format!(
-            "padding:0.5rem 1rem;border-bottom:1px solid #eee;\
-             text-align:{align};height:{row_height}px;overflow:hidden;\
-             white-space:nowrap;text-overflow:ellipsis;{w}{sticky_css}"
-        )>
+        <td
+            style=format!(
+                "padding:0.5rem 1rem;border-bottom:1px solid #eee;\
+                 text-align:{align};height:{row_height}px;overflow:hidden;\
+                 white-space:nowrap;text-overflow:ellipsis;cursor:default;\
+                 {w}{sticky_css}{range_css}{active_css}"
+            )
+            on:click=move |ev: leptos::ev::MouseEvent| {
+                let ctrl = ev.ctrl_key() || ev.meta_key();
+                let shift = ev.shift_key();
+                let new_s = if ctrl {
+                    handle.signal.with_untracked(|s| add_disjoint_range(s, row_index, col_id))
+                } else if shift {
+                    handle.signal.with_untracked(|s| extend_range_to(s, row_index, col_id))
+                } else {
+                    handle.signal.with_untracked(|s| start_range_selection(s, row_index, col_id))
+                };
+                handle.signal.set(new_s);
+                ev.stop_propagation();
+            }
+        >
             {cell_content}
         </td>
     }
@@ -901,11 +936,16 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
     validate_fn: &ValidateEditFn,
     on_commit_edit: Option<&Callback<CommittedEdit<TRow>>>,
     sticky_body_css: &HashMap<ColumnId, String>,
+    active_cell: Option<ActiveCell>,
+    range_cells: &HashSet<(usize, ColumnId)>,
 ) -> AnyView {
     let bg = if is_selected { "#eff6ff" } else { "white" };
     let cells: Vec<AnyView> = visible_cols
         .iter()
         .map(|col| {
+            let is_active =
+                active_cell.is_some_and(|ac| ac.row_idx == row_index && ac.column_id == col.id);
+            let is_in_range = range_cells.contains(&(row_index, col.id));
             data_td(
                 row,
                 row_id,
@@ -919,6 +959,10 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 validate_fn,
                 on_commit_edit,
                 sticky_body_css.get(&col.id).map_or("", String::as_str),
+                is_active,
+                is_in_range,
+                row_index,
+                handle,
             )
         })
         .collect();
@@ -1149,6 +1193,9 @@ pub fn Table<TRow>(
     #[prop(default = false)] resize_enabled: bool,
     #[prop(default = ValidateEditFn::default())] validate_edit: ValidateEditFn,
     on_commit_edit: Option<Callback<CommittedEdit<TRow>>>,
+    /// Fired when Tab key moves focus to a cell whose column has `EditorKind` configured.
+    #[prop(optional)]
+    on_tab_to_editable: Option<Callback<ActiveCell>>,
     #[prop(optional)] selection_toolbar: Option<ChildrenFn>,
     #[prop(optional)] labels: Option<Labels>,
     #[prop(default = false)] column_reorder_enabled: bool,
@@ -1233,9 +1280,13 @@ where
         }
     });
 
+    let kb_ref: NodeRef<html::Div> = NodeRef::new();
+
     view! {
         <div
-            style="border:1px solid #ddd;border-radius:4px;overflow:hidden;user-select:none;"
+            node_ref=kb_ref
+            tabindex="0"
+            style="border:1px solid #ddd;border-radius:4px;overflow:hidden;user-select:none;outline:none;"
             on:mousemove=move |ev| {
                 if let Some((col_id, start_x, start_w)) = drag_state.get_untracked() {
                     let delta = f64::from(ev.client_x()) - start_x;
@@ -1244,6 +1295,129 @@ where
             }
             on:mouseup=move |_| { drag_state.set(None); }
             on:mouseleave=move |_| { drag_state.set(None); }
+            on:click=move |_| {
+                if let Some(el) = kb_ref.get_untracked() {
+                    let _ = el.focus();
+                }
+            }
+            on:keydown=move |ev: leptos::ev::KeyboardEvent| {
+                let shift = ev.shift_key();
+                let ctrl = ev.ctrl_key() || ev.meta_key();
+                let key = ev.key();
+                match key.as_str() {
+                    "ArrowDown" | "ArrowUp" | "ArrowLeft" | "ArrowRight" => {
+                        ev.prevent_default();
+                        let dir = match key.as_str() {
+                            "ArrowDown" => NavDirection::Down,
+                            "ArrowUp" => NavDirection::Up,
+                            "ArrowLeft" => NavDirection::Left,
+                            _ => NavDirection::Right,
+                        };
+                        if shift {
+                            let new_s = handle.signal.with_untracked(|s| {
+                                let vis_cols: Vec<ColumnId> = s
+                                    .columns
+                                    .iter()
+                                    .filter(|c| {
+                                        *s.column_visibility.get(&c.id).unwrap_or(&true)
+                                    })
+                                    .map(|c| c.id)
+                                    .collect();
+                                let total = s.filtered_row_count();
+                                let focus = s
+                                    .range_selection
+                                    .last()
+                                    .map(|r| r.focus)
+                                    .or_else(|| s.active_cell.map(|ac| (ac.row_idx, ac.column_id)));
+                                if let Some((row, col_id)) = focus {
+                                    let col_idx = vis_cols.iter().position(|id| *id == col_id).unwrap_or(0);
+                                    let last_row = total.saturating_sub(1);
+                                    let last_col = vis_cols.len().saturating_sub(1);
+                                    let (new_row, new_col_idx) = match dir {
+                                        NavDirection::Up => (row.saturating_sub(1), col_idx),
+                                        NavDirection::Down => ((row + 1).min(last_row), col_idx),
+                                        NavDirection::Left => (row, col_idx.saturating_sub(1)),
+                                        NavDirection::Right => (row, (col_idx + 1).min(last_col)),
+                                        _ => (row, col_idx),
+                                    };
+                                    let new_col_id = vis_cols.get(new_col_idx).copied().unwrap_or(col_id);
+                                    extend_range_to(s, new_row, new_col_id)
+                                } else {
+                                    s.clone()
+                                }
+                            });
+                            handle.signal.set(new_s);
+                        } else if ctrl {
+                            let new_s = handle.signal.with_untracked(|s| move_active_cell_to_edge(s, dir));
+                            handle.signal.set(new_s);
+                        } else {
+                            let new_s = handle.signal.with_untracked(|s| move_active_cell(s, dir));
+                            handle.signal.set(new_s);
+                        }
+                    }
+                    "Home" => {
+                        ev.prevent_default();
+                        let new_s = if ctrl {
+                            handle.signal.with_untracked(move_active_cell_first)
+                        } else {
+                            handle.signal.with_untracked(move_active_cell_home)
+                        };
+                        handle.signal.set(new_s);
+                    }
+                    "End" => {
+                        ev.prevent_default();
+                        let new_s = if ctrl {
+                            handle.signal.with_untracked(move_active_cell_last)
+                        } else {
+                            handle.signal.with_untracked(move_active_cell_end)
+                        };
+                        handle.signal.set(new_s);
+                    }
+                    "PageUp" => {
+                        ev.prevent_default();
+                        let page_sz = handle.signal.with_untracked(|s| s.page_size);
+                        let new_s = handle.signal.with_untracked(|s| move_active_cell_page(s, NavDirection::Up, page_sz));
+                        handle.signal.set(new_s);
+                    }
+                    "PageDown" => {
+                        ev.prevent_default();
+                        let page_sz = handle.signal.with_untracked(|s| s.page_size);
+                        let new_s = handle.signal.with_untracked(|s| move_active_cell_page(s, NavDirection::Down, page_sz));
+                        handle.signal.set(new_s);
+                    }
+                    "Escape" => {
+                        let new_s = handle.signal.with_untracked(|s| {
+                            let s2 = clear_range_selection(s);
+                            clear_active_cell(&s2)
+                        });
+                        handle.signal.set(new_s);
+                    }
+                    "a" | "A" if ctrl => {
+                        ev.prevent_default();
+                        let new_s = handle.signal.with_untracked(select_all_range);
+                        handle.signal.set(new_s);
+                    }
+                    "Tab" => {
+                        ev.prevent_default();
+                        let tab_dir = if shift { NavDirection::Left } else { NavDirection::Right };
+                        let (new_s, new_ac) = handle.signal.with_untracked(|s| {
+                            let ns = move_active_cell(s, tab_dir);
+                            let ac = ns.active_cell;
+                            (ns, ac)
+                        });
+                        handle.signal.set(new_s);
+                        if let (Some(ac), Some(cb)) = (new_ac, on_tab_to_editable) {
+                            let is_editable = handle.signal.with_untracked(|s| {
+                                s.columns.iter().any(|c| c.id == ac.column_id && c.editor.is_some())
+                            });
+                            if is_editable {
+                                cb.run(ac);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
         >
             // Column visibility toolbar
             {{
@@ -1384,6 +1558,22 @@ where
                         let (win, id_slice, row_slice) =
                             compute_window_slice(&s, &visible.get());
 
+                        // Active cell + range selection for highlighting.
+                        let active_cell = s.active_cell;
+                        let range_cells: HashSet<(usize, ColumnId)> = {
+                            let col_refs: Vec<&ColumnDef<TRow>> = visible_cols.iter().collect();
+                            let mut cells = HashSet::new();
+                            for r in &s.range_selection {
+                                let nr = r.normalized(&col_refs);
+                                for row in nr.min_row..=nr.max_row {
+                                    for &col_id in &nr.columns {
+                                        cells.insert((row, col_id));
+                                    }
+                                }
+                            }
+                            cells
+                        };
+
                         // ---- table header ----
                         let header_row: Vec<AnyView> = visible_cols
                             .iter()
@@ -1470,6 +1660,8 @@ where
                                         &validate_edit,
                                         on_commit_edit.as_ref(),
                                         &sticky_body_css,
+                                        active_cell,
+                                        &range_cells,
                                     ),
                                     _ => view! { <tr /> }.into_any(),
                                 })
@@ -1511,6 +1703,8 @@ where
                                     &validate_edit,
                                     on_commit_edit.as_ref(),
                                     &sticky_body_css,
+                                    active_cell,
+                                    &range_cells,
                                 ));
                             }
                             if win.bottom_pad_px > 0.0 {

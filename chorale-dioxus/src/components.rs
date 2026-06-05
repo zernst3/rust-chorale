@@ -5,12 +5,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use chorale_core::{
-    batch_record_row_heights, cancel_edit, commit_edit, frozen_left_columns, frozen_right_columns,
-    next_editable_cell, prev_editable_cell, scrollable_columns, to_csv, visible_grouped_view,
-    visible_view, visible_window, visible_window_variable, Alignment, BadgeVariantMap, CellValue,
-    ColumnDef, ColumnId, CommittedEdit, CurrencyCode, EditorKind, FilterKind, FilterValue,
-    GroupKey, GroupedPaginationMode, GroupedRow, Labels, PaginationMode, RenderKind, RowId,
-    SortAction, SortDirection, SortState, TableState, VirtualWindow,
+    add_disjoint_range, batch_record_row_heights, cancel_edit, clear_active_cell,
+    clear_range_selection, commit_edit, extend_range_to, frozen_left_columns, frozen_right_columns,
+    move_active_cell, move_active_cell_end, move_active_cell_first, move_active_cell_home,
+    move_active_cell_last, move_active_cell_page, move_active_cell_to_edge, next_editable_cell,
+    prev_editable_cell, scrollable_columns, select_all as select_all_range, start_range_selection,
+    to_csv, visible_grouped_view, visible_view, visible_window, visible_window_variable,
+    ActiveCell, Alignment, BadgeVariantMap, CellValue, ColumnDef, ColumnId, CommittedEdit,
+    CurrencyCode, EditorKind, FilterKind, FilterValue, GroupKey, GroupedPaginationMode, GroupedRow,
+    Labels, NavDirection, PaginationMode, RenderKind, RowId, SortAction, SortDirection, SortState,
+    TableState, VirtualWindow,
 };
 use dioxus::prelude::*;
 
@@ -132,6 +136,9 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     #[props(default)] labels: Option<Labels>,
     #[props(default = false)] column_reorder_enabled: bool,
     on_column_order_change: Option<EventHandler<Vec<ColumnId>>>,
+    /// Fired when the Tab key moves focus to a cell whose column has `EditorKind` configured.
+    /// The parent can use this to call `handle.start_edit(row_id, col_id)`.
+    on_tab_to_editable: Option<EventHandler<ActiveCell>>,
     /// CSS `z-index` applied to frozen column cells (header, filter row, and body).
     /// Raise if custom cell renderers use `z-index` internally.
     /// Default is `2` (above scrollable columns, which use no explicit z-index).
@@ -406,6 +413,28 @@ dioxus.send(parts.join('\n'));"
         .cloned()
         .collect();
 
+    // Active cell + range selection snapshots for rendering and keyboard handler.
+    let active_cell = state.active_cell;
+    let range_selection = state.range_selection.clone();
+    // Snapshot column IDs for the keyboard handler closure (stale-on-reorder is acceptable).
+    let visible_col_ids_for_kb: Vec<ColumnId> = visible_cols.iter().map(|c| c.id).collect();
+    let total_rows_for_kb = view_read.len();
+    // Pre-compute the set of all (row, col) cells covered by any range rectangle so that
+    // per-cell rendering is O(1) lookup rather than O(ranges * cells).
+    let range_cells: HashSet<(usize, ColumnId)> = {
+        let col_refs: Vec<&ColumnDef<TRow>> = visible_cols.iter().collect();
+        let mut cells = HashSet::new();
+        for r in &range_selection {
+            let nr = r.normalized(&col_refs);
+            for row in nr.min_row..=nr.max_row {
+                for &col_id in &nr.columns {
+                    cells.insert((row, col_id));
+                }
+            }
+        }
+        cells
+    };
+
     let (win, id_slice, row_slice) = compute_window_slice(&state, &view_read, variable_row_height);
     let total_pages = state.total_pages();
     let page_idx = state.page; // zero-based
@@ -442,10 +471,14 @@ dioxus.send(parts.join('\n'));"
     let nav_btn_dis = "padding:0.25rem 0.6rem;border:1px solid #ddd;border-radius:3px;\
                        font-size:0.875rem;cursor:not-allowed;background:#f0f0f0;color:#aaa;";
 
+    // Unique DOM id for the keyboard container so the click handler can focus it.
+    let kb_id = format!("{scroll_id}-kb");
     rsx! {
         div {
+            id: "{kb_id}",
+            tabindex: "0",
             style: "border: 1px solid #ddd; border-radius: 4px; overflow: hidden; \
-                    user-select: none;",
+                    user-select: none; outline: none;",
             onmousemove: move |e| {
                 if let Some((col_id, start_x, start_w)) = *drag_state.read() {
                     let delta = e.client_coordinates().x - start_x;
@@ -454,6 +487,133 @@ dioxus.send(parts.join('\n'));"
             },
             onmouseup: move |_| { drag_state.set(None); },
             onmouseleave: move |_| { drag_state.set(None); },
+            onclick: {
+                let kb_id = kb_id.clone();
+                move |_| {
+                    let id = kb_id.clone();
+                    dioxus::document::eval(&format!(
+                        "var el=document.getElementById('{id}');if(el)el.focus();"
+                    ));
+                }
+            },
+            onkeydown: move |e: KeyboardEvent| {
+                let shift = e.modifiers().contains(Modifiers::SHIFT);
+                let ctrl = e.modifiers().contains(Modifiers::CONTROL)
+                    || e.modifiers().contains(Modifiers::META);
+                let dir_opt: Option<NavDirection> = match e.key() {
+                    Key::ArrowDown => Some(NavDirection::Down),
+                    Key::ArrowUp => Some(NavDirection::Up),
+                    Key::ArrowLeft => Some(NavDirection::Left),
+                    Key::ArrowRight => Some(NavDirection::Right),
+                    _ => None,
+                };
+                if let Some(dir) = dir_opt {
+                    e.prevent_default();
+                    let mut sig_w = handle.signal();
+                    if shift {
+                        let cols = visible_col_ids_for_kb.clone();
+                        let total = total_rows_for_kb;
+                        let new_s = {
+                            let s = sig_w.peek();
+                            let focus = s
+                                .range_selection
+                                .last()
+                                .map(|r| r.focus)
+                                .or_else(|| s.active_cell.map(|ac| (ac.row_idx, ac.column_id)));
+                            if let Some((row, col_id)) = focus {
+                                let col_idx = cols.iter().position(|id| *id == col_id).unwrap_or(0);
+                                let last_row = total.saturating_sub(1);
+                                let last_col = cols.len().saturating_sub(1);
+                                let (new_row, new_col_idx) = match dir {
+                                    NavDirection::Up => (row.saturating_sub(1), col_idx),
+                                    NavDirection::Down => ((row + 1).min(last_row), col_idx),
+                                    NavDirection::Left => (row, col_idx.saturating_sub(1)),
+                                    NavDirection::Right => (row, (col_idx + 1).min(last_col)),
+                                    _ => (row, col_idx),
+                                };
+                                let new_col_id = cols.get(new_col_idx).copied().unwrap_or(col_id);
+                                extend_range_to(&*s, new_row, new_col_id)
+                            } else {
+                                s.clone()
+                            }
+                        };
+                        sig_w.set(new_s);
+                    } else if ctrl {
+                        let new_s = move_active_cell_to_edge(&*sig_w.peek(), dir);
+                        sig_w.set(new_s);
+                    } else {
+                        let new_s = move_active_cell(&*sig_w.peek(), dir);
+                        sig_w.set(new_s);
+                    }
+                } else {
+                    match e.key() {
+                        Key::Home => {
+                            e.prevent_default();
+                            let mut sig_w = handle.signal();
+                            let new_s = if ctrl {
+                                move_active_cell_first(&*sig_w.peek())
+                            } else {
+                                move_active_cell_home(&*sig_w.peek())
+                            };
+                            sig_w.set(new_s);
+                        }
+                        Key::End => {
+                            e.prevent_default();
+                            let mut sig_w = handle.signal();
+                            let new_s = if ctrl {
+                                move_active_cell_last(&*sig_w.peek())
+                            } else {
+                                move_active_cell_end(&*sig_w.peek())
+                            };
+                            sig_w.set(new_s);
+                        }
+                        Key::PageUp => {
+                            e.prevent_default();
+                            let mut sig_w = handle.signal();
+                            let page_sz = sig_w.peek().page_size;
+                            let new_s = move_active_cell_page(&*sig_w.peek(), NavDirection::Up, page_sz);
+                            sig_w.set(new_s);
+                        }
+                        Key::PageDown => {
+                            e.prevent_default();
+                            let mut sig_w = handle.signal();
+                            let page_sz = sig_w.peek().page_size;
+                            let new_s = move_active_cell_page(&*sig_w.peek(), NavDirection::Down, page_sz);
+                            sig_w.set(new_s);
+                        }
+                        Key::Escape => {
+                            let mut sig_w = handle.signal();
+                            let new_s = {
+                                let s = sig_w.peek();
+                                let s2 = clear_range_selection(&*s);
+                                clear_active_cell(&s2)
+                            };
+                            sig_w.set(new_s);
+                        }
+                        Key::Character(ref ch) if ch.to_lowercase() == "a" && ctrl => {
+                            e.prevent_default();
+                            let mut sig_w = handle.signal();
+                            let new_s = select_all_range(&*sig_w.peek());
+                            sig_w.set(new_s);
+                        }
+                        Key::Tab => {
+                            e.prevent_default();
+                            let tab_dir = if shift { NavDirection::Left } else { NavDirection::Right };
+                            let mut sig_w = handle.signal();
+                            let new_s = move_active_cell(&*sig_w.peek(), tab_dir);
+                            let new_ac = new_s.active_cell;
+                            sig_w.set(new_s);
+                            if let (Some(ac), Some(cb)) = (new_ac, on_tab_to_editable) {
+                                let s = sig_w.peek();
+                                if s.columns.iter().any(|c| c.id == ac.column_id && c.editor.is_some()) {
+                                    cb.call(ac);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            },
 
             if column_toolbar {
                 {column_visibility_toolbar(&all_col_defs, &col_visibility, handle, &labels)}
@@ -542,7 +702,7 @@ dioxus.send(parts.join('\n'));"
                     tbody {
                         if is_grouped {
                             for (i, grouped_row) in grouped_view_read.iter().cloned().enumerate() {
-                                {render_grouped_row(grouped_row, i, effective_col_count, selection_enabled, handle, &group_header_class, &visible_cols, row_height, &widths, variable_row_height, &cell_renderers, editing_target, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, &selection_set)}
+                                {render_grouped_row(grouped_row, i, effective_col_count, selection_enabled, handle, &group_header_class, &visible_cols, row_height, &widths, variable_row_height, &cell_renderers, editing_target, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, &selection_set, active_cell, &range_cells)}
                             }
                             if grouped_view_read.is_empty() {
                                 tr {
@@ -568,7 +728,7 @@ dioxus.send(parts.join('\n'));"
                                     let editing_col = editing_target
                                         .filter(|t| t.row_id == *row_id)
                                         .map(|t| t.column_id);
-                                    data_tr(row, *row_id, win.start_index + i, variable_row_height, &visible_cols, row_height, &widths, selection_enabled, selection_set.contains(row_id), handle, &cell_renderers, editing_col, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css)
+                                    data_tr(row, *row_id, win.start_index + i, variable_row_height, &visible_cols, row_height, &widths, selection_enabled, selection_set.contains(row_id), handle, &cell_renderers, editing_col, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, active_cell, &range_cells)
                                 }
                             }
                             if win.bottom_pad_px > 0.0 {
@@ -1439,6 +1599,8 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
     validate_edit: &ValidateEditFn,
     on_commit_edit: Option<EventHandler<CommittedEdit<TRow>>>,
     sticky_css_map: &HashMap<ColumnId, String>,
+    active_cell: Option<ActiveCell>,
+    range_cells: &HashSet<(usize, ColumnId)>,
 ) -> Element {
     // Row separator is rendered as a 1px inset box-shadow on each TD instead
     // of `border-bottom: 1px` on the TR. Reason: with `border-collapse: collapse`
@@ -1494,7 +1656,11 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
                         sticky_css_map.get(&col.id).map_or("", String::as_str),
                     )}
                 } else {
-                    {data_td(row, col, row_height, variable_row_height, widths.get(&col.id).copied(), cell_renderers.get(col.id), separator_color, sticky_css_map.get(&col.id).map_or("", String::as_str))}
+                    {
+                        let is_active = active_cell.is_some_and(|ac| ac.row_idx == row_index && ac.column_id == col.id);
+                        let is_in_range = range_cells.contains(&(row_index, col.id));
+                        data_td(row, col, row_height, variable_row_height, widths.get(&col.id).copied(), cell_renderers.get(col.id), separator_color, sticky_css_map.get(&col.id).map_or("", String::as_str), is_active, is_in_range, row_index, handle)
+                    }
                 }
             }
         }
@@ -1522,6 +1688,8 @@ fn render_grouped_row<TRow: Clone + PartialEq + 'static>(
     on_commit_edit: Option<EventHandler<CommittedEdit<TRow>>>,
     sticky_body_css: &HashMap<ColumnId, String>,
     selection_set: &HashSet<RowId>,
+    active_cell: Option<ActiveCell>,
+    range_cells: &HashSet<(usize, ColumnId)>,
 ) -> Element {
     match grouped_row {
         GroupedRow::Header {
@@ -1565,6 +1733,8 @@ fn render_grouped_row<TRow: Clone + PartialEq + 'static>(
                 validate_edit,
                 on_commit_edit,
                 sticky_body_css,
+                active_cell,
+                range_cells,
             )
         }
         _ => rsx! {},
@@ -1736,7 +1906,7 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn data_td<TRow: Clone>(
+fn data_td<TRow: Clone + PartialEq + 'static>(
     row: &TRow,
     col: &ColumnDef<TRow>,
     row_height: f64,
@@ -1745,22 +1915,38 @@ fn data_td<TRow: Clone>(
     custom_renderer: Option<CellRenderer>,
     separator_color: &str,
     sticky_css: &str,
+    is_active_cell: bool,
+    is_in_range: bool,
+    row_index: usize,
+    handle: UseTableHandle<TRow>,
 ) -> Element {
     let val = (col.accessor)(row);
     let align = alignment_css(col.alignment);
     let w = col_width_style(override_width, col.initial_width);
-    // In variable-height mode, omit the explicit height constraint so that the
-    // TD sizes to its content and getBoundingClientRect() returns the true height.
+    // Active cell: inset outline; range cell: semi-transparent blue background
+    // placed after sticky_css so it overrides the frozen-column `background: #fff`.
+    let active_css = if is_active_cell {
+        "outline: 2px solid var(--chorale-active-cell-outline, #0078d4); outline-offset: -2px; "
+    } else {
+        ""
+    };
+    let range_css = if is_in_range && !is_active_cell {
+        "background: rgba(0, 120, 212, 0.1); "
+    } else {
+        ""
+    };
     let style = if variable_row_height {
         format!(
             "padding: 0.5rem 1rem; text-align: {align}; \
-             box-sizing: border-box; box-shadow: inset 0 -1px 0 {separator_color}; {w} {sticky_css}"
+             box-sizing: border-box; box-shadow: inset 0 -1px 0 {separator_color}; \
+             cursor: default; {w} {sticky_css} {range_css}{active_css}"
         )
     } else {
         format!(
             "padding: 0.5rem 1rem; height: {row_height}px; text-align: {align}; \
              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; \
-             box-sizing: border-box; box-shadow: inset 0 -1px 0 {separator_color}; {w} {sticky_css}"
+             box-sizing: border-box; box-shadow: inset 0 -1px 0 {separator_color}; \
+             cursor: default; {w} {sticky_css} {range_css}{active_css}"
         )
     };
     let content = if let Some(renderer) = custom_renderer {
@@ -1768,9 +1954,24 @@ fn data_td<TRow: Clone>(
     } else {
         cell_element(&val, &col.render_kind)
     };
+    let col_id = col.id;
     rsx! {
         td {
             style: "{style}",
+            onclick: move |e: MouseEvent| {
+                let ctrl = e.modifiers().contains(Modifiers::CONTROL)
+                    || e.modifiers().contains(Modifiers::META);
+                let shift = e.modifiers().contains(Modifiers::SHIFT);
+                let mut sig_w = handle.signal();
+                let new_s = if ctrl {
+                    add_disjoint_range(&*sig_w.peek(), row_index, col_id)
+                } else if shift {
+                    extend_range_to(&*sig_w.peek(), row_index, col_id)
+                } else {
+                    start_range_selection(&*sig_w.peek(), row_index, col_id)
+                };
+                sig_w.set(new_s);
+            },
             {content}
         }
     }
