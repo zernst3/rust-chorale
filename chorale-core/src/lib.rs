@@ -33,6 +33,7 @@
 
 #![warn(missing_docs)]
 
+pub mod clipboard;
 mod column;
 mod error;
 mod labels;
@@ -427,6 +428,30 @@ pub use transitions::select_all;
 
 /// Clear all ranges (Escape when not editing). Idempotent.
 pub use transitions::clear_range_selection;
+
+// ---- Item 17: Clipboard ---------------------------------------------------
+
+/// Errors from clipboard operations: `MultiRectCopyNotSupported`, `NoRangeSelected`,
+/// `MultiRectPasteNotSupported`.
+pub use clipboard::ClipboardError;
+
+/// Serialize the active single-rect range selection to a tab-separated (TSV) string.
+///
+/// Returns `Ok("")` when no range is selected. Returns
+/// `Err(ClipboardError::MultiRectCopyNotSupported)` for disjoint (Ctrl+click) selections.
+/// Cells containing a tab are wrapped in double-quotes; cells with embedded newlines
+/// have the newline replaced with a space (minimal Excel-compatible escaping).
+pub use clipboard::to_clipboard_tsv;
+
+/// Parse a TSV string and adjust the active range to match the payload size.
+///
+/// Returns a new `TableState` with the `range_selection` expanded when the payload
+/// is larger than the original selection, or unchanged when the payload fits within
+/// the range (tile behavior is the host's responsibility via the `on_paste` callback).
+/// Row data is **not** mutated in core — the host applies per-cell writes.
+///
+/// Empty or all-whitespace `tsv` is a no-op.
+pub use clipboard::paste_tsv_into_range;
 
 // ---- Views ----------------------------------------------------------------
 
