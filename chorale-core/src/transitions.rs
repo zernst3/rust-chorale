@@ -991,7 +991,12 @@ mod tests {
         let s = toggle_sort(&s, col_name(), SortAction::Append);
         let s = toggle_sort(&s, col_score(), SortAction::Append);
         let s = toggle_sort(&s, col_age(), SortAction::Append);
-        assert_eq!(s.sort.len(), 3, "expected 3 sort columns, got {}", s.sort.len());
+        assert_eq!(
+            s.sort.len(),
+            3,
+            "expected 3 sort columns, got {}",
+            s.sort.len()
+        );
         assert_eq!(s.sort[0].column, col_name());
         assert_eq!(s.sort[1].column, col_score());
         assert_eq!(s.sort[2].column, col_age());

@@ -8,8 +8,8 @@
 
 use chorale_core::{
     AggregatorKind, Alignment, BadgeVariant, BadgeVariantMap, CellValue, ColumnDef, ColumnId,
-    CommittedEdit, CurrencyCode, EditorKind, FilterKind, FrozenSide, GroupedPaginationMode,
-    Labels, PaginationMode, RenderKind, RowId, TableState,
+    CommittedEdit, CurrencyCode, EditorKind, FilterKind, FrozenSide, GroupedPaginationMode, Labels,
+    PaginationMode, RenderKind, RowId, TableState,
 };
 use chorale_derive::TableRow;
 use chorale_dioxus::{use_table, CellRenderer, CellRenderers, Table};
@@ -174,7 +174,9 @@ fn build_columns(editing: bool, frozen: bool) -> Vec<ColumnDef<Employee>> {
         salary_col = salary_col.frozen(FrozenSide::Right);
     }
 
-    vec![name_col, email_col, joined_col, role_col, status_col, salary_col]
+    vec![
+        name_col, email_col, joined_col, role_col, status_col, salary_col,
+    ]
 }
 
 fn make_status_renderer() -> CellRenderer {
@@ -283,26 +285,25 @@ fn App() -> Element {
     });
 
     // ── Computed props for the Table ─────────────────────────────────────────
-    let commit_handler: Option<EventHandler<CommittedEdit<Employee>>> =
-        if *editing_on.read() {
-            Some(EventHandler::new(move |edit: CommittedEdit<Employee>| {
-                let current_row = table
-                    .signal()
-                    .read()
-                    .rows
-                    .iter()
-                    .find(|(id, _)| *id == edit.row_id)
-                    .map(|(_, r)| r.clone());
-                if let Some(mut row) = current_row {
-                    if edit.column_id == ColumnId("name") {
-                        row.name = edit.value.clone();
-                    }
-                    table.update_row(edit.row_id, row);
+    let commit_handler: Option<EventHandler<CommittedEdit<Employee>>> = if *editing_on.read() {
+        Some(EventHandler::new(move |edit: CommittedEdit<Employee>| {
+            let current_row = table
+                .signal()
+                .read()
+                .rows
+                .iter()
+                .find(|(id, _)| *id == edit.row_id)
+                .map(|(_, r)| r.clone());
+            if let Some(mut row) = current_row {
+                if edit.column_id == ColumnId("name") {
+                    row.name.clone_from(&edit.value);
                 }
-            }))
-        } else {
-            None
-        };
+                table.update_row(edit.row_id, row);
+            }
+        }))
+    } else {
+        None
+    };
 
     let toolbar_el: Option<Element> = if *selection_toolbar_on.read() {
         let count = table.signal().read().selection.len();
@@ -584,15 +585,24 @@ mod tests {
     #[test]
     fn build_columns_editing_adds_editor_to_name() {
         let cols = build_columns(true, false);
-        let name_col = cols.iter().find(|c| c.id == ColumnId("name")).unwrap();
-        assert!(name_col.editor.is_some(), "editing=true must set editor on name column");
+        let Some(name_col) = cols.iter().find(|c| c.id == ColumnId("name")) else {
+            panic!("name column not found in build_columns result");
+        };
+        assert!(
+            name_col.editor.is_some(),
+            "editing=true must set editor on name column"
+        );
     }
 
     #[test]
     fn build_columns_frozen_pins_name_left_salary_right() {
         let cols = build_columns(false, true);
-        let name_col = cols.iter().find(|c| c.id == ColumnId("name")).unwrap();
-        let salary_col = cols.iter().find(|c| c.id == ColumnId("salary")).unwrap();
+        let Some(name_col) = cols.iter().find(|c| c.id == ColumnId("name")) else {
+            panic!("name column not found in build_columns result");
+        };
+        let Some(salary_col) = cols.iter().find(|c| c.id == ColumnId("salary")) else {
+            panic!("salary column not found in build_columns result");
+        };
         assert_eq!(name_col.frozen, FrozenSide::Left);
         assert_eq!(salary_col.frozen, FrozenSide::Right);
     }

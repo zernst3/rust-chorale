@@ -1648,34 +1648,65 @@ mod tests {
         }
 
         let rows = vec![
-            (RowId::new(), Row3 { region: "West", dept: "Sales", score: 30 }),
-            (RowId::new(), Row3 { region: "West", dept: "Sales", score: 10 }),
-            (RowId::new(), Row3 { region: "West", dept: "Eng",   score: 20 }),
-            (RowId::new(), Row3 { region: "East", dept: "Sales", score: 50 }),
+            (
+                RowId::new(),
+                Row3 {
+                    region: "West",
+                    dept: "Sales",
+                    score: 30,
+                },
+            ),
+            (
+                RowId::new(),
+                Row3 {
+                    region: "West",
+                    dept: "Sales",
+                    score: 10,
+                },
+            ),
+            (
+                RowId::new(),
+                Row3 {
+                    region: "West",
+                    dept: "Eng",
+                    score: 20,
+                },
+            ),
+            (
+                RowId::new(),
+                Row3 {
+                    region: "East",
+                    dept: "Sales",
+                    score: 50,
+                },
+            ),
         ];
         let cols = vec![
             crate::column::ColumnDef::new(ColumnId("region"), "Region", |r: &Row3| {
                 crate::types::CellValue::Text(r.region.to_string())
-            }).sortable(),
+            })
+            .sortable(),
             crate::column::ColumnDef::new(ColumnId("dept"), "Dept", |r: &Row3| {
                 crate::types::CellValue::Text(r.dept.to_string())
-            }).sortable(),
+            })
+            .sortable(),
             crate::column::ColumnDef::new(ColumnId("score"), "Score", |r: &Row3| {
                 crate::types::CellValue::Integer(r.score)
-            }).sortable(),
+            })
+            .sortable(),
         ];
         let s = crate::state::TableState::new(rows, cols);
         let s = crate::transitions::toggle_sort(&s, ColumnId("region"), SortAction::Append);
-        let s = crate::transitions::toggle_sort(&s, ColumnId("dept"),   SortAction::Append);
-        let s = crate::transitions::toggle_sort(&s, ColumnId("score"),  SortAction::Append);
+        let s = crate::transitions::toggle_sort(&s, ColumnId("dept"), SortAction::Append);
+        let s = crate::transitions::toggle_sort(&s, ColumnId("score"), SortAction::Append);
 
         assert_eq!(s.sort.len(), 3, "must have 3 active sort columns");
 
         let view = visible_view(&s);
         assert_eq!(view.len(), 4);
-        assert_eq!(view[0].1.region, "East");  // East < West
-        assert_eq!(view[1].1.dept,   "Eng");   // West/Eng < West/Sales
-        assert_eq!(view[2].1.score,  10);      // West/Sales/10 < West/Sales/30
-        assert_eq!(view[3].1.score,  30);
+        assert_eq!(view[0].1.region, "East"); // East < West
+        assert_eq!(view[1].1.dept, "Eng"); // West/Eng < West/Sales
+        assert_eq!(view[2].1.score, 10); // West/Sales/10 < West/Sales/30
+        assert_eq!(view[3].1.score, 30);
     }
 }

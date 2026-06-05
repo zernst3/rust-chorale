@@ -8,8 +8,8 @@
 
 use chorale_core::{
     AggregatorKind, Alignment, BadgeVariant, BadgeVariantMap, CellValue, ColumnDef, ColumnId,
-    CommittedEdit, CurrencyCode, EditorKind, FilterKind, FrozenSide, GroupedPaginationMode,
-    Labels, NaiveDate, PaginationMode, RenderKind,
+    CommittedEdit, CurrencyCode, EditorKind, FilterKind, FrozenSide, GroupedPaginationMode, Labels,
+    NaiveDate, PaginationMode, RenderKind,
 };
 use chorale_derive::TableRow;
 use chorale_leptos::{use_chorale_table, CellRenderer, CellRenderers, Table};
@@ -168,7 +168,9 @@ fn build_columns(editing: bool, frozen: bool) -> Vec<ColumnDef<Employee>> {
         salary_col = salary_col.frozen(FrozenSide::Right);
     }
 
-    vec![name_col, email_col, joined_col, role_col, status_col, salary_col]
+    vec![
+        name_col, email_col, joined_col, role_col, status_col, salary_col,
+    ]
 }
 
 fn make_status_renderer() -> CellRenderer {
@@ -470,7 +472,7 @@ fn App() -> impl IntoView {
                         });
                         if let Some(mut row) = current_row {
                             if edit.column_id == ColumnId("name") {
-                                row.name = edit.value.clone();
+                                row.name.clone_from(&edit.value);
                             }
                             table.update_row(edit.row_id, row);
                         }
@@ -480,18 +482,22 @@ fn App() -> impl IntoView {
                 };
 
                 // ChildrenFn = Arc<dyn Fn() -> AnyView + Send + Sync>.
-                // Always pass a slot that renders its content conditionally based on the toggle.
+                // Uses a reactive {move || Option<AnyView>} fragment: renders the toolbar
+                // when the toggle is on and nothing when it is off.
                 let toolbar_fn: ChildrenFn = Arc::new(move || {
-                    if selection_toolbar_on.get() {
-                        let count = table.signal().with(|s| s.selection.len());
-                        view! {
-                            <div style="padding: 0.5rem 1rem; background: #1d4ed8; color: white; border-radius: 4px; font-size: 0.875rem; font-weight: 600;">
-                                {count}" row(s) selected"
-                            </div>
-                        }.into_any()
-                    } else {
-                        view! { }.into_any()
+                    view! {
+                        {move || {
+                            selection_toolbar_on.get().then(|| {
+                                let count = table.signal().with(|s| s.selection.len());
+                                view! {
+                                    <div style="padding: 0.5rem 1rem; background: #1d4ed8; color: white; border-radius: 4px; font-size: 0.875rem; font-weight: 600;">
+                                        {count}" row(s) selected"
+                                    </div>
+                                }
+                            })
+                        }}
                     }
+                    .into_any()
                 });
 
                 view! {
