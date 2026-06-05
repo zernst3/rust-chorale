@@ -35,6 +35,7 @@
 
 mod column;
 mod error;
+mod labels;
 mod state;
 mod theme;
 pub mod transitions;
@@ -162,6 +163,15 @@ pub use types::CurrencyCode;
 /// One variant per distinct failure mode (ROBUSTNESS-1):
 /// `PageOutOfRange`, `PageSizeZero`, `InvalidColumnWidth`.
 pub use error::StateError;
+
+// ---- Labels ---------------------------------------------------------------
+
+/// All user-visible strings the table renders. Override any field to customise.
+///
+/// Construct with [`Labels::default`] and mutate the fields you want to change.
+/// `Labels` is `#[non_exhaustive]` so future minor releases can add new fields
+/// without breaking existing callsites.
+pub use labels::Labels;
 
 // ---- Theming --------------------------------------------------------------
 

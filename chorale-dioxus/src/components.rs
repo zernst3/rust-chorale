@@ -8,7 +8,7 @@ use chorale_core::{
     batch_record_row_heights, cancel_edit, commit_edit, next_editable_cell, prev_editable_cell,
     to_csv, visible_view, visible_window, visible_window_variable, Alignment, BadgeVariantMap,
     CellValue, ColumnDef, ColumnId, CommittedEdit, CurrencyCode, EditorKind, FilterKind,
-    FilterValue, RenderKind, RowId, SortDirection, SortState, TableState, VirtualWindow,
+    FilterValue, Labels, RenderKind, RowId, SortDirection, SortState, TableState, VirtualWindow,
 };
 use dioxus::prelude::*;
 
@@ -109,6 +109,8 @@ impl PartialEq for ValidateEditFn {
 /// | `variable_row_height` | `bool` | `false` | Enable variable-row-height virtualization (VIRT-2). When `true`, the component measures each rendered row's height after mount via a DOM eval and caches the result in `state.row_heights`. The `row_height` prop (or `state.row_height`) is used as the fallback for unmeasured rows. Requires a web target. |
 /// | `validate_edit` | `ValidateEditFn` | no-op | Optional synchronous validator called before a cell edit is committed. Return `Ok(())` to allow, `Err(msg)` to show an inline error. |
 /// | `on_commit_edit` | `Option<EventHandler<CommittedEdit<TRow>>>` | `None` | Fired after a successful commit. Receives the new raw value and a `PriorEdit` snapshot for rollback. |
+/// | `selection_toolbar` | `Option<Element>` | `None` | Optional slot rendered above the table when `state.selection` is non-empty. Use for bulk-action bars. Wrapped in `div.chorale-selection-toolbar`. |
+/// | `labels` | `Option<Labels>` | `None` | All user-visible strings (filter placeholder, pagination labels, CSV button, etc.). `None` uses English defaults. Override for i18n. |
 #[component]
 pub fn Table<TRow: Clone + PartialEq + 'static>(
     handle: UseTableHandle<TRow>,
@@ -122,7 +124,11 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     #[props(default = false)] variable_row_height: bool,
     #[props(default)] validate_edit: ValidateEditFn,
     on_commit_edit: Option<EventHandler<CommittedEdit<TRow>>>,
+    #[props(default)] selection_toolbar: Option<Element>,
+    #[props(default)] labels: Option<Labels>,
 ) -> Element {
+    let labels = labels.clone().unwrap_or_default();
+
     // drag_state: Some((col_id, start_x_px, start_width_px)) while a resize is active.
     let mut drag_state: Signal<Option<(ColumnId, f64, f64)>> = use_signal(|| None);
     // In-cell editing state: current editor text and optional validation error.
@@ -322,7 +328,18 @@ dioxus.send(parts.join('\n'));"
             onmouseleave: move |_| { drag_state.set(None); },
 
             if column_toolbar {
-                {column_visibility_toolbar(&all_col_defs, &col_visibility, handle)}
+                {column_visibility_toolbar(&all_col_defs, &col_visibility, handle, &labels)}
+            }
+
+            if !state.selection.is_empty() {
+                if let Some(toolbar) = selection_toolbar {
+                    div {
+                        class: "chorale-selection-toolbar",
+                        style: "padding: 0.5rem 1rem; border-bottom: 1px solid #ddd; \
+                                background: #fffbeb;",
+                        {toolbar}
+                    }
+                }
             }
 
             // Virtualized scroll container. scroll_top is kept in TableState so
@@ -375,7 +392,7 @@ dioxus.send(parts.join('\n'));"
                                     }
                                 }
                                 for col in &visible_cols {
-                                    {filter_th(col, widths.get(&col.id).copied(), handle, &filters)}
+                                    {filter_th(col, widths.get(&col.id).copied(), handle, &filters, &labels)}
                                 }
                             }
                         }
@@ -406,6 +423,16 @@ dioxus.send(parts.join('\n'));"
                                 }
                             }
                         }
+                        if total_rows == 0 {
+                            tr {
+                                td {
+                                    colspan: "{effective_col_count}",
+                                    style: "padding: 2rem 1rem; text-align: center; \
+                                            color: #999; font-style: italic;",
+                                    "{labels.no_rows_label}"
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -418,7 +445,7 @@ dioxus.send(parts.join('\n'));"
                     style: if prev_disabled { "{nav_btn_dis}" } else { "{nav_btn}" },
                     disabled: prev_disabled,
                     onclick: move |_| { handle.set_page(page_idx.saturating_sub(1)).ok(); },
-                    "\u{2039}"
+                    "{labels.previous_page_label}"
                 }
                 for item in page_buttons {
                     {render_page_btn(item, page_idx, handle)}
@@ -431,13 +458,13 @@ dioxus.send(parts.join('\n'));"
                             handle.set_page(page_idx + 1).ok();
                         }
                     },
-                    "\u{203a}"
+                    "{labels.next_page_label}"
                 }
                 span { style: "margin-left: 0.5rem; color: #999;", "\u{00b7}" }
                 span { "{total_rows} rows" }
                 if total_pages > 1 {
                     span { style: "margin-left: 0.5rem; color: #999;", "\u{00b7}" }
-                    GotoPageInput::<TRow> { handle, total_pages }
+                    GotoPageInput::<TRow> { handle, total_pages, labels: labels.clone() }
                 }
                 if csv_export {
                     span { style: "flex: 1;" }
@@ -463,7 +490,7 @@ dioxus.send(parts.join('\n'));"
                                 let _ = js.send(csv);
                             });
                         },
-                        "Export CSV"
+                        "{labels.export_csv_label}"
                     }
                 }
             }
@@ -592,13 +619,15 @@ fn column_visibility_toolbar<TRow: Clone + PartialEq + 'static>(
     all_cols: &[(ColumnId, String)],
     visibility: &HashMap<ColumnId, bool>,
     handle: UseTableHandle<TRow>,
+    labels: &Labels,
 ) -> Element {
+    let col_vis_label = labels.column_visibility_label.clone();
     rsx! {
         div {
             style: "padding: 0.5rem 1rem; background: #f0f4ff; border-bottom: 1px solid #ddd; \
                     display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; \
                     font-size: 0.8rem; color: #444;",
-            span { style: "font-weight: 600;", "Columns:" }
+            span { style: "font-weight: 600;", "{col_vis_label}" }
             for (col_id, header) in all_cols {
                 {column_vis_checkbox(*col_id, header, visibility.get(col_id).copied().unwrap_or(true), handle)}
             }
@@ -631,10 +660,14 @@ fn filter_th<TRow: Clone + PartialEq + 'static>(
     override_width: Option<f64>,
     handle: UseTableHandle<TRow>,
     filters: &HashMap<ColumnId, FilterValue>,
+    labels: &Labels,
 ) -> Element {
     let w = col_width_style(override_width, col.initial_width);
     let col_id = col.id;
     let current = filters.get(&col_id).cloned();
+    let filter_placeholder = labels.filter_placeholder.clone();
+    let clear_label = labels.clear_filter_label.clone();
+    let all_label = labels.page_size_all_label.clone();
 
     let th_style =
         format!("padding: 0.25rem 0.5rem; border-bottom: 1px solid #eee; background: #fff; {w}");
@@ -655,7 +688,7 @@ fn filter_th<TRow: Clone + PartialEq + 'static>(
                         style: "display: flex; align-items: center; gap: 2px;",
                         input {
                             r#type: "text",
-                            placeholder: "Filter\u{2026}",
+                            placeholder: "{filter_placeholder}",
                             value: "{text}",
                             style: "flex: 1; min-width: 0; box-sizing: border-box; \
                                     padding: 2px 4px; border: 1px solid #ccc; \
@@ -670,7 +703,7 @@ fn filter_th<TRow: Clone + PartialEq + 'static>(
                             },
                         }
                         if has_filter {
-                            {clear_filter_button(col_id, handle)}
+                            {clear_filter_button(col_id, handle, &clear_label)}
                         }
                     }
                 }
@@ -688,10 +721,11 @@ fn filter_th<TRow: Clone + PartialEq + 'static>(
                                 options: options.clone(),
                                 current: current.clone(),
                                 handle,
+                                all_label: all_label.clone(),
                             }
                         }
                         if has_filter {
-                            {clear_filter_button(col_id, handle)}
+                            {clear_filter_button(col_id, handle, &clear_label)}
                         }
                     }
                 }
@@ -714,7 +748,7 @@ fn filter_th<TRow: Clone + PartialEq + 'static>(
                             }
                         }
                         if has_filter {
-                            {clear_filter_button(col_id, handle)}
+                            {clear_filter_button(col_id, handle, &clear_label)}
                         }
                     }
                 }
@@ -734,7 +768,7 @@ fn filter_th<TRow: Clone + PartialEq + 'static>(
                             }
                         }
                         if has_filter {
-                            {clear_filter_button(col_id, handle)}
+                            {clear_filter_button(col_id, handle, &clear_label)}
                         }
                     }
                 }
@@ -754,7 +788,7 @@ fn filter_th<TRow: Clone + PartialEq + 'static>(
                             }
                         }
                         if has_filter {
-                            {clear_filter_button(col_id, handle)}
+                            {clear_filter_button(col_id, handle, &clear_label)}
                         }
                     }
                 }
@@ -776,11 +810,13 @@ fn filter_th<TRow: Clone + PartialEq + 'static>(
 fn clear_filter_button<TRow: Clone + PartialEq + 'static>(
     col_id: ColumnId,
     handle: UseTableHandle<TRow>,
+    clear_label: &str,
 ) -> Element {
+    let clear_label = clear_label.to_owned();
     rsx! {
         button {
             r#type: "button",
-            title: "Clear Filter",
+            title: "{clear_label}",
             style: "border: 0; background: transparent; padding: 0 4px; \
                     cursor: pointer; color: #888; font-size: 0.95rem; \
                     line-height: 1; flex-shrink: 0;",
@@ -799,6 +835,7 @@ fn MultiSelectFilter<TRow: Clone + PartialEq + 'static>(
     options: Vec<String>,
     current: Option<FilterValue>,
     handle: UseTableHandle<TRow>,
+    all_label: String,
 ) -> Element {
     // Install a one-time document-level pointerdown listener that closes any
     // open chorale dropdown when the click lands outside it. We tag each
@@ -830,7 +867,7 @@ fn MultiSelectFilter<TRow: Clone + PartialEq + 'static>(
         _ => HashSet::new(),
     };
     let summary_label = if selected.is_empty() || selected.len() == options.len() {
-        "All".to_string()
+        all_label
     } else {
         format!("{} selected", selected.len())
     };
@@ -1496,6 +1533,7 @@ fn page_button_range(current: usize, total: usize) -> Vec<Option<usize>> {
 fn GotoPageInput<TRow: Clone + PartialEq + 'static>(
     handle: UseTableHandle<TRow>,
     total_pages: usize,
+    labels: Labels,
 ) -> Element {
     let sig = handle.signal();
     // Memo over JUST the page index so the use_effect re-syncs the draft
@@ -1509,12 +1547,13 @@ fn GotoPageInput<TRow: Clone + PartialEq + 'static>(
     });
 
     let max_page = total_pages.max(1);
+    let page_count_str = (labels.page_count)(*page_memo.read() + 1, max_page);
 
     rsx! {
         span {
             style: "display: inline-flex; align-items: center; gap: 0.25rem; \
                     color: #555; font-size: 0.875rem;",
-            "Go to"
+            "{labels.go_to_page_label}"
             input {
                 r#type: "number",
                 min: "1",
@@ -1533,7 +1572,7 @@ fn GotoPageInput<TRow: Clone + PartialEq + 'static>(
                     }
                 },
             }
-            "of {max_page}"
+            "{page_count_str}"
         }
     }
 }
