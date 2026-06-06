@@ -232,6 +232,17 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     #[props(default = false)] csv_export: bool,
     #[props(default = false)] resize_enabled: bool,
     #[props(default = false)] variable_row_height: bool,
+    /// **Inline mode** (default `false`). When `true`, the `<Table>` does NOT
+    /// render its own scroll container — the body renders at its natural full
+    /// height and any overflow is handled by the parent's scroll context.
+    /// Virtualization is disabled (all visible rows render in one batch).
+    ///
+    /// Use this when embedding a `<Table>` inside an outer scrolling element
+    /// where a nested scroll context would otherwise produce wheel-event
+    /// hand-off discontinuities (master/detail panels, sidebars, modals).
+    /// The consumer should keep the dataset small enough that rendering every
+    /// row at once is acceptable (typically <500 rows).
+    #[props(default = false)] inline: bool,
     #[props(default)] validate_edit: ValidateEditFn,
     on_commit_edit: Option<EventHandler<CommittedEdit<TRow>>>,
     #[props(default)] selection_toolbar: Option<Element>,
@@ -410,6 +421,11 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     {
         let kb_id_focus = kb_id.clone();
         let click_outside_counter: Signal<u32> = use_signal(|| 0);
+        // Clone callable values that the click-outside effect needs to read,
+        // since neither ValidateEditFn nor EventHandler are Copy and the rsx!
+        // body downstream still needs the originals.
+        let validate_edit_outside = validate_edit.clone();
+        let on_commit_edit_outside = on_commit_edit.clone();
         // Spawn an async eval that listens for a custom "chorale-blur" event
         // dispatched from the onmousedown on the document.
         {
@@ -444,16 +460,50 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
             let n = *click_outside_counter.read();
             if n > 0 {
                 let mut sig_w = handle.signal();
-                let new_state = {
+                let mut new_state_opt: Option<TableState<TRow>> = None;
+                {
                     let s = sig_w.peek();
-                    if s.active_cell.is_some() || !s.range_selection.is_empty() {
+                    // If an edit is in progress, COMMIT it first — clicking
+                    // outside should preserve the typed value (Excel parity),
+                    // not silently abandon it. Reproduced 2026-06-06 by Zach
+                    // (recording at 2:54 PM): edit cell → click outside grid
+                    // → typed string vanished and persistent blue border
+                    // remained.
+                    if let Some(target) = s.editing {
+                        let raw = editing_text.read().clone();
+                        let result = validate_edit_outside.call(EditValidation {
+                            row_id: target.row_id,
+                            column_id: target.column_id,
+                            raw_value: raw.clone(),
+                        });
+                        if result.is_ok() {
+                            if let Some(handler) = &on_commit_edit_outside {
+                                let prior_row = s.rows.iter()
+                                    .find(|(id, _)| *id == target.row_id)
+                                    .map(|(_, r)| r.clone());
+                                if let Some(prior_row) = prior_row {
+                                    handler.call(CommittedEdit::new(
+                                        target.row_id,
+                                        target.column_id,
+                                        raw,
+                                        prior_row,
+                                    ));
+                                }
+                            }
+                            edit_error.set(None);
+                            let committed = commit_edit(&*s);
+                            let cleared = clear_range_selection(&committed);
+                            new_state_opt = Some(clear_active_cell(&cleared));
+                        }
+                        // On validation error, leave the edit open so the
+                        // user can fix it. Do NOT clear active_cell — keep
+                        // the editor focused.
+                    } else if s.active_cell.is_some() || !s.range_selection.is_empty() {
                         let s2 = clear_range_selection(&*s);
-                        Some(clear_active_cell(&s2))
-                    } else {
-                        None
+                        new_state_opt = Some(clear_active_cell(&s2));
                     }
-                };
-                if let Some(new_state) = new_state {
+                }
+                if let Some(new_state) = new_state_opt {
                     sig_w.set(new_state);
                 }
             }
@@ -645,7 +695,28 @@ dioxus.send(parts.join('\n'));"
         None
     };
 
-    let (win, render_slice) = compute_window_slice(&state, &view_read, variable_row_height);
+    // In inline mode we bypass virtualization entirely — every visible row
+    // renders in a single batch with no top/bottom spacer <tr>s. This makes
+    // the <Table> usable as a child of an outer scrolling element (e.g.,
+    // master/detail panel) without creating a nested scroll context that
+    // would otherwise produce wheel-event hand-off discontinuities ("jumps")
+    // when the user scrolls past the edge of the inner view.
+    let (win, render_slice) = if inline {
+        // Inline mode: render the entire view at natural height; no
+        // virtualization, no spacers. `visible_window(0, MAX, ...)` returns a
+        // window that covers all rows with zero pad on either side.
+        let full_slice: Vec<RenderRow<TRow>> = view_read.iter().cloned().collect();
+        let win = visible_window(
+            0.0,
+            f64::MAX,
+            state.row_height,
+            full_slice.len(),
+            0,
+        );
+        (win, full_slice)
+    } else {
+        compute_window_slice(&state, &view_read, variable_row_height)
+    };
     let total_pages = state.total_pages();
     let page_idx = state.page; // zero-based
     let total_rows = state.filtered_row_count();
@@ -980,8 +1051,18 @@ dioxus.send(parts.join('\n'));"
             // Virtualized lists must always opt out of scroll anchoring.
             div {
                 id: "{scroll_id}",
-                style: "overflow-y: auto; overflow-x: auto; overflow-anchor: none; \
-                        height: {viewport_height}px;",
+                style: if inline {
+                    // Inline mode: no own scroll, no height clamp. Body
+                    // flows at natural size; parent's scroll context owns
+                    // overflow. Wheel events bubble through cleanly with
+                    // no nested-scroll handoff discontinuity.
+                    "overflow: visible; height: auto;".to_string()
+                } else {
+                    format!(
+                        "overflow-y: auto; overflow-x: auto; overflow-anchor: none; \
+                         height: {viewport_height}px;"
+                    )
+                },
                 onscroll: move |e| {
                     let st = e.scroll_top();
                     handle.set_scroll(st);
@@ -1366,18 +1447,20 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
         && drag_col_id.read().is_some_and(|id| id != col_id)
         && *drag_over_col.read() == Some(col_id);
 
-    let drag_over_style = if is_drag_over {
-        "outline: 2px dashed #4a90e2; outline-offset: -2px; "
-    } else {
-        ""
-    };
+    // STRUCTURAL OVERLAY (2026-06-06 fix): render the drop-target dashed
+    // outline as a child <div> instead of an inline `outline:` style on the
+    // <th>. Inline-style updates on <th> were not reliably picked up by
+    // Dioxus 0.7's diff after column reorder, so the outline persisted on
+    // the column that occupied the source slot post-drop (vid2). Adding or
+    // removing a child node forces Dioxus to do a structural mutation
+    // instead of an attribute diff.
 
     rsx! {
         th {
             style: "{extra}padding: 0.5rem 1rem; border-bottom: 1px solid #ddd; \
                     text-align: {align}; white-space: nowrap; overflow: hidden; \
                     text-overflow: ellipsis; position: sticky; top: 0; \
-                    background: #f8f9fa; z-index: 1; {w} {sticky_css} {drag_over_style}",
+                    background: #f8f9fa; z-index: 1; {w} {sticky_css}",
             draggable: column_reorder_enabled,
             onclick: move |e| {
                 if is_sortable {
@@ -1458,6 +1541,16 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
                 drag_col_id.set(None);
                 drag_over_col.set(None);
             },
+            // Drop-target outline as a structural overlay so Dioxus adds/removes
+            // a DOM node when is_drag_over flips rather than diffing an inline
+            // style attribute (which proved unreliable post-reorder).
+            if is_drag_over {
+                div {
+                    style: "position: absolute; inset: 0; \
+                            outline: 2px dashed #4a90e2; outline-offset: -2px; \
+                            pointer-events: none; z-index: 3;",
+                }
+            }
             "{header}{sort_arrow}"
             if let Some(badge) = sort_badge {
                 sup {
@@ -2400,30 +2493,30 @@ fn data_td<TRow: Clone + PartialEq + 'static>(
     let val = (col.accessor)(row);
     let align = alignment_css(col.alignment);
     let w = col_width_style(override_width, col.initial_width);
-    // Active cell: inset outline; range cell: semi-transparent blue background
-    // placed after sticky_css so it overrides the frozen-column `background: #fff`.
-    let active_css = if is_active_cell {
-        "outline: 2px solid var(--chorale-active-cell-outline, #0078d4); outline-offset: -2px; "
-    } else {
-        ""
-    };
-    let range_css = if is_in_range {
-        "background: rgba(0, 120, 212, 0.1); "
-    } else {
-        ""
-    };
+    // STRUCTURAL HIGHLIGHTS (2026-06-06 fix for vid new1/new2): move
+    // is_in_range + is_active_cell visual treatment OUT of the inline style
+    // string and INTO conditionally-rendered overlay <div>s.
+    //
+    // Why: with the prior inline-style approach, plain-click clears in
+    // chorale-core were correctly mutating state.range_selection (verified
+    // by unit tests), but Dioxus 0.7 was not reliably re-emitting the
+    // updated `style` attribute on the previously-highlighted <td>s — the
+    // blue background visually persisted. By rendering the highlight as a
+    // child overlay node that either exists or doesn't, Dioxus has to
+    // structurally add/remove a DOM node and cannot silently keep stale
+    // attribute state.
     let style = if variable_row_height {
         format!(
             "position: relative; padding: 0.5rem 1rem; text-align: {align}; \
              box-sizing: border-box; box-shadow: inset 0 -1px 0 {separator_color}; \
-             cursor: default; {w} {sticky_css} {range_css}{active_css}"
+             cursor: default; {w} {sticky_css}"
         )
     } else {
         format!(
             "position: relative; padding: 0.5rem 1rem; height: {row_height}px; text-align: {align}; \
              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; \
              box-sizing: border-box; box-shadow: inset 0 -1px 0 {separator_color}; \
-             cursor: default; {w} {sticky_css} {range_css}{active_css}"
+             cursor: default; {w} {sticky_css}"
         )
     };
     let content = if let Some(renderer) = custom_renderer {
@@ -2470,6 +2563,25 @@ fn data_td<TRow: Clone + PartialEq + 'static>(
                     fill_hover.set(Some((row_index, col_id)));
                 }
             },
+            // Range-cell overlay (children must come after attributes per rsx!
+            // ordering rules). pointer-events:none so clicks pass through.
+            if is_in_range {
+                div {
+                    style: "position: absolute; inset: 0; \
+                            background: rgba(0, 120, 212, 0.1); \
+                            pointer-events: none; z-index: 1;",
+                }
+            }
+            // Active-cell outline overlay. Drawn inset; sits over the range
+            // background but below interactive content.
+            if is_active_cell {
+                div {
+                    style: "position: absolute; inset: 0; \
+                            outline: 2px solid var(--chorale-active-cell-outline, #0078d4); \
+                            outline-offset: -2px; \
+                            pointer-events: none; z-index: 2;",
+                }
+            }
             {content}
             if is_focus_cell {
                 div {

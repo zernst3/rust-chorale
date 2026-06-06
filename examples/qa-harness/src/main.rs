@@ -146,22 +146,14 @@ fn EmployeeDetailPanel(employee: Employee) -> Element {
         .iter()
         .map(|(_, li)| f64::from(li.qty as i32) * li.unit_price)
         .sum();
-    // Size the child table to its content so:
-    //   (a) the panel auto-shrinks when there are only 2 items — no fixed
-    //       ~500 px black hole below a short list.
-    //   (b) inner scroll never engages (content == viewport), so a mouse
-    //       wheel scroll near the bottom rolls straight through to the
-    //       parent table instead of producing a discontinuity ("jump").
-    let child_row_height = 40.0;
-    let child_header_height = 40.0;
-    let child_viewport_height =
-        child_header_height + (item_count as f64) * child_row_height + 4.0;
+    // The child <Table> renders with `inline: true` (see the prop below),
+    // which makes it render at natural height with no internal scroll
+    // container. That's what's needed for a child table embedded inside a
+    // parent's scrolling viewport: no nested scroll context, no wheel
+    // hand-off discontinuity. Page-size is set to item_count so the child
+    // never paginates either.
     let table = use_table(move || {
         let mut s = TableState::new(items.clone(), line_item_columns());
-        s.viewport_height = child_viewport_height;
-        s.row_height = child_row_height;
-        // Single page covering all line items so the child never paginates.
-        // Consumer apps with genuinely huge child datasets can override.
         s.page_size = item_count.max(1);
         s
     });
@@ -182,6 +174,10 @@ fn EmployeeDetailPanel(employee: Employee) -> Element {
             Table {
                 handle: table,
                 sort_enabled: true,
+                // inline: true → no internal scroll container, no virtualization;
+                // child renders at natural height so the parent's scroll context
+                // owns wheel events end-to-end.
+                inline: true,
             }
         }
     }
