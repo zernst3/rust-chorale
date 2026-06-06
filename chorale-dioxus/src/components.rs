@@ -2333,7 +2333,7 @@ fn data_td<TRow: Clone + PartialEq + 'static>(
     } else {
         ""
     };
-    let range_css = if is_in_range && !is_active_cell {
+    let range_css = if is_in_range {
         "background: rgba(0, 120, 212, 0.1); "
     } else {
         ""
