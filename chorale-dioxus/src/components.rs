@@ -1393,6 +1393,7 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
                         let current_w = override_width.or(initial_width).unwrap_or(100.0);
                         drag_state.set(Some((col_id, e.client_coordinates().x, current_w)));
                     },
+                    ondoubleclick: move |_| handle.reset_column_width(col_id),
                 }
             }
         }

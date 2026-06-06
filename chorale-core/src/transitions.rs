@@ -387,6 +387,21 @@ pub fn set_column_width<TRow: Clone>(
     })
 }
 
+/// Remove the explicit width override for `col`, falling back to the
+/// column's `initial_width` (if set) or the table default.
+#[must_use]
+pub fn reset_column_width<TRow: Clone>(
+    state: &TableState<TRow>,
+    col: ColumnId,
+) -> TableState<TRow> {
+    let mut column_widths = state.column_widths.clone();
+    column_widths.remove(&col);
+    TableState {
+        column_widths,
+        ..state.clone()
+    }
+}
+
 /// Update the scroll position of the virtualized scroll container (px).
 ///
 /// Called by the adapter's `onscroll` handler. Pure: the adapter owns the
@@ -1743,6 +1758,26 @@ mod tests {
     fn set_column_width_negative_is_error() {
         let s = make_state();
         assert!(set_column_width(&s, col_name(), -10.0).is_err());
+    }
+
+    // ---- reset_column_width ------------------------------------------------
+
+    #[test]
+    fn reset_column_width_removes_override() {
+        let s = make_state();
+        let col = col_name();
+        let s2 = set_column_width(&s, col, 250.0).expect("valid width");
+        assert_eq!(s2.column_widths.get(&col), Some(&250.0));
+        let s3 = reset_column_width(&s2, col);
+        assert!(!s3.column_widths.contains_key(&col));
+    }
+
+    #[test]
+    fn reset_column_width_unknown_col_is_noop() {
+        let s = make_state();
+        let unknown = ColumnId("unknown_col");
+        let s2 = reset_column_width(&s, unknown);
+        assert_eq!(s2.column_widths, s.column_widths);
     }
 
     // ---- set_scroll --------------------------------------------------------

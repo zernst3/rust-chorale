@@ -825,6 +825,7 @@ fn header_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
                             drag_state.set(Some((col_id, start_x, start_w)));
                             ev.prevent_default();
                         }
+                        on:dblclick=move |_| handle.reset_column_width(col_id)
                     />
                 })
             } else {

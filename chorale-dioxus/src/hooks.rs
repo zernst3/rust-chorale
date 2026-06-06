@@ -2,11 +2,12 @@
 
 use chorale_core::{
     clear_sort, collapse_all_groups, collapse_all_rows, deselect_all, deselect_all_visible_page,
-    expand_all_groups, load_more_rows, move_column, remove_sort, select_all_filtered,
-    select_all_visible_page, set_column_visibility, set_column_width, set_filter, set_grouping,
-    set_page, set_page_size, set_pagination_mode, set_scroll, set_selection, start_edit,
-    toggle_group, toggle_row_expansion, toggle_select_all, toggle_sort, update_row, ColumnId,
-    FilterValue, GroupKey, PaginationMode, RowId, SortAction, StateError, TableState,
+    expand_all_groups, load_more_rows, move_column, remove_sort, reset_column_width,
+    select_all_filtered, select_all_visible_page, set_column_visibility, set_column_width,
+    set_filter, set_grouping, set_page, set_page_size, set_pagination_mode, set_scroll,
+    set_selection, start_edit, toggle_group, toggle_row_expansion, toggle_select_all, toggle_sort,
+    update_row, ColumnId, FilterValue, GroupKey, PaginationMode, RowId, SortAction, StateError,
+    TableState,
 };
 use dioxus::prelude::*;
 
@@ -134,6 +135,11 @@ impl<TRow: Clone + 'static> UseTableHandle<TRow> {
     /// Returns [`StateError::InvalidColumnWidth`] if `width_px <= 0`.
     pub fn set_column_width(&self, col: ColumnId, width_px: f64) -> Result<(), StateError> {
         self.try_dispatch(|s| set_column_width(s, col, width_px))
+    }
+
+    /// Reset the explicit width override for `col`, falling back to `initial_width` or table default.
+    pub fn reset_column_width(&self, col: ColumnId) {
+        self.dispatch(|s| reset_column_width(s, col));
     }
 
     /// Returns a clone of the current selection as a `Vec<RowId>`.

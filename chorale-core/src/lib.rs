@@ -305,6 +305,9 @@ pub use transitions::set_column_visibility;
 /// Override a column's width in pixels. Returns `Err` if `width_px <= 0`.
 pub use transitions::set_column_width;
 
+/// Remove the explicit width override for a column, falling back to `initial_width` or table default.
+pub use transitions::reset_column_width;
+
 /// Update the scroll offset of the virtualized scroll container (px).
 pub use transitions::set_scroll;
 
