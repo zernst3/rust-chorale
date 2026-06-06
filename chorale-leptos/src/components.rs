@@ -92,6 +92,88 @@ impl PartialEq for ValidateEditFn {
 }
 
 // ---------------------------------------------------------------------------
+// ExportXlsxButton
+// ---------------------------------------------------------------------------
+
+/// Base64-encode raw bytes using the standard alphabet (A-Za-z0-9+/).
+#[cfg(feature = "xlsx")]
+fn to_base64(bytes: &[u8]) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = u32::from(chunk[0]);
+        let b1 = chunk.get(1).copied().map_or(0, u32::from);
+        let b2 = chunk.get(2).copied().map_or(0, u32::from);
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(char::from(CHARS[((n >> 18) & 0x3F) as usize]));
+        out.push(char::from(CHARS[((n >> 12) & 0x3F) as usize]));
+        out.push(if chunk.len() > 1 {
+            char::from(CHARS[((n >> 6) & 0x3F) as usize])
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            char::from(CHARS[(n & 0x3F) as usize])
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// Button that exports the current filtered+sorted view as an XLSX file.
+///
+/// Requires the `xlsx` feature on both `chorale-leptos` and `chorale-core`.
+/// On click, calls [`chorale_core::to_xlsx`] and triggers a browser download
+/// via a `<a>` element with a data URL on WASM targets.
+#[cfg(feature = "xlsx")]
+#[component]
+pub fn ExportXlsxButton<TRow: Clone + PartialEq + Send + Sync + 'static>(
+    /// Table handle providing access to the current state.
+    handle: UseTableHandle<TRow>,
+    /// Sheet tab name written into the workbook. Defaults to `"Sheet1"`.
+    #[prop(default = String::from("Sheet1"))]
+    sheet_name: String,
+    /// File name the browser prompts with. Defaults to `"export.xlsx"`.
+    #[prop(default = String::from("export.xlsx"))]
+    filename: String,
+    /// Button label / child elements.
+    children: Children,
+) -> impl IntoView {
+    view! {
+        <button
+            on:click=move |_| {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    use chorale_core::{XlsxOptions, to_xlsx};
+                    let state = handle.signal.get_untracked();
+                    let opts = XlsxOptions { sheet_name: sheet_name.clone(), ..Default::default() };
+                    let Ok(bytes) = to_xlsx(&state, &opts) else { return };
+                    let b64 = to_base64(&bytes);
+                    let href = format!(
+                        "data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}"
+                    );
+                    let Some(window) = web_sys::window() else { return };
+                    let Some(document) = window.document() else { return };
+                    let Ok(el) = document.create_element("a") else { return };
+                    use wasm_bindgen::JsCast as _;
+                    let Ok(a) = el.dyn_into::<web_sys::HtmlAnchorElement>() else { return };
+                    a.set_href(&href);
+                    a.set_download(&filename);
+                    let _ = document.body().map(|b| b.append_child(&a));
+                    a.click();
+                    let _ = document.body().map(|b| b.remove_child(&a));
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                let _ = (&sheet_name, &filename);
+            }
+        >
+            {children()}
+        </button>
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Page-button helper
 // ---------------------------------------------------------------------------
 
@@ -1130,12 +1212,13 @@ fn build_sticky_css<TRow: Clone>(
 
 #[cfg(target_arch = "wasm32")]
 fn trigger_csv_download(csv: String) {
+    use js_sys;
     use wasm_bindgen::JsCast;
     leptos::task::spawn_local(async move {
         let array = js_sys::Array::new();
         array.push(&wasm_bindgen::JsValue::from_str(&csv));
-        let mut options = web_sys::BlobPropertyBag::new();
-        options.type_("text/csv;charset=utf-8;");
+        let options = web_sys::BlobPropertyBag::new();
+        options.set_type("text/csv;charset=utf-8;");
         let blob = web_sys::Blob::new_with_str_sequence_and_options(&array, &options);
         if let Ok(blob) = blob {
             if let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) {
@@ -1427,7 +1510,7 @@ where
                                         let tsv2 = tsv.clone();
                                         leptos::task::spawn_local(async move {
                                             if let Some(clipboard) = web_sys::window()
-                                                .and_then(|w| w.navigator().clipboard())
+                                                .and_then(|w| Some(w.navigator().clipboard()))
                                             {
                                                 let _ = wasm_bindgen_futures::JsFuture::from(
                                                     clipboard.write_text(&tsv2),
@@ -1448,7 +1531,7 @@ where
                         #[cfg(target_arch = "wasm32")]
                         leptos::task::spawn_local(async move {
                             let clipboard = web_sys::window()
-                                .and_then(|w| w.navigator().clipboard());
+                                .and_then(|w| Some(w.navigator().clipboard()));
                             if let Some(clipboard) = clipboard {
                                 if let Ok(tsv_val) = wasm_bindgen_futures::JsFuture::from(
                                     clipboard.read_text(),

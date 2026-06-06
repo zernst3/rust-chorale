@@ -120,6 +120,82 @@ fn js_string_literal(s: &str) -> String {
     out
 }
 
+/// Base64-encode raw bytes using the standard alphabet (A-Za-z0-9+/).
+#[cfg(feature = "xlsx")]
+fn to_base64(bytes: &[u8]) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = u32::from(chunk[0]);
+        let b1 = chunk.get(1).copied().map_or(0, u32::from);
+        let b2 = chunk.get(2).copied().map_or(0, u32::from);
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(char::from(CHARS[((n >> 18) & 0x3F) as usize]));
+        out.push(char::from(CHARS[((n >> 12) & 0x3F) as usize]));
+        out.push(if chunk.len() > 1 {
+            char::from(CHARS[((n >> 6) & 0x3F) as usize])
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            char::from(CHARS[(n & 0x3F) as usize])
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// Button that exports the current filtered+sorted view as an XLSX file.
+///
+/// Requires the `xlsx` feature on both `chorale-dioxus` and `chorale-core`.
+/// On click, calls [`chorale_core::to_xlsx`] and triggers a browser download
+/// via `document.createElement('a')` in a `dioxus::document::eval` script.
+#[cfg(feature = "xlsx")]
+#[component]
+pub fn ExportXlsxButton<TRow: Clone + 'static>(
+    /// Table handle providing access to the current state.
+    handle: UseTableHandle<TRow>,
+    /// Sheet tab name written into the workbook. Defaults to `"Sheet1"`.
+    #[props(default = String::from("Sheet1"))]
+    sheet_name: String,
+    /// File name the browser prompts with. Defaults to `"export.xlsx"`.
+    #[props(default = String::from("export.xlsx"))]
+    filename: String,
+    /// Button label / child elements.
+    children: Element,
+) -> Element {
+    use chorale_core::{to_xlsx, XlsxOptions};
+
+    let onclick = move |_: Event<MouseData>| {
+        let sig = handle.signal();
+        let state = sig.peek();
+        let mut opts = XlsxOptions::default();
+        opts.sheet_name = sheet_name.clone();
+        let Ok(bytes) = to_xlsx(&*state, &opts) else {
+            return;
+        };
+        let b64 = to_base64(&bytes);
+        let dl = js_string_literal(&filename);
+        // atob → Uint8Array → Blob → object URL → anchor click
+        let js = format!(
+            r#"(()=>{{
+                var r=atob('{b64}'),n=r.length,u=new Uint8Array(n);
+                for(var i=0;i<n;i++)u[i]=r.charCodeAt(i);
+                var bl=new Blob([u],{{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}});
+                var url=URL.createObjectURL(bl),a=document.createElement('a');
+                a.href=url;a.download={dl};a.click();
+                setTimeout(()=>URL.revokeObjectURL(url),100);
+            }})()"#
+        );
+        dioxus::document::eval(&js);
+    };
+
+    rsx! {
+        button { onclick, {children} }
+    }
+}
+
 /// The primary chorale Dioxus table component.
 ///
 /// Renders column headers, an optional filter row, virtualized data rows,
