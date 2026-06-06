@@ -286,7 +286,10 @@ fn paginate_grouped<TRow: Clone>(
         .collect();
 
     let start = page * page_size;
-    if start >= data_flat_indices.len() {
+    // When all groups are collapsed there are no data rows, but collapsed group
+    // headers must still appear so the user can expand them. Only early-return
+    // when there ARE data rows and we are past the last page of them.
+    if !data_flat_indices.is_empty() && start >= data_flat_indices.len() {
         return vec![];
     }
     let end = ((page + 1) * page_size).min(data_flat_indices.len());
@@ -1690,5 +1693,38 @@ mod tests {
         assert_eq!(view[1].1.dept, "Eng"); // West/Eng < West/Sales
         assert_eq!(view[2].1.score, 10); // West/Sales/10 < West/Sales/30
         assert_eq!(view[3].1.score, 30);
+    }
+
+    // ---- Bug 8 regression: collapse-all must still show group headers ------
+
+    #[test]
+    fn collapse_all_groups_still_shows_headers() {
+        let mut s = make_grouped_state();
+        s.grouping = vec![ColumnId("group")];
+        // Collapse both groups.
+        let key_a = GroupKey::from_values(&["A"]);
+        let key_b = GroupKey::from_values(&["B"]);
+        s.collapsed_groups.insert(key_a);
+        s.collapsed_groups.insert(key_b);
+        let view = visible_grouped_view(&s);
+        // No data rows are visible, but BOTH group headers must be present so
+        // the user can expand them again.
+        assert!(
+            !view.is_empty(),
+            "collapsing all groups must not produce an empty view"
+        );
+        let headers: Vec<&GroupedRow<GR>> = view
+            .iter()
+            .filter(|r| matches!(r, GroupedRow::Header { .. }))
+            .collect();
+        assert_eq!(headers.len(), 2, "both group headers must remain visible");
+        let data: Vec<&GroupedRow<GR>> = view
+            .iter()
+            .filter(|r| matches!(r, GroupedRow::Data(..)))
+            .collect();
+        assert!(
+            data.is_empty(),
+            "no data rows should be visible when all collapsed"
+        );
     }
 }
