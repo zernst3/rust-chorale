@@ -1187,7 +1187,7 @@ dioxus.send(parts.join('\n'));"
                                             let parent = state.rows.iter()
                                                 .find(|(rid, _)| *rid == pid)
                                                 .map(|(_, r)| r.clone());
-                                            detail_panel_tr(pid, parent, &detail_renderer, effective_col_count)
+                                            detail_panel_tr(pid, parent, &detail_renderer, effective_col_count, win.start_index + i)
                                         }
                                     }
                                 }
@@ -1353,8 +1353,20 @@ fn detail_panel_tr<TRow: Clone + PartialEq + 'static>(
     parent_row: Option<TRow>,
     detail_renderer: &Option<Callback<TRow, Element>>,
     colspan: usize,
+    row_index: usize,
 ) -> Element {
     let key = format!("{parent_row_id:?}");
+    // data-chorale-index is what the VIRT-2 measurement loop queries to read
+    // each <tr>'s getBoundingClientRect().height back into state.row_heights.
+    // Without it, the detail panel's actual rendered height (e.g. 200 px for
+    // a 5-item child table) never enters the cache, the variable-height
+    // virtualizer falls back to state.row_height (40 px) for this slot, and
+    // the running total used by visible_window_variable underestimates total
+    // content height by (real - estimate) per expanded row. The visible
+    // result: layout offset and scroll math drift, then snap together at
+    // the boundary as the user scrolls — the "jump" Zach reproduced
+    // 2026-06-06. Adding the attribute lets the existing measurement loop
+    // treat detail panels like any other variable-height row.
     match (parent_row, detail_renderer) {
         (Some(prow), Some(renderer)) => {
             let content = renderer.call(prow);
@@ -1362,6 +1374,7 @@ fn detail_panel_tr<TRow: Clone + PartialEq + 'static>(
                 tr {
                     key: "{key}",
                     class: "chorale-row chorale-detail-panel",
+                    "data-chorale-index": "{row_index}",
                     td {
                         colspan: "{colspan}",
                         div { class: "chorale-detail-panel-inner", {content} }
@@ -1373,6 +1386,7 @@ fn detail_panel_tr<TRow: Clone + PartialEq + 'static>(
             tr {
                 key: "{key}",
                 class: "chorale-row chorale-detail-panel-empty",
+                "data-chorale-index": "{row_index}",
             }
         },
     }
