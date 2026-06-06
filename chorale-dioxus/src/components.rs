@@ -504,10 +504,25 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     // The threshold prevents convergence loops caused by sub-pixel float rounding.
     {
         let scroll_id_meas = scroll_id.clone();
+        let vrh_at_setup = variable_row_height;
         use_effect(move || {
-            if !variable_row_height {
-                return;
-            }
+            // JP0: confirm the effect actually fired this tick AND log what
+            // variable_row_height was captured at hook-construction time.
+            // If you toggled Master/Detail after mount and JP0 shows
+            // vrh_at_setup=false, the closure was constructed with the
+            // initial-render value and never picked up the toggle —
+            // measurements never run.
+            dioxus::document::eval(&format!(
+                "console.log('[chorale-jp] JP0 measurement effect fired; vrh_at_setup={}');",
+                vrh_at_setup,
+            ));
+            // Don't gate on vrh_at_setup any more — the cost of an
+            // always-on measurement pass is one DOM query + a hash diff,
+            // and the alternative (stale closure capture) is worse than
+            // the perf cost. State.row_heights is only consulted by
+            // visible_window_variable, which is only used when
+            // variable_row_height is true downstream of where it's read
+            // fresh from the prop chain.
             let cid = scroll_id_meas.clone();
             let mut sig2 = handle.signal();
             spawn(async move {
@@ -600,12 +615,27 @@ dioxus.send(parts.join('\n'));"
                             row_top_with_old += old_h.max(0.0);
                         }
                         let new_scroll = (cur_scroll + scroll_delta).max(0.0);
+                        // Emit valid JS literals — Option<T> debug format
+                        // produces Some(...)/None which JavaScript rejects.
+                        let stopped_idx_js = match jp2_skipped_at {
+                            Some((i, _)) => format!("{}", i),
+                            None => String::from("null"),
+                        };
+                        let stopped_top_js = match jp2_skipped_at {
+                            Some((_, t)) => format!("{:.1}", t),
+                            None => String::from("null"),
+                        };
+                        let counted_str = if jp2_counted.is_empty() {
+                            String::from("  (none)")
+                        } else {
+                            jp2_counted.join("\\n")
+                        };
                         dioxus::document::eval(&format!(
-                            "console.log('[chorale-jp] JP2 anchor pass: cur_scroll={:.1} loop_stopped_at_idx={:?} (row_top={:?}); rows whose delta was counted:\\n{}; scroll_delta={:+.1}; new_scroll={:.1}');",
+                            "console.log('[chorale-jp] JP2 anchor pass: cur_scroll={:.1} loop_stopped_at_idx={} (row_top={}); rows whose delta was counted:\\n{}; scroll_delta={:+.1}; new_scroll={:.1}');",
                             cur_scroll,
-                            jp2_skipped_at.map(|(i, _)| i),
-                            jp2_skipped_at.map(|(_, t)| format!("{:.1}", t)),
-                            if jp2_counted.is_empty() { String::from("  (none)") } else { jp2_counted.join("\\n") },
+                            stopped_idx_js,
+                            stopped_top_js,
+                            counted_str,
                             scroll_delta,
                             new_scroll,
                         ));
@@ -2559,9 +2589,16 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
                                         .find(|c| c.id == col_id)
                                         .map(|c| (c.accessor)(r).to_csv_string())
                                 });
+                            // Emit a valid JS literal — {:?} on
+                            // Option<String> produces Some("foo") which
+                            // JavaScript rejects as ReferenceError.
+                            let post_js = match &post_handler {
+                                Some(v) => format!("{:?}", v),
+                                None => String::from("null"),
+                            };
                             dioxus::document::eval(&format!(
-                                "console.log('[chorale-edit] CP3 post-handler state.rows accessor=', {:?});",
-                                post_handler,
+                                "console.log('[chorale-edit] CP3 post-handler state.rows accessor=', {});",
+                                post_js,
                             ));
                         }
                         // Mutate fields in place — no clone-and-replace.
@@ -2589,9 +2626,14 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
                                         .find(|c| c.id == col_id)
                                         .map(|c| (c.accessor)(r).to_csv_string())
                                 });
+                            let post_js = match &post_my_write {
+                                Some(v) => format!("{:?}", v),
+                                None => String::from("null"),
+                            };
+                            let editing_js = if snap.editing.is_some() { "true" } else { "false" };
                             dioxus::document::eval(&format!(
-                                "console.log('[chorale-edit] CP4 post-my-write state.rows accessor=', {:?}, '; editing=', {:?});",
-                                post_my_write, snap.editing.is_some(),
+                                "console.log('[chorale-edit] CP4 post-my-write state.rows accessor=', {}, '; editing=', {});",
+                                post_js, editing_js,
                             ));
                         }
                     }
