@@ -349,6 +349,17 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
             s.grouping.clone(),
             s.collapsed_groups.clone(),
             s.expanded_rows.clone(),
+            // data_generation bumps every time update_row mutates row
+            // content. Without this in the tuple, cell edits land in
+            // state.rows but the view memo's PartialEq short-circuits
+            // and the cached visible_view is returned forever, so the
+            // cell continues rendering the pre-edit value until an
+            // unrelated transition happens to bump some other field.
+            // Reproduced by Zach 2026-06-06: edit "Diana Thomas123",
+            // click outside → state.rows correct (CP3/CP4 confirmed),
+            // cell still shows "Diana Thomas" until master/detail
+            // expansion changes expanded_rows.
+            s.data_generation,
         )
     });
     // sig.peek() reads without subscribing this memo to sig directly;

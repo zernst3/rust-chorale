@@ -430,6 +430,13 @@ pub fn update_row<TRow: Clone>(
     }
     TableState {
         rows,
+        // Bump data_generation so adapter view caches that key on this
+        // counter (e.g., the dioxus view memo) recompute on row-content
+        // changes. Without this, in-cell edits land in state.rows but the
+        // cached visible_view is never recomputed and the cell renders
+        // stale text until an unrelated transition (sort/filter/page/
+        // grouping/expansion) happens to bump a different key field.
+        data_generation: state.data_generation.wrapping_add(1),
         ..state.clone()
     }
 }

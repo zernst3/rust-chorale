@@ -125,6 +125,14 @@ pub struct TableState<TRow: Clone> {
     /// `extend_range_to` / `add_disjoint_range` / `select_all` /
     /// `clear_range_selection`.
     pub range_selection: Vec<crate::range::RangeSelection>,
+    /// Monotonic counter bumped whenever the underlying row data mutates
+    /// (currently: `update_row`). Adapters cache derived views (visible
+    /// slices, etc.) keyed on cheap signals like `rows.len()` and miss row
+    /// CONTENT changes — including in-cell edits where the row count
+    /// stays constant. Tracking this counter in such cache keys forces a
+    /// recompute on every row mutation without paying the O(n) cost of
+    /// re-hashing the full dataset per render.
+    pub data_generation: u64,
 }
 
 impl<TRow: Clone + std::fmt::Debug> std::fmt::Debug for TableState<TRow> {
@@ -153,6 +161,7 @@ impl<TRow: Clone + std::fmt::Debug> std::fmt::Debug for TableState<TRow> {
             .field("grouped_pagination", &self.grouped_pagination)
             .field("active_cell", &self.active_cell)
             .field("range_selection", &self.range_selection)
+            .field("data_generation", &self.data_generation)
             .finish_non_exhaustive()
     }
 }
@@ -184,6 +193,7 @@ impl<TRow: Clone> Clone for TableState<TRow> {
             grouped_pagination: self.grouped_pagination,
             active_cell: self.active_cell,
             range_selection: self.range_selection.clone(),
+            data_generation: self.data_generation,
         }
     }
 }
@@ -233,6 +243,7 @@ impl<TRow: Clone> TableState<TRow> {
             collapsed_groups: std::collections::HashSet::new(),
             expanded_rows: std::collections::HashSet::new(),
             grouped_pagination: GroupedPaginationMode::DataRowsOnly,
+            data_generation: 0,
             active_cell: None,
             range_selection: vec![],
         }
