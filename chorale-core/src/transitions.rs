@@ -841,6 +841,7 @@ pub fn set_active_cell<TRow: Clone>(
     }
     Ok(TableState {
         active_cell: Some(ActiveCell::new(row_idx, column_id)),
+        range_selection: vec![], // Bug 5b: plain set_active_cell clears range
         ..state.clone()
     })
 }
@@ -2397,6 +2398,17 @@ mod tests {
             s2.active_cell,
             Some(crate::types::ActiveCell::new(1, col_score()))
         );
+    }
+
+    #[test]
+    fn set_active_cell_clears_range_selection() {
+        let s = make_state();
+        let s2 = start_range_selection(&s, 0, col_name());
+        let s3 = extend_range_to(&s2, 1, col_score());
+        assert!(!s3.range_selection.is_empty());
+        let s4 = set_active_cell(&s3, 0, col_name()).unwrap();
+        assert!(s4.range_selection.is_empty(), "set_active_cell must clear range_selection");
+        assert_eq!(s4.active_cell.map(|ac| ac.row_idx), Some(0));
     }
 
     // ── Item 15: move_active_cell ────────────────────────────────────────────
