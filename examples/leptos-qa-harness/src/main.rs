@@ -197,6 +197,34 @@ fn make_status_renderer() -> CellRenderer {
     })
 }
 
+fn make_variable_height_renderer() -> CellRenderer {
+    Arc::new(|val: &CellValue| {
+        let name = if let CellValue::Text(s) = val {
+            s.clone()
+        } else {
+            String::new()
+        };
+        // Hash name length into 0-2 extra note lines so rows visibly vary in height.
+        let extra = name.len() % 3;
+        view! {
+            <div style="padding: 2px 0;">
+                <div style="font-weight: 500;">{name.clone()}</div>
+                {(extra >= 1).then(|| view! {
+                    <div style="font-size: 0.72rem; color: #6b7280; margin-top: 1px;">
+                        "▸ note A: joined employee record"
+                    </div>
+                })}
+                {(extra >= 2).then(|| view! {
+                    <div style="font-size: 0.72rem; color: #6b7280; margin-top: 1px;">
+                        "▸ note B: pending review cycle"
+                    </div>
+                })}
+            </div>
+        }
+        .into_any()
+    })
+}
+
 #[component]
 fn App() -> impl IntoView {
     let table = use_chorale_table(generate_dataset(), build_columns(false, false));
@@ -213,9 +241,7 @@ fn App() -> impl IntoView {
     // ── v0.2.0 toggles ──────────────────────────────────────────────────────
     let infinite_scroll_on = RwSignal::new(false);
     let labels_french_on = RwSignal::new(false);
-    // NOTE: variable_row_height is not yet implemented in chorale-leptos.
-    let labels_french_on_note = "variable_row_height: not yet available in Leptos adapter";
-    let _ = labels_french_on_note;
+    let variable_height_on = RwSignal::new(false);
     let editing_on = RwSignal::new(false);
     let grouping_on = RwSignal::new(false);
     let grouped_pagination_virt = RwSignal::new(false);
@@ -224,12 +250,15 @@ fn App() -> impl IntoView {
     let selection_toolbar_on = RwSignal::new(false);
     let use_derive_on = RwSignal::new(false);
 
-    // ── Status cell renderer (stable across renders) ─────────────────────────
-    let status_renderers = {
+    // ── Cell renderers (rebuilt when variable_height_on changes) ─────────────
+    let cell_renderers = Memo::new(move |_| {
         let mut m = HashMap::new();
         m.insert(ColumnId("status"), make_status_renderer());
+        if variable_height_on.get() {
+            m.insert(ColumnId("name"), make_variable_height_renderer());
+        }
         CellRenderers::new(m)
-    };
+    });
 
     // ── French labels ─────────────────────────────────────────────────────────
     let french_labels = {
@@ -381,9 +410,14 @@ fn App() -> impl IntoView {
                     />
                     " French Labels"
                 </label>
-                <span style="color: #9ca3af; font-size: 0.875rem; align-self: center; font-style: italic;">
-                    "Variable Row Height: Leptos adapter not yet implemented"
-                </span>
+                <label>
+                    <input
+                        type="checkbox"
+                        prop:checked=move || variable_height_on.get()
+                        on:change=move |_| variable_height_on.update(|v| *v = !*v)
+                    />
+                    " Variable Row Height (renderer only)"
+                </label>
                 <label>
                     <input
                         type="checkbox"
@@ -452,17 +486,16 @@ fn App() -> impl IntoView {
                 let csv = csv_export_on.get();
                 let resize = resize_on.get();
                 let col_reorder = column_reorder_on.get();
-                let renderers = status_renderers.clone();
+                let renderers = cell_renderers.get();
 
                 // Labels: always pass a concrete value (default or French).
-                // The prop is #[prop(optional)], so passing `Labels` (not Option) is correct.
                 let labels_val: Labels = if labels_french_on.get() {
                     french_labels.clone()
                 } else {
                     Labels::default()
                 };
 
-                // on_commit_edit has no #[prop(optional)], so pass Option<Callback<_>> directly.
+                // on_commit_edit: pass Option<Callback<_>> directly.
                 let commit_cb: Option<Callback<CommittedEdit<Employee>>> = if editing_on.get() {
                     Some(Callback::new(move |edit: CommittedEdit<Employee>| {
                         let current_row = table.signal().with(|s| {
@@ -482,16 +515,33 @@ fn App() -> impl IntoView {
                 };
 
                 // ChildrenFn = Arc<dyn Fn() -> AnyView + Send + Sync>.
-                // Uses a reactive {move || Option<AnyView>} fragment: renders the toolbar
-                // when the toggle is on and nothing when it is off.
                 let toolbar_fn: ChildrenFn = Arc::new(move || {
                     view! {
                         {move || {
                             selection_toolbar_on.get().then(|| {
                                 let count = table.signal().with(|s| s.selection.len());
                                 view! {
-                                    <div style="padding: 0.5rem 1rem; background: #1d4ed8; color: white; border-radius: 4px; font-size: 0.875rem; font-weight: 600;">
-                                        {count}" row(s) selected"
+                                    <div style="display: flex; align-items: center; gap: 1rem; \
+                                                padding: 0.75rem 1rem; background: #1d4ed8; \
+                                                color: white; font-size: 0.875rem; font-weight: 600; \
+                                                width: 100%; box-sizing: border-box;">
+                                        <span>{count}" row(s) selected"</span>
+                                        <button style="padding: 0.25rem 0.75rem; \
+                                                       background: rgba(255,255,255,0.2); \
+                                                       color: white; \
+                                                       border: 1px solid rgba(255,255,255,0.4); \
+                                                       border-radius: 3px; cursor: pointer; \
+                                                       font-size: 0.8rem;">
+                                            "[Delete Selected]"
+                                        </button>
+                                        <button style="padding: 0.25rem 0.75rem; \
+                                                       background: rgba(255,255,255,0.2); \
+                                                       color: white; \
+                                                       border: 1px solid rgba(255,255,255,0.4); \
+                                                       border-radius: 3px; cursor: pointer; \
+                                                       font-size: 0.8rem;">
+                                            "[Export Selected]"
+                                        </button>
                                     </div>
                                 }
                             })
@@ -501,6 +551,15 @@ fn App() -> impl IntoView {
                 });
 
                 view! {
+                    {move || selection_on.get().then(|| {
+                        let count = table.signal().with(|s| s.selection.len());
+                        view! {
+                            <div style="margin-bottom: 0.25rem; font-size: 0.875rem; \
+                                        color: #374151; font-weight: 500;">
+                                "Selection: "{count}" row(s)"
+                            </div>
+                        }
+                    })}
                     <Table
                         handle=table
                         sort_enabled=sort

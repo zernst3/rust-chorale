@@ -202,6 +202,35 @@ fn make_status_renderer() -> CellRenderer {
     })
 }
 
+fn make_variable_height_renderer() -> CellRenderer {
+    Arc::new(|val: &CellValue| {
+        let name = if let CellValue::Text(s) = val {
+            s.clone()
+        } else {
+            String::new()
+        };
+        // Hash name length into 0-2 extra note lines so rows visibly vary in height.
+        let extra = name.len() % 3;
+        rsx! {
+            div { style: "padding: 2px 0;",
+                div { style: "font-weight: 500;", "{name}" }
+                if extra >= 1 {
+                    div {
+                        style: "font-size: 0.72rem; color: #6b7280; margin-top: 1px;",
+                        "▸ note A: joined employee record"
+                    }
+                }
+                if extra >= 2 {
+                    div {
+                        style: "font-size: 0.72rem; color: #6b7280; margin-top: 1px;",
+                        "▸ note B: pending review cycle"
+                    }
+                }
+            }
+        }
+    })
+}
+
 #[component]
 fn App() -> Element {
     let table = use_table(|| TableState::new(generate_dataset(), build_columns(false, false)));
@@ -227,10 +256,13 @@ fn App() -> Element {
     let mut selection_toolbar_on = use_signal(|| false);
     let mut use_derive_on = use_signal(|| false);
 
-    // ── Status cell renderer (stable across renders) ─────────────────────────
-    let status_renderers = use_memo(|| {
+    // ── Cell renderers (re-built when variable_height_on changes) ────────────
+    let cell_renderers = use_memo(move || {
         let mut m = HashMap::new();
         m.insert(ColumnId("status"), make_status_renderer());
+        if *variable_height_on.read() {
+            m.insert(ColumnId("name"), make_variable_height_renderer());
+        }
         CellRenderers::new(m)
     });
 
@@ -309,9 +341,23 @@ fn App() -> Element {
         let count = table.signal().read().selection.len();
         Some(rsx! {
             div {
-                style: "padding: 0.5rem 1rem; background: #1d4ed8; color: white; \
-                        border-radius: 4px; font-size: 0.875rem; font-weight: 600;",
-                "{count} row(s) selected"
+                style: "display: flex; align-items: center; gap: 1rem; \
+                        padding: 0.75rem 1rem; background: #1d4ed8; color: white; \
+                        font-size: 0.875rem; font-weight: 600; width: 100%; \
+                        box-sizing: border-box;",
+                span { "{count} row(s) selected" }
+                button {
+                    style: "padding: 0.25rem 0.75rem; background: rgba(255,255,255,0.2); \
+                            color: white; border: 1px solid rgba(255,255,255,0.4); \
+                            border-radius: 3px; cursor: pointer; font-size: 0.8rem;",
+                    "[Delete Selected]"
+                }
+                button {
+                    style: "padding: 0.25rem 0.75rem; background: rgba(255,255,255,0.2); \
+                            color: white; border: 1px solid rgba(255,255,255,0.4); \
+                            border-radius: 3px; cursor: pointer; font-size: 0.8rem;",
+                    "[Export Selected]"
+                }
             }
         })
     } else {
@@ -534,12 +580,20 @@ fn App() -> Element {
                 }
             }
 
+            if *selection_on.read() {
+                div {
+                    style: "margin-bottom: 0.25rem; font-size: 0.875rem; color: #374151; \
+                            font-weight: 500;",
+                    "Selection: {table.signal().read().selection.len()} row(s)"
+                }
+            }
+
             Table {
                 handle: table,
                 sort_enabled: *sort_on.read(),
                 filter_enabled: *filter_on.read(),
                 selection_enabled: *selection_on.read(),
-                cell_renderers: status_renderers.read().clone(),
+                cell_renderers: cell_renderers.read().clone(),
                 column_toolbar: *col_toolbar_on.read(),
                 csv_export: *csv_export_on.read(),
                 resize_enabled: *resize_on.read(),
