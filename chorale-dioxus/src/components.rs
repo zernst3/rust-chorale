@@ -2464,33 +2464,56 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
                         padding: 1px 4px; border: 1px solid #4a90e2; border-radius: 2px;",
                 oninput: move |e| editing_text.set(e.value()),
                 onblur: move |_| {
-                    // Commit on blur (clicking anywhere outside the input).
-                    //
-                    // Sequencing matters here. The user-supplied on_commit_edit
-                    // handler dispatches `update_row` (a peek-mutate-set
-                    // through the chorale dispatch helper). If we then call
-                    // commit_edit with sig.read() and set the result, the
-                    // CLONE made inside commit_edit could be from a different
-                    // signal version than the post-update_row value when
-                    // Dioxus 0.7 reconciles batched writes, and our `.set()`
-                    // would overwrite the row mutation. The fix is to use
-                    // sig.write() to mutate just the `editing` + `active_cell`
-                    // + `range_selection` fields in place — never producing a
-                    // whole-state clone that races with the dispatched update.
+                    // INSTRUMENTED for the edit-commit bug. Logs five
+                    // checkpoints to the browser console so we can localize
+                    // where the typed value gets lost.
                     let raw = editing_text.peek().clone();
+                    dioxus::document::eval(&format!(
+                        "console.log('[chorale-edit] CP1 onblur fired; raw=', {:?});",
+                        raw,
+                    ));
                     let result = validate_blur.call(EditValidation {
                         row_id,
                         column_id: col_id,
                         raw_value: raw.clone(),
                     });
-                    if result.is_ok() {
+                    let val_ok = result.is_ok();
+                    dioxus::document::eval(&format!(
+                        "console.log('[chorale-edit] CP2 validate result.ok=', {});",
+                        val_ok,
+                    ));
+                    if val_ok {
                         edit_error.set(None);
                         if let Some(handler) = &on_commit_edit {
                             handler.call(CommittedEdit::new(
                                 row_id,
                                 col_id,
-                                raw,
+                                raw.clone(),
                                 prior_row_blur.clone(),
+                            ));
+                        }
+                        // CP3: after handler.call() — what does chorale see
+                        // in state.rows for this row? If this prints the new
+                        // value, the harness write-back landed; the bug is
+                        // downstream (my .write() or render). If it prints
+                        // the old value, the harness didn't write back —
+                        // it's a harness bug, not a chorale bug.
+                        {
+                            let s = handle.signal();
+                            let snap = s.peek();
+                            let post_handler = snap
+                                .rows
+                                .iter()
+                                .find(|(id, _)| *id == row_id)
+                                .and_then(|(_, r)| {
+                                    snap.columns
+                                        .iter()
+                                        .find(|c| c.id == col_id)
+                                        .map(|c| (c.accessor)(r).to_csv_string())
+                                });
+                            dioxus::document::eval(&format!(
+                                "console.log('[chorale-edit] CP3 post-handler state.rows accessor=', {:?});",
+                                post_handler,
                             ));
                         }
                         // Mutate fields in place — no clone-and-replace.
@@ -2500,6 +2523,28 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
                             s.editing = None;
                             s.active_cell = None;
                             s.range_selection.clear();
+                        }
+                        // CP4: after my sig.write() — same accessor again.
+                        // If this is now stale relative to CP3, my .write()
+                        // clobbered the row update (Dioxus 0.7 write-clone
+                        // race) and I need a different write strategy.
+                        {
+                            let s = handle.signal();
+                            let snap = s.peek();
+                            let post_my_write = snap
+                                .rows
+                                .iter()
+                                .find(|(id, _)| *id == row_id)
+                                .and_then(|(_, r)| {
+                                    snap.columns
+                                        .iter()
+                                        .find(|c| c.id == col_id)
+                                        .map(|c| (c.accessor)(r).to_csv_string())
+                                });
+                            dioxus::document::eval(&format!(
+                                "console.log('[chorale-edit] CP4 post-my-write state.rows accessor=', {:?}, '; editing=', {:?});",
+                                post_my_write, snap.editing.is_some(),
+                            ));
                         }
                     }
                     // On validation error, leave editing open so user can fix.
