@@ -118,7 +118,10 @@ pub fn to_clipboard_tsv<TRow: Clone>(state: &TableState<TRow>) -> Result<String,
         if row_idx >= rows.len() {
             break;
         }
-        let (_, row) = &rows[row_idx];
+        let row = match &rows[row_idx] {
+            crate::views::RenderRow::Data { row, .. } => row,
+            crate::views::RenderRow::DetailPanel { .. } => continue,
+        };
 
         let mut first_col = true;
         for &col_id in &normalized.columns {
@@ -652,7 +655,12 @@ mod tests {
         let new_state = paste_tsv_into_range(&state, "NewName").unwrap();
         // Row data must be unchanged — paste in core is range-only.
         let rows = visible_view(&new_state);
-        assert_eq!((rows[0].1.name.as_str()), "Alice");
+        match &rows[0] {
+            crate::views::RenderRow::Data { row, .. } => {
+                assert_eq!(row.name.as_str(), "Alice");
+            }
+            _ => panic!("Expected RenderRow::Data"),
+        }
     }
 
     #[test]

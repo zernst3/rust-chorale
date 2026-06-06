@@ -386,6 +386,15 @@ pub use transitions::expand_all_groups;
 /// No-op when `state.grouping` is empty.
 pub use transitions::collapse_all_groups;
 
+/// Toggle whether a row is expanded (showing a detail panel below it).
+///
+/// Mirrors `toggle_group`: if `row_id` is in `expanded_rows`, it is removed
+/// (row collapses). Otherwise it is inserted (row expands).
+pub use transitions::toggle_row_expansion;
+
+/// Collapse all expanded rows (clear `expanded_rows`).
+pub use transitions::collapse_all_rows;
+
 // ---- Item 15: Active-cell transitions -------------------------------------
 
 /// Set the active cell to a specific visible-row index and column.
@@ -535,6 +544,11 @@ pub use views::visible_grouped_view;
 ///
 /// Returned by [`visible_grouped_view`]. `#[non_exhaustive]`.
 pub use views::GroupedRow;
+
+/// What the renderer should draw for one virtualized row slot (Data or DetailPanel).
+///
+/// Returned by [`visible_view`] to support master/detail layouts.
+pub use views::RenderRow;
 
 /// How to aggregate rows within a group for a column (Sum/Average/Count/Min/Max/Custom).
 ///

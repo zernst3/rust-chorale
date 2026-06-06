@@ -101,6 +101,10 @@ pub struct TableState<TRow: Clone> {
     /// When a key is present, `visible_grouped_view` omits that group's data
     /// rows. Toggle via [`crate::transitions::toggle_group`].
     pub collapsed_groups: std::collections::HashSet<GroupKey>,
+    /// Row IDs that are currently expanded (showing a detail panel below them).
+    /// Mirrors `collapsed_groups` but opt-IN: rows default to collapsed.
+    /// Empty default. Toggled by `toggle_row_expansion`.
+    pub expanded_rows: std::collections::HashSet<RowId>,
     /// How pagination interacts with grouped rows. Defaults to `DataRowsOnly`.
     ///
     /// `DataRowsOnly`: page controls count data rows only; headers repeat on
@@ -145,6 +149,7 @@ impl<TRow: Clone + std::fmt::Debug> std::fmt::Debug for TableState<TRow> {
             .field("loaded_row_count", &self.loaded_row_count)
             .field("grouping", &self.grouping)
             .field("collapsed_groups", &self.collapsed_groups)
+            .field("expanded_rows", &self.expanded_rows)
             .field("grouped_pagination", &self.grouped_pagination)
             .field("active_cell", &self.active_cell)
             .field("range_selection", &self.range_selection)
@@ -175,6 +180,7 @@ impl<TRow: Clone> Clone for TableState<TRow> {
             loaded_row_count: self.loaded_row_count,
             grouping: self.grouping.clone(),
             collapsed_groups: self.collapsed_groups.clone(),
+            expanded_rows: self.expanded_rows.clone(),
             grouped_pagination: self.grouped_pagination,
             active_cell: self.active_cell,
             range_selection: self.range_selection.clone(),
@@ -225,6 +231,7 @@ impl<TRow: Clone> TableState<TRow> {
             loaded_row_count: 0,
             grouping: vec![],
             collapsed_groups: std::collections::HashSet::new(),
+            expanded_rows: std::collections::HashSet::new(),
             grouped_pagination: GroupedPaginationMode::DataRowsOnly,
             active_cell: None,
             range_selection: vec![],

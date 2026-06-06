@@ -90,6 +90,27 @@ impl<TRow: PartialEq> PartialEq for GroupedRow<TRow> {
     }
 }
 
+/// What the renderer should draw for one virtualized row slot.
+///
+/// Substrate for master/detail (Item N in CHANGELOG). `Data` is a normal data
+/// row. `DetailPanel` is a full-width row anchored to its `parent_row_id`;
+/// the adapter renders it as `<tr><td colspan={visible_cols}>{detail_content}</td></tr>`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RenderRow<TRow: Clone> {
+    /// A normal data row.
+    Data {
+        /// The row's stable ID (for selection, editing, etc.).
+        id: RowId,
+        /// The row data.
+        row: TRow,
+    },
+    /// A full-width detail panel anchored to a parent row.
+    DetailPanel {
+        /// The ID of the row that owns this detail panel.
+        parent_row_id: RowId,
+    },
+}
+
 /// Returns the interleaved group-header + data rows for the current state.
 ///
 /// When `state.grouping` is empty, every item is `GroupedRow::Data`
@@ -492,15 +513,22 @@ pub fn visible_window_variable<S: std::hash::BuildHasher>(
 /// Returns the `RowId`s of rows on the current page (post-sort/post-filter).
 ///
 /// In `PaginationMode::InfiniteScroll`, returns the first `loaded_row_count` rows.
-/// Used by `toggle_select_all`.
+/// DetailPanel rows are excluded. Used by `toggle_select_all`.
 #[must_use]
 pub fn visible_row_ids<TRow: Clone>(state: &TableState<TRow>) -> Vec<RowId> {
-    visible_view(state).into_iter().map(|(id, _)| id).collect()
+    visible_view(state)
+        .into_iter()
+        .filter_map(|r| match r {
+            RenderRow::Data { id, .. } => Some(id),
+            RenderRow::DetailPanel { .. } => None,
+        })
+        .collect()
 }
 
 /// Returns the rows on the current page (post-sort/post-filter).
 ///
 /// In `PaginationMode::InfiniteScroll`, returns the first `loaded_row_count` rows.
+/// DetailPanel rows are excluded.
 ///
 /// Data pipeline per the work-queue spec and recon-2 § 5:
 ///   raw rows → filter → sort → paginate
@@ -508,7 +536,10 @@ pub fn visible_row_ids<TRow: Clone>(state: &TableState<TRow>) -> Vec<RowId> {
 pub fn visible_rows<TRow: Clone>(state: &TableState<TRow>) -> Vec<TRow> {
     visible_view(state)
         .into_iter()
-        .map(|(_, row)| row)
+        .filter_map(|r| match r {
+            RenderRow::Data { row, .. } => Some(row),
+            RenderRow::DetailPanel { .. } => None,
+        })
         .collect()
 }
 
@@ -552,9 +583,9 @@ pub fn filtered_sorted_rows<TRow: Clone>(state: &TableState<TRow>) -> Vec<TRow> 
 /// assert!(view.is_empty());
 /// ```
 #[must_use]
-pub fn visible_view<TRow: Clone>(state: &TableState<TRow>) -> Vec<(RowId, TRow)> {
+pub fn visible_view<TRow: Clone>(state: &TableState<TRow>) -> Vec<RenderRow<TRow>> {
     let filtered_sorted = filtered_sorted_pairs(state);
-    match state.pagination_mode {
+    let page_slice: Vec<(RowId, TRow)> = match state.pagination_mode {
         PaginationMode::Pages => {
             let start = state.page * state.page_size;
             let end = (start + state.page_size).min(filtered_sorted.len());
@@ -564,7 +595,16 @@ pub fn visible_view<TRow: Clone>(state: &TableState<TRow>) -> Vec<(RowId, TRow)>
             let end = state.loaded_row_count.min(filtered_sorted.len());
             filtered_sorted[..end].to_vec()
         }
+    };
+    let mut out: Vec<RenderRow<TRow>> = Vec::with_capacity(page_slice.len());
+    for (id, row) in page_slice {
+        let is_expanded = state.expanded_rows.contains(&id);
+        out.push(RenderRow::Data { id, row });
+        if is_expanded {
+            out.push(RenderRow::DetailPanel { parent_row_id: id });
+        }
     }
+    out
 }
 
 /// Compute the `VirtualWindow` for the current state and return the
@@ -933,9 +973,9 @@ mod tests {
 
     #[test]
     fn visible_view_pairs_match_visible_rows_and_visible_row_ids() {
-        // The dedupe contract: visible_view must return the SAME (RowId, TRow)
-        // pairs in the SAME order that visible_rows() + visible_row_ids() would
-        // produce when called independently. If this drifts, adapters that
+        // The dedupe contract: visible_view's Data rows must return the SAME
+        // (RowId, TRow) pairs in the SAME order that visible_rows() + visible_row_ids()
+        // would produce when called independently. If this drifts, adapters that
         // migrate from two separate calls to one visible_view call could
         // silently render different rows or mis-attribute selection state.
         let mut s = make_state();
@@ -947,12 +987,23 @@ mod tests {
         let rows = visible_rows(&s);
         let ids = visible_row_ids(&s);
 
-        assert_eq!(view.len(), rows.len());
-        assert_eq!(view.len(), ids.len());
-        for (i, (id, row)) in view.iter().enumerate() {
-            assert_eq!(*id, ids[i], "row {i} id mismatch");
-            assert_eq!(*row, rows[i], "row {i} data mismatch");
+        assert_eq!(rows.len(), ids.len());
+        let mut view_idx = 0;
+        let mut row_idx = 0;
+        while view_idx < view.len() {
+            match &view[view_idx] {
+                RenderRow::Data { id, row } => {
+                    assert_eq!(*id, ids[row_idx], "row {row_idx} id mismatch");
+                    assert_eq!(*row, rows[row_idx], "row {row_idx} data mismatch");
+                    row_idx += 1;
+                }
+                RenderRow::DetailPanel { .. } => {
+                    // Skip detail panels, they don't appear in visible_rows/visible_row_ids
+                }
+            }
+            view_idx += 1;
         }
+        assert_eq!(row_idx, rows.len());
     }
 
     #[test]
@@ -977,8 +1028,14 @@ mod tests {
         let view = visible_view(&s);
         // Alice (90) + Charlie (85), sorted desc by score → Alice first.
         assert_eq!(view.len(), 2);
-        assert_eq!(view[0].1.name, "Alice");
-        assert_eq!(view[1].1.name, "Charlie");
+        match &view[0] {
+            RenderRow::Data { row, .. } => assert_eq!(row.name, "Alice"),
+            _ => panic!("Expected RenderRow::Data"),
+        }
+        match &view[1] {
+            RenderRow::Data { row, .. } => assert_eq!(row.name, "Charlie"),
+            _ => panic!("Expected RenderRow::Data"),
+        }
     }
 
     #[test]
@@ -1048,10 +1105,21 @@ mod tests {
         let s = make_state();
         let ids = visible_row_ids(&s);
         let view = visible_view(&s);
-        assert_eq!(ids.len(), view.len());
-        for (id, (view_id, _)) in ids.iter().zip(view.iter()) {
-            assert_eq!(id, view_id);
+        let mut view_idx = 0;
+        let mut id_idx = 0;
+        while view_idx < view.len() {
+            match &view[view_idx] {
+                RenderRow::Data { id: view_id, .. } => {
+                    assert_eq!(&ids[id_idx], view_id);
+                    id_idx += 1;
+                }
+                RenderRow::DetailPanel { .. } => {
+                    // Skip detail panels
+                }
+            }
+            view_idx += 1;
         }
+        assert_eq!(id_idx, ids.len());
     }
 
     #[test]
@@ -1607,12 +1675,23 @@ mod tests {
         let view = visible_view(&s);
         let rows = visible_rows(&s);
         let ids = visible_row_ids(&s);
-        assert_eq!(rows.len(), view.len());
-        assert_eq!(ids.len(), view.len());
-        for (i, (id, row)) in view.iter().enumerate() {
-            assert_eq!(ids[i], *id);
-            assert_eq!(rows[i], *row);
+        let mut view_idx = 0;
+        let mut row_idx = 0;
+        while view_idx < view.len() {
+            match &view[view_idx] {
+                RenderRow::Data { id, row } => {
+                    assert_eq!(ids[row_idx], *id);
+                    assert_eq!(rows[row_idx], *row);
+                    row_idx += 1;
+                }
+                RenderRow::DetailPanel { .. } => {
+                    // Skip detail panels
+                }
+            }
+            view_idx += 1;
         }
+        assert_eq!(row_idx, rows.len());
+        assert_eq!(row_idx, ids.len());
     }
 
     // ---- 3-column sort tiebreak (TESTS-1: multi-column sort produces correct order) ---
@@ -1696,10 +1775,22 @@ mod tests {
 
         let view = visible_view(&s);
         assert_eq!(view.len(), 4);
-        assert_eq!(view[0].1.region, "East"); // East < West
-        assert_eq!(view[1].1.dept, "Eng"); // West/Eng < West/Sales
-        assert_eq!(view[2].1.score, 10); // West/Sales/10 < West/Sales/30
-        assert_eq!(view[3].1.score, 30);
+        match &view[0] {
+            RenderRow::Data { row, .. } => assert_eq!(row.region, "East"), // East < West
+            _ => panic!("Expected RenderRow::Data"),
+        }
+        match &view[1] {
+            RenderRow::Data { row, .. } => assert_eq!(row.dept, "Eng"), // West/Eng < West/Sales
+            _ => panic!("Expected RenderRow::Data"),
+        }
+        match &view[2] {
+            RenderRow::Data { row, .. } => assert_eq!(row.score, 10), // West/Sales/10 < West/Sales/30
+            _ => panic!("Expected RenderRow::Data"),
+        }
+        match &view[3] {
+            RenderRow::Data { row, .. } => assert_eq!(row.score, 30),
+            _ => panic!("Expected RenderRow::Data"),
+        }
     }
 
     // ---- Bug 8 regression: collapse-all must still show group headers ------
@@ -1753,5 +1844,17 @@ mod tests {
             view.iter().all(|r| matches!(r, GroupedRow::Header { .. })),
             "only headers should be visible when all groups are collapsed"
         );
+    }
+
+    // ---- visible_view with detail panel injection ---------------------------
+
+    #[test]
+    fn visible_view_injects_detail_panel_after_expanded_row() {
+        let s = make_state();
+        let id1 = s.rows[1].0;
+        let s2 = TableState { expanded_rows: [id1].into_iter().collect(), ..s.clone() };
+        let view = visible_view(&s2);
+        assert_eq!(view.len(), 4);
+        assert!(matches!(view[2], RenderRow::DetailPanel { parent_row_id } if parent_row_id == id1));
     }
 }

@@ -753,6 +753,40 @@ pub fn collapse_all_groups<TRow: Clone>(state: &TableState<TRow>) -> TableState<
     }
 }
 
+/// Toggle whether `row_id` is expanded (showing a detail panel below it).
+///
+/// Mirrors `toggle_group`: if `row_id` is in `expanded_rows`, it is removed
+/// (row collapses). Otherwise it is inserted (row expands). No-op semantics
+/// for unknown IDs (still inserts; renderer simply has no parent to anchor
+/// to but state mutation is valid).
+///
+/// Pure. Per CHORALE-CORE-2.
+#[must_use]
+pub fn toggle_row_expansion<TRow: Clone>(
+    state: &TableState<TRow>,
+    row_id: RowId,
+) -> TableState<TRow> {
+    let mut expanded = state.expanded_rows.clone();
+    if expanded.contains(&row_id) {
+        expanded.remove(&row_id);
+    } else {
+        expanded.insert(row_id);
+    }
+    TableState {
+        expanded_rows: expanded,
+        ..state.clone()
+    }
+}
+
+/// Collapse all expanded rows (clear `expanded_rows`).
+#[must_use]
+pub fn collapse_all_rows<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    TableState {
+        expanded_rows: std::collections::HashSet::new(),
+        ..state.clone()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Item 15: Active-cell + keyboard navigation transitions (CC-1, API-1)
 // ---------------------------------------------------------------------------
@@ -1444,8 +1478,20 @@ mod tests {
                                                                         // Flip score to DESC.
         let s = toggle_sort(&s, ColumnId("score"), SortAction::Append);
         let view = visible_view(&s);
-        let depts: Vec<&str> = view.iter().map(|(_, r)| r.dept).collect();
-        let scores: Vec<i64> = view.iter().map(|(_, r)| r.score).collect();
+        let depts: Vec<&str> = view
+            .iter()
+            .filter_map(|r| match r {
+                crate::views::RenderRow::Data { row, .. } => Some(row.dept),
+                _ => None,
+            })
+            .collect();
+        let scores: Vec<i64> = view
+            .iter()
+            .filter_map(|r| match r {
+                crate::views::RenderRow::Data { row, .. } => Some(row.score),
+                _ => None,
+            })
+            .collect();
         assert_eq!(depts, vec!["A", "A", "B", "B"]);
         assert_eq!(scores, vec![20, 10, 30, 5]);
     }
@@ -2646,5 +2692,36 @@ mod tests {
         let s2 = clear_range_selection(&s);
         let s3 = clear_range_selection(&s2);
         assert!(s3.range_selection.is_empty());
+    }
+
+    // ── Item MD-A: toggle_row_expansion ──────────────────────────────────────
+
+    #[test]
+    fn toggle_row_expansion_adds_and_removes() {
+        let s = make_state();
+        let id = s.rows[0].0;
+        let s2 = toggle_row_expansion(&s, id);
+        assert!(s2.expanded_rows.contains(&id));
+        let s3 = toggle_row_expansion(&s2, id);
+        assert!(!s3.expanded_rows.contains(&id));
+    }
+
+    #[test]
+    fn toggle_row_expansion_is_pure() {
+        let s = make_state();
+        let id = s.rows[0].0;
+        let _ = toggle_row_expansion(&s, id);
+        assert!(s.expanded_rows.is_empty());
+    }
+
+    #[test]
+    fn collapse_all_rows_clears() {
+        let s = make_state();
+        let id0 = s.rows[0].0;
+        let id1 = s.rows.get(1).map(|r| r.0).unwrap_or(id0);
+        let s2 = toggle_row_expansion(&s, id0);
+        let s3 = toggle_row_expansion(&s2, id1);
+        let s4 = collapse_all_rows(&s3);
+        assert!(s4.expanded_rows.is_empty());
     }
 }

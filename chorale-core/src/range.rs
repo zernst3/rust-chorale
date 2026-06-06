@@ -302,7 +302,12 @@ pub fn fill_handle_targets<TRow: Clone>(
                 continue;
             };
             let src_values: Vec<CellValue> = (normalized.min_row..=normalized.max_row)
-                .filter_map(|ri| rows.get(ri).map(|(_, r)| (col_def.accessor)(r)))
+                .filter_map(|ri| {
+                    rows.get(ri).and_then(|r| match r {
+                        crate::views::RenderRow::Data { row, .. } => Some((col_def.accessor)(row)),
+                        crate::views::RenderRow::DetailPanel { .. } => None,
+                    })
+                })
                 .collect();
             let pattern = FillPattern::from_values(&src_values);
 
@@ -328,7 +333,10 @@ pub fn fill_handle_targets<TRow: Clone>(
             if row_idx >= rows.len() {
                 break;
             }
-            let (_, row) = &rows[row_idx];
+            let row = match &rows[row_idx] {
+                crate::views::RenderRow::Data { row, .. } => row,
+                crate::views::RenderRow::DetailPanel { .. } => continue,
+            };
             let src_values: Vec<CellValue> = normalized
                 .columns
                 .iter()
@@ -422,7 +430,7 @@ mod tests {
 
     #[test]
     fn drag_select_3x3_includes_focus_cell() {
-        let state = make_state(vec![
+        let _state = make_state(vec![
             row(int(1), int(2), int(3)),
             row(int(4), int(5), int(6)),
             row(int(7), int(8), int(9)),
