@@ -43,6 +43,7 @@ mod theme;
 pub mod transitions;
 mod types;
 pub mod views;
+pub mod xlsx;
 
 // ---- Core state -----------------------------------------------------------
 
@@ -218,6 +219,14 @@ pub use range::NormalizedRange;
 /// Errors from range operations: `NoRangeSelected`, `MultiRectNotSupportedForThisOperation`,
 /// `RangeTooSmallToFill`, `IndexOutOfBounds`.
 pub use range::RangeError;
+
+/// Compute fill-handle write targets from a source range and drag endpoint.
+///
+/// Returns `(visible_row_idx, column_id, CellValue)` for each cell in the
+/// extension area. Core detects arithmetic progressions on numeric columns and
+/// cycles non-uniform or text sequences. The adapter converts this list into a
+/// TSV payload and fires `on_paste`.
+pub use range::fill_handle_targets;
 
 // ---- Labels ---------------------------------------------------------------
 
@@ -548,3 +557,32 @@ pub use types::GroupKey;
 /// `chrono::NaiveDate` re-exported for use in [`CellValue::Date`] and filter values
 /// without requiring adapter crates to declare a `chrono` dependency.
 pub use chrono::NaiveDate;
+
+// ---- Item 18: XLSX export (feature = "xlsx") ---------------------------------
+
+/// XLSX export error: `SerializationError(String)`.
+///
+/// Only available when the `xlsx` feature is enabled.
+#[cfg(feature = "xlsx")]
+pub use xlsx::XlsxError;
+
+/// Options for XLSX export: `sheet_name` and `bold_headers`.
+///
+/// `#[non_exhaustive]` with `Default` impl (`Sheet1`, bold = `true`).
+/// Only available when the `xlsx` feature is enabled.
+#[cfg(feature = "xlsx")]
+pub use xlsx::XlsxOptions;
+
+/// Export the filtered+sorted table view to raw XLSX bytes.
+///
+/// Respects filter, sort, column visibility, and column order (same semantics
+/// as `to_csv`). Auto-inferred styling: bold headers, number/date/currency
+/// formats, column widths, and freeze panes from `ColumnDef.frozen`.
+///
+/// # Errors
+///
+/// Returns [`XlsxError::SerializationError`] if `rust_xlsxwriter` fails.
+///
+/// Only available when the `xlsx` feature is enabled.
+#[cfg(feature = "xlsx")]
+pub use xlsx::to_xlsx;

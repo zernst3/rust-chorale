@@ -6,16 +6,16 @@ use std::sync::Arc;
 
 use chorale_core::{
     add_disjoint_range, batch_record_row_heights, cancel_edit, clear_active_cell,
-    clear_range_selection, commit_edit, extend_range_to, frozen_left_columns, frozen_right_columns,
-    move_active_cell, move_active_cell_end, move_active_cell_first, move_active_cell_home,
-    move_active_cell_last, move_active_cell_page, move_active_cell_to_edge, next_editable_cell,
-    paste_tsv_into_range, prev_editable_cell, scrollable_columns, select_all as select_all_range,
-    start_range_selection, to_clipboard_tsv, to_csv, visible_grouped_view, visible_view,
-    visible_window, visible_window_variable, ActiveCell, Alignment, BadgeVariantMap, CellValue,
-    ClipboardCopyEvent, ClipboardPasteEvent, ColumnDef, ColumnId, CommittedEdit, CurrencyCode,
-    EditorKind, FilterKind, FilterValue, GroupKey, GroupedPaginationMode, GroupedRow, Labels,
-    NavDirection, PaginationMode, RenderKind, RowId, SortAction, SortDirection, SortState,
-    TableState, VirtualWindow,
+    clear_range_selection, commit_edit, extend_range_to, fill_handle_targets, frozen_left_columns,
+    frozen_right_columns, move_active_cell, move_active_cell_end, move_active_cell_first,
+    move_active_cell_home, move_active_cell_last, move_active_cell_page, move_active_cell_to_edge,
+    next_editable_cell, paste_tsv_into_range, prev_editable_cell, scrollable_columns,
+    select_all as select_all_range, start_range_selection, to_clipboard_tsv, to_csv,
+    visible_grouped_view, visible_view, visible_window, visible_window_variable, ActiveCell,
+    Alignment, BadgeVariantMap, CellValue, ClipboardCopyEvent, ClipboardPasteEvent, ColumnDef,
+    ColumnId, CommittedEdit, CurrencyCode, EditorKind, FilterKind, FilterValue, GroupKey,
+    GroupedPaginationMode, GroupedRow, Labels, NavDirection, PaginationMode, RenderKind, RowId,
+    SortAction, SortDirection, SortState, TableState, VirtualWindow,
 };
 use dioxus::prelude::*;
 
@@ -269,6 +269,9 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     // In-cell editing state: current editor text and optional validation error.
     let mut editing_text: Signal<String> = use_signal(String::new);
     let mut edit_error: Signal<Option<String>> = use_signal(|| None);
+    // Fill handle drag state.
+    let mut fill_drag_active: Signal<bool> = use_signal(|| false);
+    let mut fill_hover: Signal<Option<(usize, ColumnId)>> = use_signal(|| None);
 
     let sig = handle.signal();
 
@@ -542,6 +545,15 @@ dioxus.send(parts.join('\n'));"
         cells
     };
 
+    // Focus cell for fill handle: only when single range selected.
+    let fill_focus_cell: Option<(usize, ColumnId)> = if range_selection.len() == 1 {
+        let col_refs: Vec<&ColumnDef<TRow>> = visible_cols.iter().collect();
+        let nr = range_selection[0].normalized(&col_refs);
+        nr.columns.last().map(|&col_id| (nr.max_row, col_id))
+    } else {
+        None
+    };
+
     let (win, id_slice, row_slice) = compute_window_slice(&state, &view_read, variable_row_height);
     let total_pages = state.total_pages();
     let page_idx = state.page; // zero-based
@@ -592,8 +604,57 @@ dioxus.send(parts.join('\n'));"
                     handle.set_column_width(col_id, (start_w + delta).max(40.0)).ok();
                 }
             },
-            onmouseup: move |_| { drag_state.set(None); },
-            onmouseleave: move |_| { drag_state.set(None); },
+            onmouseup: move |_| {
+                drag_state.set(None);
+                if *fill_drag_active.peek() {
+                    fill_drag_active.set(false);
+                    if let Some((target_row, target_col)) = *fill_hover.peek() {
+                        let mut sig = handle.signal();
+                        let state = sig.peek();
+                        if let Some(source_range) = state.range_selection.first() {
+                            let writes = fill_handle_targets(&*state, source_range, target_row, target_col);
+                            if !writes.is_empty() {
+                                // Build TSV from writes
+                                let mut rows_map: std::collections::HashMap<usize, Vec<(ColumnId, CellValue)>> =
+                                    std::collections::HashMap::new();
+                                for (r, c, v) in &writes {
+                                    rows_map.entry(*r).or_default().push((*c, v.clone()));
+                                }
+                                let mut row_idxs: Vec<usize> = rows_map.keys().copied().collect();
+                                row_idxs.sort_unstable();
+                                let tsv = row_idxs.iter().map(|ri| {
+                                    let cols = &rows_map[ri];
+                                    cols.iter().map(|(_, v)| v.to_csv_string()).collect::<Vec<_>>().join("\t")
+                                }).collect::<Vec<_>>().join("\n");
+
+                                // Determine extension range for on_paste
+                                let first_row = *row_idxs.first().unwrap_or(&target_row);
+                                let last_row = *row_idxs.last().unwrap_or(&target_row);
+                                let first_col = writes.first().map_or(target_col, |(_, c, _)| *c);
+                                let last_col = writes.last().map_or(target_col, |(_, c, _)| *c);
+                                let ext_range = chorale_core::RangeSelection::new(
+                                    (first_row, first_col),
+                                    (last_row, last_col),
+                                );
+                                // Update state range to extension
+                                drop(state);
+                                sig.write().range_selection = vec![ext_range.clone()];
+                                if let Some(cb) = on_paste {
+                                    cb.call(chorale_core::ClipboardPasteEvent { tsv, range: ext_range });
+                                }
+                            }
+                        }
+                    }
+                    fill_hover.set(None);
+                }
+            },
+            onmouseleave: move |_| {
+                drag_state.set(None);
+                if *fill_drag_active.peek() {
+                    fill_drag_active.set(false);
+                    fill_hover.set(None);
+                }
+            },
             onclick: {
                 let kb_id = kb_id.clone();
                 move |_| {
@@ -855,7 +916,7 @@ dioxus.send(parts.join('\n'));"
                     tbody {
                         if is_grouped {
                             for (i, grouped_row) in grouped_view_read.iter().cloned().enumerate() {
-                                {render_grouped_row(grouped_row, i, effective_col_count, selection_enabled, handle, &group_header_class, &visible_cols, row_height, &widths, variable_row_height, &cell_renderers, editing_target, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, &selection_set, active_cell, &range_cells)}
+                                {render_grouped_row(grouped_row, i, effective_col_count, selection_enabled, handle, &group_header_class, &visible_cols, row_height, &widths, variable_row_height, &cell_renderers, editing_target, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, &selection_set, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover)}
                             }
                             if grouped_view_read.is_empty() {
                                 tr {
@@ -881,7 +942,7 @@ dioxus.send(parts.join('\n'));"
                                     let editing_col = editing_target
                                         .filter(|t| t.row_id == *row_id)
                                         .map(|t| t.column_id);
-                                    data_tr(row, *row_id, win.start_index + i, variable_row_height, &visible_cols, row_height, &widths, selection_enabled, selection_set.contains(row_id), handle, &cell_renderers, editing_col, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, active_cell, &range_cells)
+                                    data_tr(row, *row_id, win.start_index + i, variable_row_height, &visible_cols, row_height, &widths, selection_enabled, selection_set.contains(row_id), handle, &cell_renderers, editing_col, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover)
                                 }
                             }
                             if win.bottom_pad_px > 0.0 {
@@ -1754,6 +1815,9 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
     sticky_css_map: &HashMap<ColumnId, String>,
     active_cell: Option<ActiveCell>,
     range_cells: &HashSet<(usize, ColumnId)>,
+    fill_focus_cell: Option<(usize, ColumnId)>,
+    fill_drag_active: Signal<bool>,
+    fill_hover: Signal<Option<(usize, ColumnId)>>,
 ) -> Element {
     // Row separator is rendered as a 1px inset box-shadow on each TD instead
     // of `border-bottom: 1px` on the TR. Reason: with `border-collapse: collapse`
@@ -1812,7 +1876,8 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
                     {
                         let is_active = active_cell.is_some_and(|ac| ac.row_idx == row_index && ac.column_id == col.id);
                         let is_in_range = range_cells.contains(&(row_index, col.id));
-                        data_td(row, col, row_height, variable_row_height, widths.get(&col.id).copied(), cell_renderers.get(col.id), separator_color, sticky_css_map.get(&col.id).map_or("", String::as_str), is_active, is_in_range, row_index, handle)
+                        let is_focus_cell = fill_focus_cell == Some((row_index, col.id));
+                        data_td(row, col, row_height, variable_row_height, widths.get(&col.id).copied(), cell_renderers.get(col.id), separator_color, sticky_css_map.get(&col.id).map_or("", String::as_str), is_active, is_in_range, row_index, handle, is_focus_cell, fill_drag_active, fill_hover)
                     }
                 }
             }
@@ -1843,6 +1908,9 @@ fn render_grouped_row<TRow: Clone + PartialEq + 'static>(
     selection_set: &HashSet<RowId>,
     active_cell: Option<ActiveCell>,
     range_cells: &HashSet<(usize, ColumnId)>,
+    fill_focus_cell: Option<(usize, ColumnId)>,
+    fill_drag_active: Signal<bool>,
+    fill_hover: Signal<Option<(usize, ColumnId)>>,
 ) -> Element {
     match grouped_row {
         GroupedRow::Header {
@@ -1888,6 +1956,9 @@ fn render_grouped_row<TRow: Clone + PartialEq + 'static>(
                 sticky_body_css,
                 active_cell,
                 range_cells,
+                fill_focus_cell,
+                fill_drag_active,
+                fill_hover,
             )
         }
         _ => rsx! {},
@@ -2058,7 +2129,7 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 fn data_td<TRow: Clone + PartialEq + 'static>(
     row: &TRow,
     col: &ColumnDef<TRow>,
@@ -2072,6 +2143,9 @@ fn data_td<TRow: Clone + PartialEq + 'static>(
     is_in_range: bool,
     row_index: usize,
     handle: UseTableHandle<TRow>,
+    is_focus_cell: bool,
+    mut fill_drag_active: Signal<bool>,
+    mut fill_hover: Signal<Option<(usize, ColumnId)>>,
 ) -> Element {
     let val = (col.accessor)(row);
     let align = alignment_css(col.alignment);
@@ -2090,13 +2164,13 @@ fn data_td<TRow: Clone + PartialEq + 'static>(
     };
     let style = if variable_row_height {
         format!(
-            "padding: 0.5rem 1rem; text-align: {align}; \
+            "position: relative; padding: 0.5rem 1rem; text-align: {align}; \
              box-sizing: border-box; box-shadow: inset 0 -1px 0 {separator_color}; \
              cursor: default; {w} {sticky_css} {range_css}{active_css}"
         )
     } else {
         format!(
-            "padding: 0.5rem 1rem; height: {row_height}px; text-align: {align}; \
+            "position: relative; padding: 0.5rem 1rem; height: {row_height}px; text-align: {align}; \
              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; \
              box-sizing: border-box; box-shadow: inset 0 -1px 0 {separator_color}; \
              cursor: default; {w} {sticky_css} {range_css}{active_css}"
@@ -2125,7 +2199,22 @@ fn data_td<TRow: Clone + PartialEq + 'static>(
                 };
                 sig_w.set(new_s);
             },
+            onmouseenter: move |_| {
+                if *fill_drag_active.peek() {
+                    fill_hover.set(Some((row_index, col_id)));
+                }
+            },
             {content}
+            if is_focus_cell {
+                div {
+                    style: "position: absolute; bottom: 0; right: 0; width: 6px; height: 6px; \
+                            background: #0078d4; cursor: crosshair; z-index: 10;",
+                    onmousedown: move |ev| {
+                        ev.stop_propagation();
+                        fill_drag_active.set(true);
+                    },
+                }
+            }
         }
     }
 }

@@ -5,14 +5,15 @@ use std::sync::Arc;
 
 use chorale_core::{
     add_disjoint_range, clear_active_cell, clear_range_selection, extend_range_to,
-    frozen_left_columns, frozen_right_columns, move_active_cell, move_active_cell_end,
-    move_active_cell_first, move_active_cell_home, move_active_cell_last, move_active_cell_page,
-    move_active_cell_to_edge, scrollable_columns, select_all as select_all_range,
-    start_range_selection, to_csv, visible_grouped_view, visible_view, visible_window, ActiveCell,
-    Alignment, CellValue, ClipboardCopyEvent, ClipboardPasteEvent, ColumnDef, ColumnId,
-    CommittedEdit, EditorKind, FilterKind, FilterValue, GroupKey, GroupedPaginationMode,
-    GroupedRow, Labels, NaiveDate, NavDirection, PaginationMode, RenderKind, RowId, SortAction,
-    SortDirection, SortState, TableState, VirtualWindow,
+    fill_handle_targets, frozen_left_columns, frozen_right_columns, move_active_cell,
+    move_active_cell_end, move_active_cell_first, move_active_cell_home, move_active_cell_last,
+    move_active_cell_page, move_active_cell_to_edge, scrollable_columns,
+    select_all as select_all_range, start_range_selection, to_csv, visible_grouped_view,
+    visible_view, visible_window, ActiveCell, Alignment, CellValue, ClipboardCopyEvent,
+    ClipboardPasteEvent, ColumnDef, ColumnId, CommittedEdit, EditorKind, FilterKind, FilterValue,
+    GroupKey, GroupedPaginationMode, GroupedRow, Labels, NaiveDate, NavDirection, PaginationMode,
+    RangeSelection, RenderKind, RowId, SortAction, SortDirection, SortState, TableState,
+    VirtualWindow,
 };
 #[cfg(target_arch = "wasm32")]
 use chorale_core::{paste_tsv_into_range, to_clipboard_tsv};
@@ -893,6 +894,9 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
     is_in_range: bool,
     row_index: usize,
     handle: UseTableHandle<TRow>,
+    is_focus_cell: bool,
+    fill_drag_active: RwSignal<bool>,
+    fill_hover: RwSignal<Option<(usize, ColumnId)>>,
 ) -> AnyView {
     let val = (col.accessor)(row);
     let col_id = col.id;
@@ -981,6 +985,7 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 "padding:0.5rem 1rem;border-bottom:1px solid #eee;\
                  text-align:{align};height:{row_height}px;overflow:hidden;\
                  white-space:nowrap;text-overflow:ellipsis;cursor:default;\
+                 position:relative;\
                  {w}{sticky_css}{range_css}{active_css}"
             )
             on:click=move |ev: leptos::ev::MouseEvent| {
@@ -996,8 +1001,23 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 handle.signal.set(new_s);
                 ev.stop_propagation();
             }
+            on:mouseenter=move |_| {
+                if fill_drag_active.get_untracked() {
+                    fill_hover.set(Some((row_index, col_id)));
+                }
+            }
         >
             {cell_content}
+            {is_focus_cell.then(|| view! {
+                <div
+                    style="position: absolute; bottom: 0; right: 0; width: 6px; height: 6px; \
+                           background: #0078d4; cursor: crosshair; z-index: 10;"
+                    on:mousedown=move |ev| {
+                        ev.stop_propagation();
+                        fill_drag_active.set(true);
+                    }
+                />
+            })}
         </td>
     }
     .into_any()
@@ -1023,6 +1043,9 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
     sticky_body_css: &HashMap<ColumnId, String>,
     active_cell: Option<ActiveCell>,
     range_cells: &HashSet<(usize, ColumnId)>,
+    fill_focus_cell: Option<(usize, ColumnId)>,
+    fill_drag_active: RwSignal<bool>,
+    fill_hover: RwSignal<Option<(usize, ColumnId)>>,
 ) -> AnyView {
     let bg = if is_selected { "#eff6ff" } else { "white" };
     let cells: Vec<AnyView> = visible_cols
@@ -1031,6 +1054,7 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
             let is_active =
                 active_cell.is_some_and(|ac| ac.row_idx == row_index && ac.column_id == col.id);
             let is_in_range = range_cells.contains(&(row_index, col.id));
+            let is_focus_cell = fill_focus_cell == Some((row_index, col.id));
             data_td(
                 row,
                 row_id,
@@ -1048,6 +1072,9 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 is_in_range,
                 row_index,
                 handle,
+                is_focus_cell,
+                fill_drag_active,
+                fill_hover,
             )
         })
         .collect();
@@ -1308,15 +1335,18 @@ where
 {
     let labels = Arc::new(labels.unwrap_or_default());
 
-    // on_copy / on_paste are only used inside #[cfg(target_arch = "wasm32")] blocks.
+    // on_copy is only used inside #[cfg(target_arch = "wasm32")] blocks.
+    // on_paste is also used by the fill handle drag (pure Rust, no cfg guard needed).
     // Silence unused-variable warnings on non-WASM targets.
     #[cfg(not(target_arch = "wasm32"))]
-    let _ = (on_copy, on_paste);
+    let _ = on_copy;
 
     let drag_state: RwSignal<Option<(ColumnId, f64, f64)>> = RwSignal::new(None);
     let drag_col_id: RwSignal<Option<ColumnId>> = RwSignal::new(None);
     let editing_text: RwSignal<String> = RwSignal::new(String::new());
     let edit_error: RwSignal<Option<String>> = RwSignal::new(None);
+    let fill_drag_active: RwSignal<bool> = RwSignal::new(false);
+    let fill_hover: RwSignal<Option<(usize, ColumnId)>> = RwSignal::new(None);
 
     let sig = handle.signal;
 
@@ -1391,8 +1421,51 @@ where
                     handle.set_column_width(col_id, (start_w + delta).max(40.0)).ok();
                 }
             }
-            on:mouseup=move |_| { drag_state.set(None); }
-            on:mouseleave=move |_| { drag_state.set(None); }
+            on:mouseup=move |_| {
+                drag_state.set(None);
+                if fill_drag_active.get_untracked() {
+                    fill_drag_active.set(false);
+                    if let Some((target_row, target_col)) = fill_hover.get_untracked() {
+                        let state = sig.get_untracked();
+                        if let Some(source_range) = state.range_selection.first() {
+                            let writes = fill_handle_targets(&state, source_range, target_row, target_col);
+                            if !writes.is_empty() {
+                                let mut rows_map: std::collections::HashMap<usize, Vec<(ColumnId, CellValue)>> =
+                                    std::collections::HashMap::new();
+                                for (r, c, v) in &writes {
+                                    rows_map.entry(*r).or_default().push((*c, v.clone()));
+                                }
+                                let mut row_idxs: Vec<usize> = rows_map.keys().copied().collect();
+                                row_idxs.sort_unstable();
+                                let tsv = row_idxs.iter().map(|ri| {
+                                    let cols = &rows_map[ri];
+                                    cols.iter().map(|(_, v)| v.to_csv_string()).collect::<Vec<_>>().join("\t")
+                                }).collect::<Vec<_>>().join("\n");
+                                let first_row = *row_idxs.first().unwrap_or(&target_row);
+                                let last_row = *row_idxs.last().unwrap_or(&target_row);
+                                let first_col = writes.first().map_or(target_col, |(_, c, _)| *c);
+                                let last_col = writes.last().map_or(target_col, |(_, c, _)| *c);
+                                let ext_range = RangeSelection::new(
+                                    (first_row, first_col),
+                                    (last_row, last_col),
+                                );
+                                sig.update(|s| s.range_selection = vec![ext_range.clone()]);
+                                if let Some(cb) = on_paste {
+                                    cb.run(ClipboardPasteEvent { tsv, range: ext_range });
+                                }
+                            }
+                        }
+                    }
+                    fill_hover.set(None);
+                }
+            }
+            on:mouseleave=move |_| {
+                drag_state.set(None);
+                if fill_drag_active.get_untracked() {
+                    fill_drag_active.set(false);
+                    fill_hover.set(None);
+                }
+            }
             on:click=move |_| {
                 if let Some(el) = kb_ref.get_untracked() {
                     let _ = el.focus();
@@ -1733,6 +1806,14 @@ where
                             cells
                         };
 
+                        let fill_focus_cell: Option<(usize, ColumnId)> = if s.range_selection.len() == 1 {
+                            let col_refs: Vec<&ColumnDef<TRow>> = visible_cols.iter().collect();
+                            let nr = s.range_selection[0].normalized(&col_refs);
+                            nr.columns.last().map(|&col_id| (nr.max_row, col_id))
+                        } else {
+                            None
+                        };
+
                         // ---- table header ----
                         let header_row: Vec<AnyView> = visible_cols
                             .iter()
@@ -1821,6 +1902,9 @@ where
                                         &sticky_body_css,
                                         active_cell,
                                         &range_cells,
+                                        fill_focus_cell,
+                                        fill_drag_active,
+                                        fill_hover,
                                     ),
                                     _ => view! { <tr /> }.into_any(),
                                 })
@@ -1864,6 +1948,9 @@ where
                                     &sticky_body_css,
                                     active_cell,
                                     &range_cells,
+                                    fill_focus_cell,
+                                    fill_drag_active,
+                                    fill_hover,
                                 ));
                             }
                             if win.bottom_pad_px > 0.0 {
