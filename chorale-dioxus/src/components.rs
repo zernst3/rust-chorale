@@ -279,6 +279,19 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
 ) -> Element {
     let labels = labels.clone().unwrap_or_default();
 
+    // Master/detail rows are inherently variable-height: the parent table
+    // cannot virtualize correctly assuming uniform row_height when one of
+    // its rows is a detail panel that's 5-20× taller. Force variable-height
+    // measurement on whenever detail_renderer is set, so the parent's
+    // row_heights map tracks each row's actual rendered height and scroll
+    // math stays consistent with layout.
+    //
+    // This shadow MUST come before the VIRT-2 measurement use_effect (which
+    // captures variable_row_height by move at hook-construction time) and
+    // before any consumer of `variable_row_height` downstream.
+    let has_detail = detail_renderer.is_some();
+    let variable_row_height = variable_row_height || has_detail;
+
     // drag_state: Some((col_id, start_x_px, start_width_px)) while a resize is active.
     let mut drag_state: Signal<Option<(ColumnId, f64, f64)>> = use_signal(|| None);
     // drag_col_id: column being dragged for column-reorder (None when not reordering).
@@ -421,11 +434,9 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     {
         let kb_id_focus = kb_id.clone();
         let click_outside_counter: Signal<u32> = use_signal(|| 0);
-        // Clone callable values that the click-outside effect needs to read,
-        // since neither ValidateEditFn nor EventHandler are Copy and the rsx!
-        // body downstream still needs the originals.
-        let validate_edit_outside = validate_edit.clone();
-        let on_commit_edit_outside = on_commit_edit.clone();
+        // (Edit commit moved to editor_td's onblur handler; click-outside
+        // only handles range/active cleanup now, no need to clone validator
+        // or commit handler here.)
         // Spawn an async eval that listens for a custom "chorale-blur" event
         // dispatched from the onmousedown on the document.
         {
@@ -459,78 +470,25 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
             // Re-run only when a click-outside has been detected.
             let n = *click_outside_counter.read();
             if n > 0 {
-                let sig_w = handle.signal();
-                // Phase 1: snapshot everything we need from the signal,
-                // THEN drop the borrow before calling any user-supplied
-                // handler. Holding the signal Ref across a handler call
-                // panicked with AlreadyBorrowed when the handler internally
-                // triggered another signal write/read (reported 2026-06-06).
-                #[derive(Clone)]
-                enum ClickOutsideIntent<TRow: Clone> {
-                    CommitEdit { target: chorale_core::EditTarget, raw: String, prior_row: TRow },
-                    ClearOnly,
-                    DoNothing,
-                }
-                let intent: ClickOutsideIntent<TRow> = {
+                let mut sig_w = handle.signal();
+                // Click-outside handles active_cell + range_selection cleanup
+                // ONLY. Edit-commit lives on the input's onblur handler (see
+                // editor_td below) — the browser fires onblur deterministically
+                // when the input loses focus on click-outside, and reading
+                // editing_text inside that handler avoids the event-ordering
+                // race that lost typed values when the parent did both jobs
+                // here (Zach, 2026-06-06, 3:38 PM recording).
+                let new_state_opt = {
                     let s = sig_w.peek();
-                    if let Some(target) = s.editing {
-                        let raw = editing_text.peek().clone();
-                        let prior_row = s.rows.iter()
-                            .find(|(id, _)| *id == target.row_id)
-                            .map(|(_, r)| r.clone());
-                        if let Some(prior_row) = prior_row {
-                            ClickOutsideIntent::CommitEdit { target, raw, prior_row }
-                        } else {
-                            ClickOutsideIntent::ClearOnly
-                        }
-                    } else if s.active_cell.is_some() || !s.range_selection.is_empty() {
-                        ClickOutsideIntent::ClearOnly
-                    } else {
-                        ClickOutsideIntent::DoNothing
-                    }
-                };
-                // Phase 2: call user-supplied validator/handler with NO
-                // signal Ref held. Validation failure leaves the editor
-                // open so the user can fix the value.
-                let mut do_commit_then_clear = false;
-                if let ClickOutsideIntent::CommitEdit { target, raw, prior_row } = &intent {
-                    let validation_result = validate_edit_outside.call(EditValidation {
-                        row_id: target.row_id,
-                        column_id: target.column_id,
-                        raw_value: raw.clone(),
-                    });
-                    if validation_result.is_ok() {
-                        if let Some(handler) = &on_commit_edit_outside {
-                            handler.call(CommittedEdit::new(
-                                target.row_id,
-                                target.column_id,
-                                raw.clone(),
-                                prior_row.clone(),
-                            ));
-                        }
-                        edit_error.set(None);
-                        do_commit_then_clear = true;
-                    }
-                }
-                // Phase 3: mutation. Compute the new state inside a short
-                // borrow scope, then set.
-                let new_state_opt = match (do_commit_then_clear, &intent) {
-                    (true, _) => {
-                        let s = sig_w.peek();
-                        let committed = commit_edit(&*s);
-                        let cleared = clear_range_selection(&committed);
-                        Some(clear_active_cell(&cleared))
-                    }
-                    (false, ClickOutsideIntent::ClearOnly) => {
-                        let s = sig_w.peek();
+                    if s.active_cell.is_some() || !s.range_selection.is_empty() {
                         let s2 = clear_range_selection(&*s);
                         Some(clear_active_cell(&s2))
+                    } else {
+                        None
                     }
-                    _ => None,
                 };
                 if let Some(new_state) = new_state_opt {
-                    let mut sig_w_mut = handle.signal();
-                    sig_w_mut.set(new_state);
+                    sig_w.set(new_state);
                 }
             }
         });
@@ -752,17 +710,7 @@ dioxus.send(parts.join('\n'));"
     let is_virtualized_grouped =
         is_grouped && state.grouped_pagination == GroupedPaginationMode::Virtualized;
     let col_count = visible_cols.len();
-    let has_detail = detail_renderer.is_some();
     let effective_col_count = col_count + usize::from(selection_enabled) + usize::from(has_detail);
-    // Master/detail rows are inherently variable-height: the parent table
-    // cannot virtualize correctly assuming uniform row_height when one of
-    // its rows is a detail panel that's 5-20× taller. Force variable-height
-    // measurement on whenever detail_renderer is set, so the parent's
-    // row_heights map tracks the actual rendered height of each
-    // RenderRow::DetailPanel <tr> and scroll math stays consistent.
-    // Without this, scrolling past an expanded detail panel produced a
-    // visible "jump" as the virtualization window had to catch up.
-    let variable_row_height = variable_row_height || has_detail;
     let row_height = state.row_height;
     let viewport_height = state.viewport_height;
     let current_sort: &[SortState] = &state.sort;
@@ -2437,6 +2385,9 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
     let text_val = editing_text.read().clone();
     let err_val = edit_error.read().clone();
     let validate = validate.clone();
+    // Clone for the onblur closure; onkeydown also needs validate/prior_row.
+    let validate_blur = validate.clone();
+    let prior_row_blur = row.clone();
 
     rsx! {
         td {
@@ -2450,6 +2401,37 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
                 style: "width: 100%; box-sizing: border-box; font: inherit; \
                         padding: 1px 4px; border: 1px solid #4a90e2; border-radius: 2px;",
                 oninput: move |e| editing_text.set(e.value()),
+                onblur: move |_| {
+                    // Commit on blur (clicking anywhere outside the input).
+                    // Mirrors the Enter handler below: read editing_text,
+                    // validate, fire on_commit_edit, then commit_edit. This
+                    // is the canonical "lose focus = persist" path and is
+                    // more reliable than the parent-level click-outside
+                    // detector (which depended on event ordering across the
+                    // document and lost the typed value in some sequences).
+                    let raw = editing_text.read().clone();
+                    let result = validate_blur.call(EditValidation {
+                        row_id,
+                        column_id: col_id,
+                        raw_value: raw.clone(),
+                    });
+                    if result.is_ok() {
+                        edit_error.set(None);
+                        if let Some(handler) = &on_commit_edit {
+                            handler.call(CommittedEdit::new(
+                                row_id,
+                                col_id,
+                                raw,
+                                prior_row_blur.clone(),
+                            ));
+                        }
+                        let mut sig = handle.signal();
+                        let new_state = commit_edit(&*sig.read());
+                        sig.set(new_state);
+                    }
+                    // On validation error, leave editing open. The editor
+                    // input stays mounted since state.editing wasn't cleared.
+                },
                 onkeydown: move |e: KeyboardEvent| {
                     match e.key() {
                         Key::Enter => {
