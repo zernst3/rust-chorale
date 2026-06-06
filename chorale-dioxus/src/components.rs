@@ -2601,14 +2601,28 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
                                 post_js,
                             ));
                         }
-                        // Mutate fields in place — no clone-and-replace.
+                        // Clone-mutate-set, NOT sig.write(). The view memo's
+                        // view_key intentionally does not track row content
+                        // (perf optimisation in line 336-339: at 1M rows it
+                        // avoids re-hashing the full dataset per scroll tick).
+                        // sig.write() only invalidates fine-grained subscribers
+                        // of the fields it touched (editing, active_cell,
+                        // range_selection) and DOES NOT invalidate the view
+                        // memo — so even though state.rows had the new row
+                        // (CP3/CP4 confirmed it), the cell read the stale
+                        // memoised view and rendered the OLD value. sig.set()
+                        // on a fresh clone triggers a broader memo invalidation
+                        // that the view memo picks up.
                         let mut sig = handle.signal();
-                        {
-                            let mut s = sig.write();
-                            s.editing = None;
-                            s.active_cell = None;
-                            s.range_selection.clear();
-                        }
+                        let new_state = {
+                            let snap = sig.peek();
+                            let mut copy = snap.clone();
+                            copy.editing = None;
+                            copy.active_cell = None;
+                            copy.range_selection.clear();
+                            copy
+                        };
+                        sig.set(new_state);
                         // CP4: after my sig.write() — same accessor again.
                         // If this is now stale relative to CP3, my .write()
                         // clobbered the row update (Dioxus 0.7 write-clone
