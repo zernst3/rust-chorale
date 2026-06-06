@@ -146,7 +146,25 @@ fn EmployeeDetailPanel(employee: Employee) -> Element {
         .iter()
         .map(|(_, li)| f64::from(li.qty as i32) * li.unit_price)
         .sum();
-    let table = use_table(move || TableState::new(items.clone(), line_item_columns()));
+    // Size the child table to its content so:
+    //   (a) the panel auto-shrinks when there are only 2 items — no fixed
+    //       ~500 px black hole below a short list.
+    //   (b) inner scroll never engages (content == viewport), so a mouse
+    //       wheel scroll near the bottom rolls straight through to the
+    //       parent table instead of producing a discontinuity ("jump").
+    let child_row_height = 40.0;
+    let child_header_height = 40.0;
+    let child_viewport_height =
+        child_header_height + (item_count as f64) * child_row_height + 4.0;
+    let table = use_table(move || {
+        let mut s = TableState::new(items.clone(), line_item_columns());
+        s.viewport_height = child_viewport_height;
+        s.row_height = child_row_height;
+        // Single page covering all line items so the child never paginates.
+        // Consumer apps with genuinely huge child datasets can override.
+        s.page_size = item_count.max(1);
+        s
+    });
     rsx! {
         div {
             style: "padding: 12px 24px; background: #fafafa; \
