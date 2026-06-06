@@ -156,6 +156,10 @@ struct Employee {
   text — for i18n without patching the library.
 - **`selection_toolbar` slot.** Pass a child component shown only when one or
   more rows are selected (bulk-action toolbar pattern).
+- **Master/detail (sub-tables, Item 12).** Expandable rows reveal a per-row
+  detail panel. Pass an optional `detail_renderer` prop to `<Table>`; a 24px
+  chevron column appears and clicking it calls `toggle_row_expansion`. Mount a
+  child `<Table>` (or any element) inside the renderer for nested grids.
 
 ### `chorale-derive`
 
@@ -178,7 +182,7 @@ Framework-agnostic state plus pure functions over it. Zero UI dependencies
 | `state` | `TableState<TRow>`, `VirtualWindow` |
 | `column` | `ColumnDef<TRow>`, `RenderKind`, `FilterKind`, `BadgeVariantMap`, `EditorKind`, `FrozenSide` |
 | `types` | `CellValue`, `FilterValue`, `SortState`, `RowId`, `ColumnId`, `Alignment`, `CurrencyCode`, `GroupKey`, `PaginationMode` |
-| `transitions` | `toggle_sort`, `set_filter`, `set_page`, `set_page_size`, `set_scroll`, `set_selection`, `toggle_select_all`, `set_column_visibility`, `set_column_width`, `update_row`, `move_column`, `set_grouping`, `toggle_group`, `expand_all_groups`, `collapse_all_groups`, `set_pagination_mode`, `load_more_rows`, `start_edit`, `commit_edit`, `cancel_edit` |
+| `transitions` | `toggle_sort`, `set_filter`, `set_page`, `set_page_size`, `set_scroll`, `set_selection`, `toggle_select_all`, `set_column_visibility`, `set_column_width`, `update_row`, `move_column`, `set_grouping`, `toggle_group`, `expand_all_groups`, `collapse_all_groups`, `set_pagination_mode`, `load_more_rows`, `start_edit`, `commit_edit`, `cancel_edit`, `toggle_row_expansion`, `collapse_all_rows` |
 | `views` | `visible_view`, `visible_grouped_view`, `visible_rows`, `visible_row_ids`, `visible_window`, `filtered_sorted_rows`, `to_csv`, `frozen_left_columns`, `frozen_right_columns`, `scrollable_columns` |
 | `labels` | `Labels` |
 | `error` | `StateError` |

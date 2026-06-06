@@ -22,6 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Grouping and aggregation (Item 8).** `grouping: Vec<ColumnId>`, `collapsed_groups: HashSet<GroupKey>` on `TableState`; `GroupKey`, `GroupedRow`, `GroupedPaginationMode`; `AggregatorKind` on `ColumnDef`; `set_grouping`, `toggle_group`, `expand_all_groups`, `collapse_all_groups` transitions; `visible_grouped_view`.
 - **Column reorder (Item 9).** `column_order: Vec<ColumnId>` on `TableState`; `move_column` transition.
 - **Frozen columns (Item 10).** `FrozenSide` on `ColumnDef`; `frozen_left_columns`, `frozen_right_columns`, `scrollable_columns` view helpers.
+- **Master/detail (sub-tables, Item 12).** Expandable rows reveal a per-row
+  detail panel. `expanded_rows: HashSet<RowId>` on `TableState`;
+  `toggle_row_expansion`, `collapse_all_rows` transitions; `RenderRow<TRow>`
+  view-stream enum with `DetailPanel { parent_row_id }` injection from
+  `visible_view`. Optional `detail_renderer: EventHandler<TRow, Element>`
+  prop on `<Table>` — when set, a 24px chevron column appears at index 0 and
+  detail panels render as a full-width `<tr><td colspan>` directly under
+  their parent. Consumer mounts a child `<Table>` (or any `Element`) inside
+  the renderer for the nested-grid use case. Variable-height virtualization
+  handles panel height via the v0.2.0 path.
+
+  Originally routed to v0.3.0 Tier 2 (gap-analysis line 209); pulled into
+  v0.2.0 on 2026-06-06 for a consumer-app dependency.
 - `StateError::InvalidModeForTransition`, `StateError::UnknownColumnId` variants.
 - `NaiveDate` re-export so adapter crates do not need a direct `chrono` dependency.
 
