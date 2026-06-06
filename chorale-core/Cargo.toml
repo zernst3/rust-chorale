@@ -14,7 +14,12 @@ categories = ["gui", "data-structures"]
 [lints]
 workspace = true
 
+[features]
+default = []
+xlsx = ["dep:rust_xlsxwriter"]
+
 [dependencies]
 uuid = { version = "1", features = ["v4", "js"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 thiserror = "2"
+rust_xlsxwriter = { version = "0.95", optional = true }
