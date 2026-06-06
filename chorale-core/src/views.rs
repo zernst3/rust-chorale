@@ -294,8 +294,15 @@ fn paginate_grouped<TRow: Clone>(
     }
     let end = ((page + 1) * page_size).min(data_flat_indices.len());
 
-    let page_flat_indices: std::collections::HashSet<usize> =
-        data_flat_indices[start..end].iter().copied().collect();
+    // Guard: when all groups are collapsed data_flat_indices is empty, so
+    // end == 0 while start > 0 on any page beyond the first — slicing
+    // data_flat_indices[start..end] would panic. Use an empty set instead;
+    // the loop below still emits all collapsed headers so the user can expand.
+    let page_flat_indices: std::collections::HashSet<usize> = if start <= end {
+        data_flat_indices[start..end].iter().copied().collect()
+    } else {
+        std::collections::HashSet::new()
+    };
 
     let n = flat.len();
     let mut result = Vec::new();
@@ -1725,6 +1732,26 @@ mod tests {
         assert!(
             data.is_empty(),
             "no data rows should be visible when all collapsed"
+        );
+    }
+
+    #[test]
+    fn paginate_grouped_with_all_collapsed_and_page_two_does_not_panic() {
+        let mut s = make_grouped_state();
+        s.grouping = vec![ColumnId("group")];
+        s.page_size = 50;
+        s.page = 2; // page 2 of a table with 0 visible data rows
+
+        let key_a = GroupKey::from_values(&["A"]);
+        let key_b = GroupKey::from_values(&["B"]);
+        s.collapsed_groups.insert(key_a);
+        s.collapsed_groups.insert(key_b);
+
+        // Must not panic; result should contain only collapsed headers (no data rows).
+        let view = visible_grouped_view(&s);
+        assert!(
+            view.iter().all(|r| matches!(r, GroupedRow::Header { .. })),
+            "only headers should be visible when all groups are collapsed"
         );
     }
 }
