@@ -18,3 +18,7 @@ docs/recon/
 # documentation set. Regenerated after each implementation milestone with
 # real code references pulled from chorale-core/src/ and chorale-dioxus/src/.
 docs/v0.2.0-design-overview.md
+
+# Local screen recordings (videos copied in for bot review, never tracked)
+Screen Recording*.mov
+*.mp4
