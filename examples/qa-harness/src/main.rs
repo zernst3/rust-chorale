@@ -109,6 +109,19 @@ fn build_columns(editing: bool, frozen: bool) -> Vec<ColumnDef<Employee>> {
         .with("Pending", BadgeVariant::new("Pending", "yellow"))
         .with("Suspended", BadgeVariant::new("Suspended", "red"));
 
+    // Multi-sort QA note: the sample dataset has 10_010 rows generated from
+    // first+last name pairs, which produces near-unique names. Sorting by
+    // Name first disambiguates ~98% of rows on its own, so a 2nd or 3rd sort
+    // column will appear to "do nothing" visually even though the sort
+    // algorithm IS correctly chaining (see filtered_sorted_pairs in
+    // chorale-core/src/views.rs and the 3-column unit test in
+    // chorale-dioxus/src/components.rs#sort_3_columns_grows_to_3).
+    //
+    // To visually verify multi-column sort cascade, click in this order
+    // instead:
+    //   1. Status   (5 values → ~2,000 rows per group)
+    //   2. Shift+Role  (within each Status, rows reorder by Role)
+    //   3. Shift+Salary (within each Status+Role, rows reorder by Salary)
     let mut name_col = ColumnDef::new(ColumnId("name"), "Name", |r: &Employee| {
         CellValue::Text(r.name.clone())
     })

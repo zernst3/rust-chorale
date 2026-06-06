@@ -76,8 +76,14 @@ pub struct Labels {
     pub no_rows_label: String,
 
     // Infinite scroll
-    /// Loading indicator shown at the bottom of an infinite-scroll table when
-    /// more rows are available. Default: `"Loading more rows…"`.
+    /// Indicator shown at the bottom of an infinite-scroll table when more
+    /// rows remain to be loaded. Default: `"Scroll for more rows"`.
+    ///
+    /// Note: `load_more_rows` is synchronous, so this is a passive "more
+    /// rows available" state indicator, not an active-fetching spinner.
+    /// Consumer apps that do async fetching may override this via the
+    /// `labels` prop to show `"Loading…"` (or similar) while a fetch is in
+    /// flight.
     pub load_more_label: String,
 }
 
@@ -100,7 +106,7 @@ impl Default for Labels {
             sort_descending_label: "Sort descending".into(),
             sort_none_label: "Unsorted".into(),
             no_rows_label: "No rows match the current filter.".into(),
-            load_more_label: "Loading more rows\u{2026}".into(),
+            load_more_label: "Scroll for more rows".into(),
         }
     }
 }
