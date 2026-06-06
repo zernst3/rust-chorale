@@ -354,6 +354,30 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
         ));
     });
 
+    // Column reorder cleanup: when state.column_order changes (= a drop just
+    // applied), force-clear drag_col_id + drag_over_col.
+    //
+    // Why: the ondragend handler lives on the SOURCE <th>, but after a
+    // successful drop the columns are re-rendered in a new arrangement, so
+    // the source <th>'s element identity may not survive long enough to fire
+    // ondragend reliably. Result: drag_col_id stays set and the dashed
+    // drop-target outline persists on whichever column ended up in the slot,
+    // even though no drag is in progress. Reproduced 2026-06-06 by Zach in
+    // screen recordings vid2 and vid5.
+    //
+    // This use_effect catches every successful reorder by watching
+    // column_order; both signals reset on any change.
+    {
+        let column_order_memo = use_memo(move || sig.read().column_order.clone());
+        let mut drag_col_id_w = drag_col_id;
+        let mut drag_over_col_w = drag_over_col;
+        use_effect(move || {
+            let _o = column_order_memo.read();
+            drag_col_id_w.set(None);
+            drag_over_col_w.set(None);
+        });
+    }
+
     // In-cell editing: reset editor text and error when the active cell changes.
     // Unconditional use_effect (Dioxus hook ordering rules); no-op when no edit target.
     {
@@ -1012,8 +1036,57 @@ dioxus.send(parts.join('\n'));"
 
                     tbody {
                         if is_grouped {
-                            for (i, grouped_row) in grouped_view_read.iter().cloned().enumerate() {
-                                {render_grouped_row(grouped_row, i, effective_col_count, selection_enabled, has_detail, handle, &group_header_class, &visible_cols, row_height, &widths, variable_row_height, &cell_renderers, editing_target, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, &selection_set, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover)}
+                            // GroupedPaginationMode::Virtualized previously rendered the FULL
+                            // grouped tree at once (e.g. 10K data rows + N group headers in the
+                            // qa-harness Group-by-Role case). Browser froze under that DOM weight.
+                            // Reproduced 2026-06-06 by Zach in screen recording vid5.
+                            //
+                            // Slice to a window when Virtualized mode is on — same scroll-driven
+                            // math as the non-grouped data-row case. start_index / end_index are
+                            // derived from scroll_top / viewport_height / row_height. Buffer rows
+                            // ensure smooth scrolling. DataRowsOnly mode is already paginated, so
+                            // no slicing needed there.
+                            {
+                                let grouped_len = grouped_view_read.len();
+                                let (start_idx, end_idx) = if is_virtualized_grouped && grouped_len > 0 {
+                                    let buf = state.buffer_rows;
+                                    let raw_start =
+                                        (state.scroll_top / state.row_height).floor() as usize;
+                                    let visible = (state.viewport_height / state.row_height).ceil()
+                                        as usize;
+                                    let start = raw_start.saturating_sub(buf);
+                                    let end = (raw_start + visible + buf).min(grouped_len);
+                                    (start, end)
+                                } else {
+                                    (0, grouped_len)
+                                };
+                                let top_pad_px =
+                                    (start_idx as f64 * state.row_height).max(0.0);
+                                let bottom_pad_px =
+                                    ((grouped_len.saturating_sub(end_idx)) as f64
+                                        * state.row_height)
+                                        .max(0.0);
+                                rsx! {
+                                    if top_pad_px > 0.0 {
+                                        tr {
+                                            td {
+                                                colspan: "{effective_col_count}",
+                                                style: "padding: 0; height: {top_pad_px}px;",
+                                            }
+                                        }
+                                    }
+                                    for (offset, grouped_row) in grouped_view_read[start_idx..end_idx].iter().cloned().enumerate() {
+                                        {render_grouped_row(grouped_row, start_idx + offset, effective_col_count, selection_enabled, has_detail, handle, &group_header_class, &visible_cols, row_height, &widths, variable_row_height, &cell_renderers, editing_target, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, &selection_set, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover)}
+                                    }
+                                    if bottom_pad_px > 0.0 {
+                                        tr {
+                                            td {
+                                                colspan: "{effective_col_count}",
+                                                style: "padding: 0; height: {bottom_pad_px}px;",
+                                            }
+                                        }
+                                    }
+                                }
                             }
                             if grouped_view_read.is_empty() {
                                 tr {
@@ -2367,6 +2440,19 @@ fn data_td<TRow: Clone + PartialEq + 'static>(
                     || e.modifiers().contains(Modifiers::META);
                 let shift = e.modifiers().contains(Modifiers::SHIFT);
                 let mut sig_w = handle.signal();
+                // Plain click (no modifier): explicitly clear any prior
+                // range_selection BEFORE applying the new single-cell range,
+                // as a two-pass write. start_range_selection already replaces
+                // range_selection, but a screen recording (Zach, 2026-06-06,
+                // vid1) showed prior-range highlights persisting on screen
+                // after subsequent plain clicks — symptom of a signal-update
+                // path that didn't trigger re-render of the previously
+                // highlighted cells. The explicit clear forces a clean signal
+                // transition that downstream renders see unambiguously.
+                if !ctrl && !shift {
+                    let cleared = clear_range_selection(&*sig_w.peek());
+                    sig_w.set(cleared);
+                }
                 let new_s = if ctrl {
                     add_disjoint_range(&*sig_w.peek(), row_index, col_id)
                 } else if shift {
