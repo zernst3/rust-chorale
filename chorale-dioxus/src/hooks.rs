@@ -3,9 +3,9 @@
 use chorale_core::{
     clear_sort, collapse_all_groups, expand_all_groups, load_more_rows, move_column, remove_sort,
     set_column_visibility, set_column_width, set_filter, set_grouping, set_page, set_page_size,
-    set_pagination_mode, set_scroll, set_selection, toggle_group, toggle_select_all, toggle_sort,
-    update_row, ColumnId, FilterValue, GroupKey, PaginationMode, RowId, SortAction, StateError,
-    TableState,
+    set_pagination_mode, set_scroll, set_selection, start_edit, toggle_group, toggle_select_all,
+    toggle_sort, update_row, ColumnId, FilterValue, GroupKey, PaginationMode, RowId, SortAction,
+    StateError, TableState,
 };
 use dioxus::prelude::*;
 
@@ -159,6 +159,13 @@ impl<TRow: Clone + 'static> UseTableHandle<TRow> {
     /// Replace `row_id`'s data in-place (cell-editing escape valve, recon-2 § 7d).
     pub fn update_row(&self, row_id: RowId, new_row: TRow) {
         self.dispatch(|s| update_row(s, row_id, new_row));
+    }
+
+    /// Begin editing `(row_id, column_id)`.
+    ///
+    /// No-op if the column has no `EditorKind` configured.
+    pub fn start_edit(&self, row_id: RowId, column_id: ColumnId) {
+        self.try_dispatch(|s| start_edit(s, row_id, column_id)).ok();
     }
 
     /// Move `column_id` to `to_index` in the render order.

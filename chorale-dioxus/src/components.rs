@@ -266,6 +266,9 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     let mut drag_state: Signal<Option<(ColumnId, f64, f64)>> = use_signal(|| None);
     // drag_col_id: column being dragged for column-reorder (None when not reordering).
     let drag_col_id: Signal<Option<ColumnId>> = use_signal(|| None);
+    // drag_over_col: the column currently under the cursor during a column-reorder drag.
+    // Only this column shows the blue dashed drop-target outline.
+    let drag_over_col: Signal<Option<ColumnId>> = use_signal(|| None);
     // In-cell editing state: current editor text and optional validation error.
     let mut editing_text: Signal<String> = use_signal(String::new);
     let mut edit_error: Signal<Option<String>> = use_signal(|| None);
@@ -287,6 +290,7 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
             SCROLL_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
         )
     });
+    let kb_id = format!("{scroll_id}-kb");
 
     // PERF-1: Two-level memo to decouple the expensive pipeline from scroll.
     //
@@ -365,6 +369,62 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
                     .unwrap_or_default();
                 editing_text.set(init_text);
                 edit_error.set(None);
+            }
+        });
+    }
+
+    // Bug 6 fix: clear active cell + range when the keyboard container loses focus
+    // to an element outside the table. onfocusin/out bubble so we can catch it on
+    // the outer div. We use JS to check relatedTarget vs the container boundary.
+    {
+        let kb_id_focus = kb_id.clone();
+        let click_outside_counter: Signal<u32> = use_signal(|| 0);
+        // Spawn an async eval that listens for a custom "chorale-blur" event
+        // dispatched from the onmousedown on the document.
+        {
+            let id = kb_id_focus.clone();
+            let mut counter = click_outside_counter;
+            use_effect(move || {
+                let id2 = id.clone();
+                spawn(async move {
+                    // Register a capturing mousedown listener on the document.
+                    // Removes any prior listener for this id first to avoid duplicates.
+                    let mut eval = dioxus::document::eval(&format!(
+                        "(function(){{\
+                            var cid='{id2}';\
+                            var el=document.getElementById(cid);\
+                            if(window['_chh_'+cid])\
+                                document.removeEventListener('mousedown',window['_chh_'+cid],true);\
+                            window['_chh_'+cid]=function(e){{\
+                                if(el&&!el.contains(e.target))dioxus.send(1);\
+                            }};\
+                            document.addEventListener('mousedown',window['_chh_'+cid],true);\
+                        }})();"
+                    ));
+                    while eval.recv::<i32>().await.is_ok() {
+                        let next = *counter.peek() + 1;
+                        counter.set(next);
+                    }
+                });
+            });
+        }
+        use_effect(move || {
+            // Re-run only when a click-outside has been detected.
+            let n = *click_outside_counter.read();
+            if n > 0 {
+                let mut sig_w = handle.signal();
+                let new_state = {
+                    let s = sig_w.peek();
+                    if s.active_cell.is_some() || !s.range_selection.is_empty() {
+                        let s2 = clear_range_selection(&*s);
+                        Some(clear_active_cell(&s2))
+                    } else {
+                        None
+                    }
+                };
+                if let Some(new_state) = new_state {
+                    sig_w.set(new_state);
+                }
             }
         });
     }
@@ -559,7 +619,7 @@ dioxus.send(parts.join('\n'));"
     let page_idx = state.page; // zero-based
     let total_rows = state.filtered_row_count();
     let is_infinite_scroll = state.pagination_mode == PaginationMode::InfiniteScroll;
-    let has_more_rows = is_infinite_scroll && view_read.len() < total_rows;
+    let has_more_rows = is_infinite_scroll && state.loaded_row_count < total_rows;
     let is_grouped = !state.grouping.is_empty();
     let is_virtualized_grouped =
         is_grouped && state.grouped_pagination == GroupedPaginationMode::Virtualized;
@@ -590,8 +650,6 @@ dioxus.send(parts.join('\n'));"
     let nav_btn_dis = "padding:0.25rem 0.6rem;border:1px solid #ddd;border-radius:3px;\
                        font-size:0.875rem;cursor:not-allowed;background:#f0f0f0;color:#aaa;";
 
-    // Unique DOM id for the keyboard container so the click handler can focus it.
-    let kb_id = format!("{scroll_id}-kb");
     rsx! {
         div {
             id: "{kb_id}",
@@ -659,8 +717,16 @@ dioxus.send(parts.join('\n'));"
                 let kb_id = kb_id.clone();
                 move |_| {
                     let id = kb_id.clone();
+                    // Only steal focus to the keyboard container when the click was NOT on
+                    // an interactive child element (input, select, textarea, button).
+                    // Checking document.activeElement after the click event fires works
+                    // because the browser sets focus during mousedown — before onclick.
                     dioxus::document::eval(&format!(
-                        "var el=document.getElementById('{id}');if(el)el.focus();"
+                        "var ae=document.activeElement;
+                         var tag=ae&&ae.nodeName||'';
+                         if(!['INPUT','SELECT','TEXTAREA','BUTTON'].includes(tag)){{
+                           var el=document.getElementById('{id}');if(el)el.focus();
+                         }}"
                     ));
                 }
             },
@@ -758,6 +824,20 @@ dioxus.send(parts.join('\n'));"
                             };
                             sig_w.set(new_s);
                         }
+                        // Item 7: F2 starts in-cell editing on the active cell.
+                        Key::F2 => {
+                            let mut sig_w = handle.signal();
+                            let s = sig_w.peek();
+                            if let Some(ac) = s.active_cell {
+                                let rows = visible_view(&*s);
+                                if let Some((row_id, _)) = rows.get(ac.row_idx) {
+                                    if let Ok(new_s) = chorale_core::start_edit(&*s, *row_id, ac.column_id) {
+                                        drop(s);
+                                        sig_w.set(new_s);
+                                    }
+                                }
+                            }
+                        }
                         Key::Character(ref ch) if ch.to_lowercase() == "a" && ctrl => {
                             e.prevent_default();
                             let mut sig_w = handle.signal();
@@ -837,8 +917,7 @@ dioxus.send(parts.join('\n'));"
                 if let Some(toolbar) = selection_toolbar {
                     div {
                         class: "chorale-selection-toolbar",
-                        style: "padding: 0.5rem 1rem; border-bottom: 1px solid #ddd; \
-                                background: #fffbeb;",
+                        style: "width: 100%; box-sizing: border-box; border-bottom: 2px solid #1d4ed8;",
                         {toolbar}
                     }
                 }
@@ -894,7 +973,7 @@ dioxus.send(parts.join('\n'));"
                                 {select_all_th(handle, all_page_selected)}
                             }
                             for col in &visible_cols {
-                                {header_th(col, widths.get(&col.id).copied(), handle, sort_enabled, current_sort, resize_enabled, drag_state, column_reorder_enabled, drag_col_id, on_column_order_change, sticky_header_css.get(&col.id).map_or("", String::as_str))}
+                                {header_th(col, widths.get(&col.id).copied(), handle, sort_enabled, current_sort, resize_enabled, drag_state, column_reorder_enabled, drag_col_id, drag_over_col, on_column_order_change, sticky_header_css.get(&col.id).map_or("", String::as_str))}
                             }
                         }
                         if filter_enabled {
@@ -1114,6 +1193,7 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
     mut drag_state: Signal<Option<(ColumnId, f64, f64)>>,
     column_reorder_enabled: bool,
     mut drag_col_id: Signal<Option<ColumnId>>,
+    mut drag_over_col: Signal<Option<ColumnId>>,
     on_column_order_change: Option<EventHandler<Vec<ColumnId>>>,
     sticky_css: &str,
 ) -> Element {
@@ -1148,7 +1228,11 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
     let drag_cursor = if column_reorder_enabled { "grab; " } else { "" };
     let sort_cursor = if is_sortable { "pointer; " } else { "" };
     let extra = format!("cursor: {drag_cursor}{sort_cursor}");
-    let is_drag_over = column_reorder_enabled && drag_col_id.read().is_some_and(|id| id != col_id);
+    // Show the drop-target indicator only on the specific column currently under
+    // the cursor, not on all non-drag columns (which caused the "stuck" look).
+    let is_drag_over = column_reorder_enabled
+        && drag_col_id.read().is_some_and(|id| id != col_id)
+        && *drag_over_col.read() == Some(col_id);
 
     let drag_over_style = if is_drag_over {
         "outline: 2px dashed #4a90e2; outline-offset: -2px; "
@@ -1165,7 +1249,7 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
             draggable: column_reorder_enabled,
             onclick: move |e| {
                 if is_sortable {
-                    let action = if e.modifiers().shift() {
+                    let action = if e.modifiers().contains(Modifiers::SHIFT) {
                         SortAction::Append
                     } else {
                         SortAction::Replace
@@ -1179,9 +1263,20 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
                     drag_col_id.set(Some(col_id));
                 }
             },
+            ondragenter: move |e| {
+                if column_reorder_enabled && drag_col_id.read().is_some_and(|id| id != col_id) {
+                    e.prevent_default();
+                    drag_over_col.set(Some(col_id));
+                }
+            },
             ondragover: move |e| {
                 if column_reorder_enabled {
                     e.prevent_default();
+                }
+            },
+            ondragleave: move |_| {
+                if column_reorder_enabled && *drag_over_col.read() == Some(col_id) {
+                    drag_over_col.set(None);
                 }
             },
             ondrop: move |e| {
@@ -1220,10 +1315,12 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
                         }
                     }
                     drag_col_id.set(None);
+                    drag_over_col.set(None);
                 }
             },
             ondragend: move |_| {
                 drag_col_id.set(None);
+                drag_over_col.set(None);
             },
             "{header}{sort_arrow}"
             if let Some(badge) = sort_badge {
@@ -1877,7 +1974,7 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
                         let is_active = active_cell.is_some_and(|ac| ac.row_idx == row_index && ac.column_id == col.id);
                         let is_in_range = range_cells.contains(&(row_index, col.id));
                         let is_focus_cell = fill_focus_cell == Some((row_index, col.id));
-                        data_td(row, col, row_height, variable_row_height, widths.get(&col.id).copied(), cell_renderers.get(col.id), separator_color, sticky_css_map.get(&col.id).map_or("", String::as_str), is_active, is_in_range, row_index, handle, is_focus_cell, fill_drag_active, fill_hover)
+                        data_td(row, col, row_height, variable_row_height, widths.get(&col.id).copied(), cell_renderers.get(col.id), separator_color, sticky_css_map.get(&col.id).map_or("", String::as_str), is_active, is_in_range, row_index, row_id, handle, is_focus_cell, fill_drag_active, fill_hover)
                     }
                 }
             }
@@ -2142,6 +2239,7 @@ fn data_td<TRow: Clone + PartialEq + 'static>(
     is_active_cell: bool,
     is_in_range: bool,
     row_index: usize,
+    row_id: RowId,
     handle: UseTableHandle<TRow>,
     is_focus_cell: bool,
     mut fill_drag_active: Signal<bool>,
@@ -2198,6 +2296,9 @@ fn data_td<TRow: Clone + PartialEq + 'static>(
                     start_range_selection(&*sig_w.peek(), row_index, col_id)
                 };
                 sig_w.set(new_s);
+            },
+            ondoubleclick: move |_| {
+                handle.start_edit(row_id, col_id);
             },
             onmouseenter: move |_| {
                 if *fill_drag_active.peek() {
@@ -2952,5 +3053,135 @@ mod tests {
         let s: TableState<String> = TableState::new(vec![], vec![]);
         let view = visible_view(&s);
         assert!(view.is_empty());
+    }
+
+    // ---- Bug 4 regression: multi-sort 3+ columns --------------------------
+
+    #[test]
+    fn multi_sort_append_grows_to_three_columns() {
+        use chorale_core::{toggle_sort, SortAction, SortDirection};
+        let rows: Vec<(RowId, R)> = (0..5)
+            .map(|i| {
+                (
+                    RowId::new(),
+                    R {
+                        name: format!("r{i}"),
+                        score: i,
+                    },
+                )
+            })
+            .collect();
+        let columns = vec![
+            ColumnDef::new(ColumnId("name"), "Name", |r: &R| {
+                CellValue::Text(r.name.clone())
+            })
+            .sortable(),
+            ColumnDef::new(ColumnId("score"), "Score", |r: &R| {
+                CellValue::Integer(r.score)
+            })
+            .sortable(),
+            ColumnDef::new(ColumnId("extra"), "Extra", |r: &R| {
+                CellValue::Integer(r.score * 2)
+            })
+            .sortable(),
+        ];
+        let s0 = TableState::new(rows, columns);
+        // Plain click col A → sort = [A:Asc]
+        let s1 = toggle_sort(&s0, ColumnId("name"), SortAction::Replace);
+        assert_eq!(s1.sort.len(), 1);
+        // Shift+click col B → sort = [A:Asc, B:Asc]
+        let s2 = toggle_sort(&s1, ColumnId("score"), SortAction::Append);
+        assert_eq!(s2.sort.len(), 2);
+        // Shift+click col C → sort = [A:Asc, B:Asc, C:Asc]
+        let s3 = toggle_sort(&s2, ColumnId("extra"), SortAction::Append);
+        assert_eq!(s3.sort.len(), 3);
+        assert_eq!(s3.sort[0].column, ColumnId("name"));
+        assert_eq!(s3.sort[0].direction, SortDirection::Asc);
+        assert_eq!(s3.sort[1].column, ColumnId("score"));
+        assert_eq!(s3.sort[2].column, ColumnId("extra"));
+    }
+
+    // ---- Bug 11 regression: range selection includes anchor and focus -----
+
+    #[test]
+    fn range_selection_single_cell_covers_one_cell() {
+        use chorale_core::start_range_selection;
+        let rows: Vec<(RowId, R)> = (0..5)
+            .map(|i| {
+                (
+                    RowId::new(),
+                    R {
+                        name: format!("r{i}"),
+                        score: i,
+                    },
+                )
+            })
+            .collect();
+        let columns = vec![
+            ColumnDef::new(ColumnId("name"), "Name", |r: &R| {
+                CellValue::Text(r.name.clone())
+            }),
+            ColumnDef::new(ColumnId("score"), "Score", |r: &R| {
+                CellValue::Integer(r.score)
+            }),
+        ];
+        let s0 = TableState::new(rows, columns);
+        let s1 = start_range_selection(&s0, 0, ColumnId("name"));
+        assert_eq!(s1.range_selection.len(), 1);
+        let col_defs: Vec<&ColumnDef<R>> = s1.columns.iter().collect();
+        let nr = s1.range_selection[0].normalized(&col_defs);
+        assert_eq!(nr.min_row, 0);
+        assert_eq!(nr.max_row, 0);
+        assert_eq!(nr.columns.len(), 1);
+    }
+
+    #[test]
+    fn range_selection_3x2_covers_six_cells() {
+        use chorale_core::{extend_range_to, start_range_selection};
+        use std::collections::HashSet;
+        let rows: Vec<(RowId, R)> = (0..5)
+            .map(|i| {
+                (
+                    RowId::new(),
+                    R {
+                        name: format!("r{i}"),
+                        score: i,
+                    },
+                )
+            })
+            .collect();
+        let columns = vec![
+            ColumnDef::new(ColumnId("name"), "Name", |r: &R| {
+                CellValue::Text(r.name.clone())
+            }),
+            ColumnDef::new(ColumnId("score"), "Score", |r: &R| {
+                CellValue::Integer(r.score)
+            }),
+        ];
+        let s0 = TableState::new(rows, columns);
+        let s1 = start_range_selection(&s0, 0, ColumnId("name"));
+        // Extend to row 2, col score → 3 rows × 2 cols = 6 cells
+        let s2 = extend_range_to(&s1, 2, ColumnId("score"));
+        let col_defs: Vec<&ColumnDef<R>> = s2.columns.iter().collect();
+        let nr = s2.range_selection[0].normalized(&col_defs);
+        assert_eq!(nr.min_row, 0);
+        assert_eq!(nr.max_row, 2, "focus row 2 must be INCLUSIVE");
+        assert_eq!(nr.columns.len(), 2);
+        // Enumerate all cells via the same loop as the adapter render uses.
+        let mut cells: HashSet<(usize, ColumnId)> = HashSet::new();
+        for row in nr.min_row..=nr.max_row {
+            for &col_id in &nr.columns {
+                cells.insert((row, col_id));
+            }
+        }
+        assert_eq!(
+            cells.len(),
+            6,
+            "3 rows × 2 cols must produce 6 highlighted cells"
+        );
+        assert!(
+            cells.contains(&(2, ColumnId("score"))),
+            "focus cell (2, score) must be in range"
+        );
     }
 }
