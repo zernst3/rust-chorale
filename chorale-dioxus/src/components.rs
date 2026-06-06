@@ -472,15 +472,17 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
             if n > 0 {
                 let mut sig_w = handle.signal();
                 // Click-outside handles active_cell + range_selection cleanup
-                // ONLY. Edit-commit lives on the input's onblur handler (see
-                // editor_td below) — the browser fires onblur deterministically
-                // when the input loses focus on click-outside, and reading
-                // editing_text inside that handler avoids the event-ordering
-                // race that lost typed values when the parent did both jobs
-                // here (Zach, 2026-06-06, 3:38 PM recording).
+                // ONLY when no edit is in progress. When state.editing is Some,
+                // the editor input's onblur handler owns the full cleanup
+                // (commit → clear editing → clear active → clear range). If we
+                // ran here too, we'd race with onblur's writes and the typed
+                // value would get lost in the order interaction.
                 let new_state_opt = {
                     let s = sig_w.peek();
-                    if s.active_cell.is_some() || !s.range_selection.is_empty() {
+                    if s.editing.is_some() {
+                        // Defer to onblur — do nothing.
+                        None
+                    } else if s.active_cell.is_some() || !s.range_selection.is_empty() {
                         let s2 = clear_range_selection(&*s);
                         Some(clear_active_cell(&s2))
                     } else {
@@ -533,9 +535,55 @@ dioxus.send(parts.join('\n'));"
                         .iter()
                         .any(|(k, v)| cur.row_heights.get(k).map_or(true, |h| (h - v).abs() > 0.5));
                     if any_changed {
-                        let new_state = batch_record_row_heights(&cur, &measurements);
+                        // SCROLL ANCHORING (2026-06-06): when a row's measured
+                        // height changes (typical for a freshly-rendered detail
+                        // panel going from estimate → real), the total height
+                        // of all rows ABOVE the current scroll position can
+                        // change too. If we just apply the new measurements
+                        // without adjusting scroll_top, the visible content
+                        // shifts by the delta — the user sees that as a jump.
+                        //
+                        // We sum the per-row height delta for every row whose
+                        // top edge sits above cur.scroll_top, then bump
+                        // scroll_top by that sum AND issue a JS eval to set
+                        // the DOM scrollTop to match. This keeps the visible
+                        // content visually anchored when the prefix-sum
+                        // changes underneath it.
+                        let cur_scroll = cur.scroll_top;
+                        let default_h = cur.row_height;
+                        let mut row_top_with_old = 0.0_f64;
+                        let mut scroll_delta = 0.0_f64;
+                        // view_read.len() is the count we use for window math.
+                        let total = view.peek().len();
+                        for idx in 0..total {
+                            let old_h = cur.row_heights.get(&idx).copied().unwrap_or(default_h);
+                            // Stop once we're at or past the current viewport top.
+                            if row_top_with_old >= cur_scroll {
+                                break;
+                            }
+                            if let Some(new_h) = measurements.get(&idx).copied() {
+                                let bounded_old = old_h.max(0.0);
+                                let bounded_new = new_h.max(0.0);
+                                scroll_delta += bounded_new - bounded_old;
+                            }
+                            row_top_with_old += old_h.max(0.0);
+                        }
+                        let new_scroll = (cur_scroll + scroll_delta).max(0.0);
+
+                        let mut new_state = batch_record_row_heights(&cur, &measurements);
+                        new_state.scroll_top = new_scroll;
                         drop(cur);
                         sig2.set(new_state);
+
+                        if scroll_delta.abs() > 0.5 {
+                            let cid_scroll = cid.clone();
+                            spawn(async move {
+                                let _ = dioxus::document::eval(&format!(
+                                    "(()=>{{const el=document.getElementById('{cid_scroll}'); \
+                                       if(el){{el.scrollTop={new_scroll};}}}})();"
+                                )).recv::<i32>().await;
+                            });
+                        }
                     }
                 }
             });
@@ -2417,13 +2465,19 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
                 oninput: move |e| editing_text.set(e.value()),
                 onblur: move |_| {
                     // Commit on blur (clicking anywhere outside the input).
-                    // Mirrors the Enter handler below: read editing_text,
-                    // validate, fire on_commit_edit, then commit_edit. This
-                    // is the canonical "lose focus = persist" path and is
-                    // more reliable than the parent-level click-outside
-                    // detector (which depended on event ordering across the
-                    // document and lost the typed value in some sequences).
-                    let raw = editing_text.read().clone();
+                    //
+                    // Sequencing matters here. The user-supplied on_commit_edit
+                    // handler dispatches `update_row` (a peek-mutate-set
+                    // through the chorale dispatch helper). If we then call
+                    // commit_edit with sig.read() and set the result, the
+                    // CLONE made inside commit_edit could be from a different
+                    // signal version than the post-update_row value when
+                    // Dioxus 0.7 reconciles batched writes, and our `.set()`
+                    // would overwrite the row mutation. The fix is to use
+                    // sig.write() to mutate just the `editing` + `active_cell`
+                    // + `range_selection` fields in place — never producing a
+                    // whole-state clone that races with the dispatched update.
+                    let raw = editing_text.peek().clone();
                     let result = validate_blur.call(EditValidation {
                         row_id,
                         column_id: col_id,
@@ -2439,12 +2493,16 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
                                 prior_row_blur.clone(),
                             ));
                         }
+                        // Mutate fields in place — no clone-and-replace.
                         let mut sig = handle.signal();
-                        let new_state = commit_edit(&*sig.read());
-                        sig.set(new_state);
+                        {
+                            let mut s = sig.write();
+                            s.editing = None;
+                            s.active_cell = None;
+                            s.range_selection.clear();
+                        }
                     }
-                    // On validation error, leave editing open. The editor
-                    // input stays mounted since state.editing wasn't cleared.
+                    // On validation error, leave editing open so user can fix.
                 },
                 onkeydown: move |e: KeyboardEvent| {
                     match e.key() {
