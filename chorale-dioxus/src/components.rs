@@ -14,8 +14,8 @@ use chorale_core::{
     visible_grouped_view, visible_view, visible_window, visible_window_variable, ActiveCell,
     Alignment, BadgeVariantMap, CellValue, ClipboardCopyEvent, ClipboardPasteEvent, ColumnDef,
     ColumnId, CommittedEdit, CurrencyCode, EditorKind, FilterKind, FilterValue, GroupKey,
-    GroupedPaginationMode, GroupedRow, Labels, NavDirection, PaginationMode, RenderKind, RowId,
-    SortAction, SortDirection, SortState, TableState, VirtualWindow,
+    GroupedPaginationMode, GroupedRow, Labels, NavDirection, PaginationMode, RenderKind, RenderRow,
+    RowId, SortAction, SortDirection, SortState, TableState, VirtualWindow,
 };
 use dioxus::prelude::*;
 
@@ -235,6 +235,12 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     #[props(default)] validate_edit: ValidateEditFn,
     on_commit_edit: Option<EventHandler<CommittedEdit<TRow>>>,
     #[props(default)] selection_toolbar: Option<Element>,
+    /// Optional per-row detail renderer. When `Some`, a 24px chevron column is
+    /// prepended; clicking it calls `toggle_row_expansion`. `RenderRow::DetailPanel`
+    /// rows render as `<tr><td colspan>` containing the returned `Element`.
+    ///
+    /// Per CHANGELOG Item N (master/detail, MD-B).
+    #[props(default)] detail_renderer: Option<Callback<TRow, Element>>,
     #[props(default)] labels: Option<Labels>,
     #[props(default = false)] column_reorder_enabled: bool,
     on_column_order_change: Option<EventHandler<Vec<ColumnId>>>,
@@ -318,6 +324,7 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
             s.rows.len(),
             s.grouping.clone(),
             s.collapsed_groups.clone(),
+            s.expanded_rows.clone(),
         )
     });
     // sig.peek() reads without subscribing this memo to sig directly;
@@ -588,7 +595,7 @@ dioxus.send(parts.join('\n'));"
     let range_selection = state.range_selection.clone();
     // Snapshot column IDs for the keyboard handler closure (stale-on-reorder is acceptable).
     let visible_col_ids_for_kb: Vec<ColumnId> = visible_cols.iter().map(|c| c.id).collect();
-    let total_rows_for_kb = view_read.len();
+    let total_rows_for_kb = view_read.iter().filter(|r| matches!(r, RenderRow::Data { .. })).count();
     // Pre-compute the set of all (row, col) cells covered by any range rectangle so that
     // per-cell rendering is O(1) lookup rather than O(ranges * cells).
     let range_cells: HashSet<(usize, ColumnId)> = {
@@ -614,7 +621,7 @@ dioxus.send(parts.join('\n'));"
         None
     };
 
-    let (win, id_slice, row_slice) = compute_window_slice(&state, &view_read, variable_row_height);
+    let (win, render_slice) = compute_window_slice(&state, &view_read, variable_row_height);
     let total_pages = state.total_pages();
     let page_idx = state.page; // zero-based
     let total_rows = state.filtered_row_count();
@@ -624,7 +631,8 @@ dioxus.send(parts.join('\n'));"
     let is_virtualized_grouped =
         is_grouped && state.grouped_pagination == GroupedPaginationMode::Virtualized;
     let col_count = visible_cols.len();
-    let effective_col_count = col_count + usize::from(selection_enabled);
+    let has_detail = detail_renderer.is_some();
+    let effective_col_count = col_count + usize::from(selection_enabled) + usize::from(has_detail);
     let row_height = state.row_height;
     let viewport_height = state.viewport_height;
     let current_sort: &[SortState] = &state.sort;
@@ -639,8 +647,12 @@ dioxus.send(parts.join('\n'));"
     let col_visibility = state.column_visibility.clone();
 
     let selection_set: HashSet<RowId> = state.selection.iter().copied().collect();
+    let page_data_ids: Vec<RowId> = view_read
+        .iter()
+        .filter_map(|r| if let RenderRow::Data { id, .. } = r { Some(*id) } else { None })
+        .collect();
     let all_page_selected =
-        !view_read.is_empty() && view_read.iter().all(|(id, _)| selection_set.contains(id));
+        !page_data_ids.is_empty() && page_data_ids.iter().all(|id| selection_set.contains(id));
 
     let page_buttons = page_button_range(page_idx, total_pages);
     let prev_disabled = page_idx == 0;
@@ -830,7 +842,7 @@ dioxus.send(parts.join('\n'));"
                             let s = sig_w.peek();
                             if let Some(ac) = s.active_cell {
                                 let rows = visible_view(&*s);
-                                if let Some((row_id, _)) = rows.get(ac.row_idx) {
+                                if let Some(RenderRow::Data { id: row_id, .. }) = rows.get(ac.row_idx) {
                                     if let Ok(new_s) = chorale_core::start_edit(&*s, *row_id, ac.column_id) {
                                         drop(s);
                                         sig_w.set(new_s);
@@ -972,6 +984,9 @@ dioxus.send(parts.join('\n'));"
                             if selection_enabled {
                                 {select_all_th(handle, all_page_selected)}
                             }
+                            if has_detail {
+                                th { style: "width: 24px; padding: 0;" }
+                            }
                             for col in &visible_cols {
                                 {header_th(col, widths.get(&col.id).copied(), handle, sort_enabled, current_sort, resize_enabled, drag_state, column_reorder_enabled, drag_col_id, drag_over_col, on_column_order_change, sticky_header_css.get(&col.id).map_or("", String::as_str))}
                             }
@@ -985,6 +1000,9 @@ dioxus.send(parts.join('\n'));"
                                                 background: #fff; width: 2.5rem;",
                                     }
                                 }
+                                if has_detail {
+                                    th { style: "width: 24px; padding: 0; border-bottom: 1px solid #eee; background: #fff;" }
+                                }
                                 for col in &visible_cols {
                                     {filter_th(col, widths.get(&col.id).copied(), handle, &filters, &labels, sticky_header_css.get(&col.id).map_or("", String::as_str))}
                                 }
@@ -995,7 +1013,7 @@ dioxus.send(parts.join('\n'));"
                     tbody {
                         if is_grouped {
                             for (i, grouped_row) in grouped_view_read.iter().cloned().enumerate() {
-                                {render_grouped_row(grouped_row, i, effective_col_count, selection_enabled, handle, &group_header_class, &visible_cols, row_height, &widths, variable_row_height, &cell_renderers, editing_target, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, &selection_set, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover)}
+                                {render_grouped_row(grouped_row, i, effective_col_count, selection_enabled, has_detail, handle, &group_header_class, &visible_cols, row_height, &widths, variable_row_height, &cell_renderers, editing_target, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, &selection_set, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover)}
                             }
                             if grouped_view_read.is_empty() {
                                 tr {
@@ -1016,12 +1034,25 @@ dioxus.send(parts.join('\n'));"
                                     }
                                 }
                             }
-                            for (i, (row_id, row)) in id_slice.iter().zip(row_slice.iter()).enumerate() {
+                            for (i, render_row) in render_slice.iter().enumerate() {
                                 {
-                                    let editing_col = editing_target
-                                        .filter(|t| t.row_id == *row_id)
-                                        .map(|t| t.column_id);
-                                    data_tr(row, *row_id, win.start_index + i, variable_row_height, &visible_cols, row_height, &widths, selection_enabled, selection_set.contains(row_id), handle, &cell_renderers, editing_col, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover)
+                                    match render_row {
+                                        RenderRow::Data { id: row_id, row } => {
+                                            let row_id = *row_id;
+                                            let is_expanded = has_detail && state.expanded_rows.contains(&row_id);
+                                            let editing_col = editing_target
+                                                .filter(|t| t.row_id == row_id)
+                                                .map(|t| t.column_id);
+                                            data_tr(row, row_id, win.start_index + i, variable_row_height, &visible_cols, row_height, &widths, selection_enabled, selection_set.contains(&row_id), handle, &cell_renderers, editing_col, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover, has_detail, is_expanded)
+                                        }
+                                        RenderRow::DetailPanel { parent_row_id } => {
+                                            let pid = *parent_row_id;
+                                            let parent = state.rows.iter()
+                                                .find(|(rid, _)| *rid == pid)
+                                                .map(|(_, r)| r.clone());
+                                            detail_panel_tr(pid, parent, &detail_renderer, effective_col_count)
+                                        }
+                                    }
                                 }
                             }
                             if win.bottom_pad_px > 0.0 {
@@ -1146,9 +1177,9 @@ dioxus.send(parts.join('\n'));"
 /// so existing tests for chorale-core's pure functions keep passing.
 fn compute_window_slice<TRow: Clone>(
     state: &TableState<TRow>,
-    view: &[(RowId, TRow)],
+    view: &[RenderRow<TRow>],
     variable: bool,
-) -> (VirtualWindow, Vec<RowId>, Vec<TRow>) {
+) -> (VirtualWindow, Vec<RenderRow<TRow>>) {
     let total = view.len();
     let win = if variable {
         visible_window_variable(
@@ -1169,18 +1200,46 @@ fn compute_window_slice<TRow: Clone>(
         )
     };
     if total == 0 {
-        return (win, vec![], vec![]);
+        return (win, vec![]);
     }
     let win_end = win.end_index.min(total.saturating_sub(1));
-    let slice = &view[win.start_index..=win_end];
-    let ids: Vec<RowId> = slice.iter().map(|(id, _)| *id).collect();
-    let rows: Vec<TRow> = slice.iter().map(|(_, r)| r.clone()).collect();
-    (win, ids, rows)
+    let slice = view[win.start_index..=win_end].to_vec();
+    (win, slice)
 }
 
 // ---------------------------------------------------------------------------
 // Row and cell helpers (not components — plain functions returning Element)
 // ---------------------------------------------------------------------------
+
+fn detail_panel_tr<TRow: Clone + PartialEq + 'static>(
+    parent_row_id: RowId,
+    parent_row: Option<TRow>,
+    detail_renderer: &Option<Callback<TRow, Element>>,
+    colspan: usize,
+) -> Element {
+    let key = format!("{parent_row_id:?}");
+    match (parent_row, detail_renderer) {
+        (Some(prow), Some(renderer)) => {
+            let content = renderer.call(prow);
+            rsx! {
+                tr {
+                    key: "{key}",
+                    class: "chorale-row chorale-detail-panel",
+                    td {
+                        colspan: "{colspan}",
+                        div { class: "chorale-detail-panel-inner", {content} }
+                    }
+                }
+            }
+        }
+        _ => rsx! {
+            tr {
+                key: "{key}",
+                class: "chorale-row chorale-detail-panel-empty",
+            }
+        },
+    }
+}
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn header_th<TRow: Clone + PartialEq + 'static>(
@@ -1919,6 +1978,8 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
     fill_focus_cell: Option<(usize, ColumnId)>,
     fill_drag_active: Signal<bool>,
     fill_hover: Signal<Option<(usize, ColumnId)>>,
+    has_detail: bool,
+    is_expanded: bool,
 ) -> Element {
     // Row separator is rendered as a 1px inset box-shadow on each TD instead
     // of `border-bottom: 1px` on the TR. Reason: with `border-collapse: collapse`
@@ -1954,6 +2015,16 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
                         checked: is_selected,
                         onchange: move |_| handle.set_selection(row_id, !is_selected),
                     }
+                }
+            }
+            if has_detail {
+                td {
+                    class: "chorale-cell chorale-detail-chevron",
+                    style: "width: 24px; cursor: pointer; user-select: none; text-align: center; \
+                            box-shadow: inset 0 -1px 0 {separator_color};",
+                    "aria-label": if is_expanded { "Collapse row" } else { "Expand row" },
+                    onclick: move |_| handle.toggle_row_expansion(row_id),
+                    if is_expanded { "▼" } else { "▶" }
                 }
             }
             for col in visible_cols {
@@ -1993,6 +2064,7 @@ fn render_grouped_row<TRow: Clone + PartialEq + 'static>(
     row_index: usize,
     effective_col_count: usize,
     selection_enabled: bool,
+    has_detail: bool,
     handle: UseTableHandle<TRow>,
     group_header_class: &str,
     visible_cols: &[ColumnDef<TRow>],
@@ -2060,6 +2132,8 @@ fn render_grouped_row<TRow: Clone + PartialEq + 'static>(
                 fill_focus_cell,
                 fill_drag_active,
                 fill_hover,
+                has_detail,
+                false,
             )
         }
         _ => rsx! {},
@@ -2549,7 +2623,7 @@ fn render_page_btn<TRow: Clone + PartialEq + 'static>(
 mod tests {
     use chorale_core::{
         visible_row_ids, visible_view, visible_window_for_state, Alignment, CellValue, ColumnDef,
-        ColumnId, RenderKind, RowId, SortDirection, SortState, TableState,
+        ColumnId, RenderKind, RenderRow, RowId, SortDirection, SortState, TableState,
     };
 
     use super::compute_window_slice;
@@ -2599,7 +2673,18 @@ mod tests {
         let state = make_state(200.0, 40.0, 300.0);
         let view = visible_view(&state);
 
-        let (helper_win, helper_ids, helper_rows) = compute_window_slice(&state, &view, false);
+        let (helper_win, helper_slice) = compute_window_slice(&state, &view, false);
+
+        // Extract ids and rows from RenderRow::Data entries (no DetailPanel rows in
+        // this plain state, but the extraction logic must be correct for parity).
+        let helper_ids: Vec<RowId> = helper_slice
+            .iter()
+            .filter_map(|r| if let RenderRow::Data { id, .. } = r { Some(*id) } else { None })
+            .collect();
+        let helper_rows: Vec<R> = helper_slice
+            .iter()
+            .filter_map(|r| if let RenderRow::Data { row, .. } = r { Some(row.clone()) } else { None })
+            .collect();
 
         // Legacy reference path: two independent calls into chorale-core that
         // collectively did the work compute_window_slice now does once.
@@ -2624,11 +2709,10 @@ mod tests {
         let mut state = make_state(0.0, 40.0, 300.0);
         state.rows.clear();
         let view = visible_view(&state);
-        let (win, ids, rows) = compute_window_slice(&state, &view, false);
+        let (win, slice) = compute_window_slice(&state, &view, false);
         assert_eq!(win.start_index, 0);
         assert_eq!(win.end_index, 0);
-        assert!(ids.is_empty());
-        assert!(rows.is_empty());
+        assert!(slice.is_empty());
     }
 
     /// Asserts `compute_window_slice` is deterministic given the same view
@@ -2638,11 +2722,10 @@ mod tests {
     fn compute_window_slice_is_deterministic() {
         let state = make_state(120.0, 30.0, 200.0);
         let view = visible_view(&state);
-        let (w1, i1, r1) = compute_window_slice(&state, &view, false);
-        let (w2, i2, r2) = compute_window_slice(&state, &view, false);
+        let (w1, s1) = compute_window_slice(&state, &view, false);
+        let (w2, s2) = compute_window_slice(&state, &view, false);
         assert_eq!(w1, w2);
-        assert_eq!(i1, i2);
-        assert_eq!(r1, r2);
+        assert_eq!(s1, s2);
     }
 
     /// Page count = 1 → single button rendered for page 0.
@@ -2653,9 +2736,9 @@ mod tests {
         // produce a negative-arithmetic out-of-bounds slice.
         let state = make_state(10_000.0, 40.0, 300.0);
         let view = visible_view(&state);
-        let (win, ids, rows) = compute_window_slice(&state, &view, false);
+        let (win, slice) = compute_window_slice(&state, &view, false);
         assert!(win.end_index < view.len());
-        assert!(ids.len() == rows.len());
+        assert!(!slice.is_empty());
     }
 
     // ---- page_button_range -------------------------------------------------
@@ -3030,8 +3113,8 @@ mod tests {
         // Large viewport compared to row count → all rows returned.
         let s = make_state(0.0, 40.0, 10_000.0);
         let view = visible_view(&s);
-        let (_win, _ids, rows) = super::compute_window_slice(&s, &view, false);
-        assert_eq!(rows.len(), view.len());
+        let (_win, slice) = super::compute_window_slice(&s, &view, false);
+        assert_eq!(slice.len(), view.len());
     }
 
     // ---- badge_style -------------------------------------------------------

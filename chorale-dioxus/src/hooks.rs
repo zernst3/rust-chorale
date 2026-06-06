@@ -1,11 +1,11 @@
 //! Dioxus hooks for chorale tables.
 
 use chorale_core::{
-    clear_sort, collapse_all_groups, expand_all_groups, load_more_rows, move_column, remove_sort,
-    set_column_visibility, set_column_width, set_filter, set_grouping, set_page, set_page_size,
-    set_pagination_mode, set_scroll, set_selection, start_edit, toggle_group, toggle_select_all,
-    toggle_sort, update_row, ColumnId, FilterValue, GroupKey, PaginationMode, RowId, SortAction,
-    StateError, TableState,
+    clear_sort, collapse_all_groups, collapse_all_rows, expand_all_groups, load_more_rows,
+    move_column, remove_sort, set_column_visibility, set_column_width, set_filter, set_grouping,
+    set_page, set_page_size, set_pagination_mode, set_scroll, set_selection, start_edit,
+    toggle_group, toggle_row_expansion, toggle_select_all, toggle_sort, update_row, ColumnId,
+    FilterValue, GroupKey, PaginationMode, RowId, SortAction, StateError, TableState,
 };
 use dioxus::prelude::*;
 
@@ -212,6 +212,16 @@ impl<TRow: Clone + 'static> UseTableHandle<TRow> {
     /// Collapse all groups.
     pub fn collapse_all_groups(&self) {
         self.dispatch(|s| collapse_all_groups(s));
+    }
+
+    /// Toggle the expanded/collapsed state of a master/detail row.
+    pub fn toggle_row_expansion(&self, row_id: RowId) {
+        self.dispatch(|s| toggle_row_expansion(s, row_id));
+    }
+
+    /// Collapse all expanded master/detail rows (clear `expanded_rows`).
+    pub fn collapse_all_rows(&self) {
+        self.dispatch(|s| collapse_all_rows(s));
     }
 
     // -------------------------------------------------------------------------

@@ -12,7 +12,7 @@ use chorale_core::{
     visible_view, visible_window, ActiveCell, Alignment, CellValue, ClipboardCopyEvent,
     ClipboardPasteEvent, ColumnDef, ColumnId, CommittedEdit, EditorKind, FilterKind, FilterValue,
     GroupKey, GroupedPaginationMode, GroupedRow, Labels, NaiveDate, NavDirection, PaginationMode,
-    RangeSelection, RenderKind, RowId, SortAction, SortDirection, SortState, TableState,
+    RangeSelection, RenderKind, RenderRow, RowId, SortAction, SortDirection, SortState, TableState,
     VirtualWindow,
 };
 #[cfg(target_arch = "wasm32")]
@@ -27,6 +27,12 @@ use crate::hooks::UseTableHandle;
 /// Build with `Arc::new(|val| view! { ... }.into_any())` and register
 /// via [`CellRenderers::new`].
 pub type CellRenderer = Arc<dyn Fn(&CellValue) -> AnyView + Send + Sync + 'static>;
+
+/// Per-row detail renderer: takes ownership of a row and returns a Leptos [`AnyView`].
+///
+/// Used by the `detail_renderer` prop on [`Table`]. Build with
+/// `Arc::new(|row: MyRow| view! { ... }.into_any())`.
+pub type DetailRenderer<TRow> = Arc<dyn Fn(TRow) -> AnyView + Send + Sync + 'static>;
 
 /// Per-column map of custom cell renderers; default is empty (all columns use `RenderKind`).
 #[derive(Clone, Default)]
@@ -231,8 +237,8 @@ fn alignment_css(a: Alignment) -> &'static str {
 
 fn compute_window_slice<TRow: Clone>(
     state: &TableState<TRow>,
-    view: &[(RowId, TRow)],
-) -> (VirtualWindow, Vec<RowId>, Vec<TRow>) {
+    view: &[RenderRow<TRow>],
+) -> (VirtualWindow, Vec<RenderRow<TRow>>) {
     let total = view.len();
     let win = visible_window(
         state.scroll_top,
@@ -242,13 +248,11 @@ fn compute_window_slice<TRow: Clone>(
         state.buffer_rows,
     );
     if total == 0 {
-        return (win, vec![], vec![]);
+        return (win, vec![]);
     }
     let win_end = win.end_index.min(total.saturating_sub(1));
-    let slice = &view[win.start_index..=win_end];
-    let ids: Vec<RowId> = slice.iter().map(|(id, _)| *id).collect();
-    let rows: Vec<TRow> = slice.iter().map(|(_, r)| r.clone()).collect();
-    (win, ids, rows)
+    let slice = view[win.start_index..=win_end].to_vec();
+    (win, slice)
 }
 
 // ---------------------------------------------------------------------------
@@ -1046,6 +1050,8 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
     fill_focus_cell: Option<(usize, ColumnId)>,
     fill_drag_active: RwSignal<bool>,
     fill_hover: RwSignal<Option<(usize, ColumnId)>>,
+    has_detail: bool,
+    is_expanded: bool,
 ) -> AnyView {
     let bg = if is_selected { "#eff6ff" } else { "white" };
     let cells: Vec<AnyView> = visible_cols
@@ -1103,6 +1109,26 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
                                 handle.set_selection(row_id, event_target_checked(&ev));
                             }
                         />
+                    </td>
+                })
+            } else {
+                None
+            }}
+            {if has_detail {
+                let chevron = if is_expanded { "▼" } else { "▶" };
+                let aria = if is_expanded { "Collapse row" } else { "Expand row" };
+                Some(view! {
+                    <td
+                        class="chorale-cell chorale-detail-chevron"
+                        style="width:24px;cursor:pointer;user-select:none;text-align:center;\
+                               border-bottom:1px solid #eee;"
+                        aria-label=aria
+                        on:click=move |ev| {
+                            ev.stop_propagation();
+                            handle.toggle_row_expansion(row_id);
+                        }
+                    >
+                        {chevron}
                     </td>
                 })
             } else {
@@ -1317,6 +1343,12 @@ pub fn Table<TRow>(
     #[prop(optional)]
     on_paste: Option<Callback<ClipboardPasteEvent>>,
     #[prop(optional)] selection_toolbar: Option<ChildrenFn>,
+    /// Optional per-row detail renderer. When `Some`, a 24px chevron column is
+    /// prepended; clicking it calls `toggle_row_expansion`. `RenderRow::DetailPanel`
+    /// rows render as `<tr><td colspan>` containing the returned `AnyView`.
+    ///
+    /// Per CHANGELOG Item N (master/detail, MD-B).
+    #[prop(optional)] detail_renderer: Option<DetailRenderer<TRow>>,
     #[prop(optional)] labels: Option<Labels>,
     #[prop(default = false)] column_reorder_enabled: bool,
     /// CSS `z-index` applied to frozen column cells.
@@ -1362,6 +1394,7 @@ where
                 s.rows.len(),
                 s.grouping.clone(),
                 s.collapsed_groups.clone(),
+                s.expanded_rows.clone(),
             )
         })
     });
@@ -1771,24 +1804,31 @@ where
                         let is_virtualized_grouped = is_grouped
                             && s.grouped_pagination == GroupedPaginationMode::Virtualized;
                         let row_height = s.row_height;
+                        let has_detail = detail_renderer.is_some();
                         let effective_col_count =
-                            visible_cols.len() + usize::from(selection_enabled);
+                            visible_cols.len() + usize::from(selection_enabled) + usize::from(has_detail);
                         let _all_col_defs: Vec<(ColumnId, String)> = effective_order
                             .iter()
                             .filter_map(|id| s.columns.iter().find(|c| c.id == *id))
                             .map(|c| (c.id, c.header.clone()))
                             .collect();
                         let _col_visibility = s.column_visibility.clone();
-                        let all_page_selected = !visible.get().is_empty()
-                            && visible.get().iter().all(|(id, _)| selection_set.contains(id));
+                        let vis = visible.get();
+                        let page_data_ids: Vec<RowId> = vis
+                            .iter()
+                            .filter_map(|r| if let RenderRow::Data { id, .. } = r { Some(*id) } else { None })
+                            .collect();
+                        let all_page_selected = !page_data_ids.is_empty()
+                            && page_data_ids.iter().all(|id| selection_set.contains(id));
                         let total_pages = s.total_pages();
                         let page_idx = s.page;
                         let total_rows = s.filtered_row_count();
                         let is_infinite = s.pagination_mode == PaginationMode::InfiniteScroll;
-                        let has_more = is_infinite && visible.get().len() < total_rows;
+                        let vis_data_count = vis.iter().filter(|r| matches!(r, RenderRow::Data { .. })).count();
+                        let has_more = is_infinite && vis_data_count < total_rows;
 
-                        let (win, id_slice, row_slice) =
-                            compute_window_slice(&s, &visible.get());
+                        let (win, render_slice) =
+                            compute_window_slice(&s, &vis);
 
                         // Active cell + range selection for highlighting.
                         let active_cell = s.active_cell;
@@ -1905,6 +1945,8 @@ where
                                         fill_focus_cell,
                                         fill_drag_active,
                                         fill_hover,
+                                        has_detail,
+                                        false,
                                     ),
                                     _ => view! { <tr /> }.into_any(),
                                 })
@@ -1923,35 +1965,66 @@ where
                                     </tr>
                                 }.into_any());
                             }
-                            for (i, (row_id, row)) in
-                                id_slice.iter().zip(row_slice.iter()).enumerate()
-                            {
-                                let editing_col = editing_target
-                                    .filter(|t| t.row_id == *row_id)
-                                    .map(|t| t.column_id);
-                                rows.push(render_data_row(
-                                    row,
-                                    *row_id,
-                                    win.start_index + i,
-                                    &visible_cols,
-                                    &widths,
-                                    row_height,
-                                    selection_enabled,
-                                    selection_set.contains(row_id),
-                                    handle,
-                                    &cell_renderers,
-                                    editing_col,
-                                    editing_text,
-                                    edit_error,
-                                    &validate_edit,
-                                    on_commit_edit.as_ref(),
-                                    &sticky_body_css,
-                                    active_cell,
-                                    &range_cells,
-                                    fill_focus_cell,
-                                    fill_drag_active,
-                                    fill_hover,
-                                ));
+                            for (i, render_row) in render_slice.iter().enumerate() {
+                                match render_row {
+                                    RenderRow::Data { id: row_id, row } => {
+                                        let row_id = *row_id;
+                                        let is_expanded = has_detail && s.expanded_rows.contains(&row_id);
+                                        let editing_col = editing_target
+                                            .filter(|t| t.row_id == row_id)
+                                            .map(|t| t.column_id);
+                                        rows.push(render_data_row(
+                                            row,
+                                            row_id,
+                                            win.start_index + i,
+                                            &visible_cols,
+                                            &widths,
+                                            row_height,
+                                            selection_enabled,
+                                            selection_set.contains(&row_id),
+                                            handle,
+                                            &cell_renderers,
+                                            editing_col,
+                                            editing_text,
+                                            edit_error,
+                                            &validate_edit,
+                                            on_commit_edit.as_ref(),
+                                            &sticky_body_css,
+                                            active_cell,
+                                            &range_cells,
+                                            fill_focus_cell,
+                                            fill_drag_active,
+                                            fill_hover,
+                                            has_detail,
+                                            is_expanded,
+                                        ));
+                                    }
+                                    RenderRow::DetailPanel { parent_row_id } => {
+                                        let pid = *parent_row_id;
+                                        let parent = s.rows.iter()
+                                            .find(|(rid, _)| *rid == pid)
+                                            .map(|(_, r)| r.clone());
+                                        let colspan = effective_col_count;
+                                        let view = match (parent, &detail_renderer) {
+                                            (Some(prow), Some(renderer)) => {
+                                                let content = renderer(prow);
+                                                view! {
+                                                    <tr class="chorale-row chorale-detail-panel">
+                                                        <td colspan=colspan.to_string()>
+                                                            <div class="chorale-detail-panel-inner">
+                                                                {content}
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                }.into_any()
+                                            }
+                                            _ => view! {
+                                                <tr class="chorale-row chorale-detail-panel-empty" />
+                                            }.into_any(),
+                                        };
+                                        rows.push(view);
+                                    }
+                                }
                             }
                             if win.bottom_pad_px > 0.0 {
                                 let p = win.bottom_pad_px;
@@ -1997,10 +2070,27 @@ where
                             None
                         };
 
+                        let chevron_th = if has_detail {
+                            Some(view! {
+                                <th style="width:24px;padding:0;border-bottom:1px solid #ddd;\
+                                           background:#f8f9fa;" />
+                            })
+                        } else {
+                            None
+                        };
+
                         let filter_empty_th = if selection_enabled && filter_enabled {
                             Some(view! {
                                 <th style="padding:0.25rem;border-bottom:1px solid #eee;\
                                            background:#fff;width:2.5rem;" />
+                            })
+                        } else {
+                            None
+                        };
+
+                        let filter_chevron_th = if has_detail && filter_enabled {
+                            Some(view! {
+                                <th style="width:24px;padding:0;border-bottom:1px solid #eee;background:#fff;" />
                             })
                         } else {
                             None
@@ -2155,11 +2245,13 @@ where
                             <thead>
                                 <tr style="background:#f8f9fa;">
                                     {select_all_th}
+                                    {chevron_th}
                                     {header_row}
                                 </tr>
                                 {filter_row.map(|cells| view! {
                                     <tr style="background:#fff;">
                                         {filter_empty_th}
+                                        {filter_chevron_th}
                                         {cells}
                                     </tr>
                                 })}
@@ -2177,7 +2269,8 @@ where
             {move || {
                 let s = sig.get();
                 let is_infinite = s.pagination_mode == PaginationMode::InfiniteScroll;
-                let has_more = is_infinite && visible.get().len() < s.filtered_row_count();
+                let vis_data_count = visible.get().iter().filter(|r| matches!(r, RenderRow::Data { .. })).count();
+                let has_more = is_infinite && vis_data_count < s.filtered_row_count();
                 let is_grouped = !s.grouping.is_empty();
                 let is_virt_grouped =
                     is_grouped && s.grouped_pagination == GroupedPaginationMode::Virtualized;
