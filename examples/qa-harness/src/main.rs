@@ -65,6 +65,110 @@ struct Employee {
     salary: i64,
 }
 
+// ── Master/detail demo: per-employee order line items ────────────────────────
+//
+// Each row in the main table represents an Employee. When the master/detail
+// toggle is on, clicking a row's expand chevron reveals a child `<Table>`
+// showing that employee's order line items (qty + unit price). Demonstrates
+// that `detail_renderer` can mount any `Element`, including a nested
+// chorale-dioxus Table with its own state, sorting, and rendering rules.
+
+#[derive(Clone, PartialEq)]
+struct LineItem {
+    label: &'static str,
+    qty: i64,
+    unit_price: f64,
+}
+
+static LINE_ITEM_LABELS: &[&str] = &[
+    "Widget A",
+    "Widget B",
+    "Gadget C",
+    "Gizmo D",
+    "Doohickey E",
+];
+
+// Deterministic per-employee line items, seeded from the employee's email
+// so the dataset is stable across re-renders.
+#[must_use]
+fn line_items_for_employee(email: &str) -> Vec<(RowId, LineItem)> {
+    let mut seed: u64 = 0xCBF2_9CE4_8422_2325; // FNV-1a offset basis
+    for b in email.bytes() {
+        seed ^= u64::from(b);
+        seed = seed.wrapping_mul(0x100_0000_01B3);
+    }
+    let mut rng = StdRng::seed_from_u64(seed);
+    let count = rng.gen_range(2..6);
+    (0..count)
+        .map(|_| {
+            (
+                RowId::new(),
+                LineItem {
+                    label: LINE_ITEM_LABELS[rng.gen_range(0..LINE_ITEM_LABELS.len())],
+                    qty: rng.gen_range(1..20),
+                    unit_price: f64::from(rng.gen_range(500..50_000)) / 100.0,
+                },
+            )
+        })
+        .collect()
+}
+
+#[must_use]
+fn line_item_columns() -> Vec<ColumnDef<LineItem>> {
+    vec![
+        ColumnDef::new(ColumnId("li_label"), "Item", |li: &LineItem| {
+            CellValue::Text(li.label.to_string())
+        })
+        .sortable()
+        .initial_width(180.0),
+        ColumnDef::new(ColumnId("li_qty"), "Qty", |li: &LineItem| {
+            CellValue::Integer(li.qty)
+        })
+        .sortable()
+        .initial_width(80.0)
+        .alignment(Alignment::Right)
+        .render_kind(RenderKind::Number),
+        ColumnDef::new(ColumnId("li_price"), "Unit Price", |li: &LineItem| {
+            CellValue::Float(li.unit_price)
+        })
+        .sortable()
+        .initial_width(120.0)
+        .alignment(Alignment::Right)
+        .render_kind(RenderKind::Currency(CurrencyCode::USD)),
+    ]
+}
+
+#[component]
+fn EmployeeDetailPanel(employee: Employee) -> Element {
+    let items = line_items_for_employee(&employee.email);
+    let item_count = items.len();
+    let total: f64 = items
+        .iter()
+        .map(|(_, li)| f64::from(li.qty as i32) * li.unit_price)
+        .sum();
+    let table = use_table(move || TableState::new(items.clone(), line_item_columns()));
+    rsx! {
+        div {
+            style: "padding: 12px 24px; background: #fafafa; \
+                    border-top: 1px solid #e5e7eb;",
+            div {
+                style: "font-size: 0.75rem; font-weight: 600; color: #6b7280; \
+                        margin-bottom: 8px; display: flex; \
+                        justify-content: space-between; align-items: baseline;",
+                span { "ORDER LINE ITEMS — {employee.name}" }
+                span {
+                    style: "font-weight: 500; color: #374151;",
+                    "{item_count} item(s) — Total: ${total:.2}"
+                }
+            }
+            Table {
+                handle: table,
+                sort_enabled: true,
+            }
+        }
+    }
+}
+
 #[must_use]
 fn generate_dataset() -> Vec<(RowId, Employee)> {
     let mut rng = StdRng::seed_from_u64(SEED);
@@ -267,6 +371,7 @@ fn App() -> Element {
     let mut column_reorder_on = use_signal(|| false);
     let mut frozen_columns_on = use_signal(|| false);
     let mut selection_toolbar_on = use_signal(|| false);
+    let mut master_detail_on = use_signal(|| false);
     let mut use_derive_on = use_signal(|| false);
 
     // ── Cell renderers (re-built when variable_height_on changes) ────────────
@@ -614,6 +719,17 @@ fn App() -> Element {
                 label {
                     input {
                         r#type: "checkbox",
+                        checked: *master_detail_on.read(),
+                        onchange: move |_| {
+                            let v = *master_detail_on.read();
+                            master_detail_on.set(!v);
+                        },
+                    }
+                    " Master/Detail (sub-table per row)"
+                }
+                label {
+                    input {
+                        r#type: "checkbox",
                         checked: *use_derive_on.read(),
                         onchange: move |_| {
                             let v = *use_derive_on.read();
@@ -646,6 +762,13 @@ fn App() -> Element {
                 selection_toolbar: toolbar_el,
                 labels: labels_opt,
                 column_reorder_enabled: *column_reorder_on.read(),
+                detail_renderer: if *master_detail_on.read() {
+                    Some(Callback::new(|employee: Employee| {
+                        rsx! { EmployeeDetailPanel { employee } }
+                    }))
+                } else {
+                    None
+                },
             }
         }
     }
