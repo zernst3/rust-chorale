@@ -418,6 +418,38 @@ mod tests {
         CellValue::Float(f)
     }
 
+    // ---- normalized() 3×3 range includes focus cell -------------------------
+
+    #[test]
+    fn drag_select_3x3_includes_focus_cell() {
+        let state = make_state(vec![
+            row(int(1), int(2), int(3)),
+            row(int(4), int(5), int(6)),
+            row(int(7), int(8), int(9)),
+        ]);
+        let cols = make_columns();
+        let col_refs: Vec<&ColumnDef<Row>> = cols.iter().collect();
+
+        let range = RangeSelection::new((0, col_a()), (2, col_c()));
+        let nr = range.normalized(&col_refs);
+
+        // Collect cells using the same inclusive iteration as the adapters.
+        let cells: Vec<(usize, ColumnId)> = (nr.min_row..=nr.max_row)
+            .flat_map(|r| nr.columns.iter().map(move |&c| (r, c)))
+            .collect();
+
+        assert_eq!(
+            cells.len(),
+            9,
+            "expected 9 cells in 3×3 range, got {}",
+            cells.len()
+        );
+        assert!(
+            cells.iter().any(|&c| c == (2, col_c())),
+            "focus cell (2, col_c) must be included in the range"
+        );
+    }
+
     // ---- single-cell repeat ------------------------------------------------
 
     #[test]
