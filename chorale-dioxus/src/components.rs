@@ -354,6 +354,32 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
         ));
     });
 
+    // In-cell editing: reset editor text and error when the active cell changes.
+    // Unconditional use_effect (Dioxus hook ordering rules); no-op when no edit target.
+    {
+        let edit_target_memo = use_memo(move || sig.read().editing);
+        use_effect(move || {
+            let target = *edit_target_memo.read();
+            if let Some(target) = target {
+                let state = sig.read();
+                let init_text = state
+                    .columns
+                    .iter()
+                    .find(|c| c.id == target.column_id)
+                    .and_then(|col| {
+                        state
+                            .rows
+                            .iter()
+                            .find(|(id, _)| *id == target.row_id)
+                            .map(|(_, row)| (col.accessor)(row).to_csv_string())
+                    })
+                    .unwrap_or_default();
+                editing_text.set(init_text);
+                edit_error.set(None);
+            }
+        });
+    }
+
     // Bug 6 fix: clear active cell + range when the keyboard container loses focus
     // to an element outside the table. onfocusin/out bubble so we can catch it on
     // the outer div. We use JS to check relatedTarget vs the container boundary.
@@ -817,25 +843,9 @@ dioxus.send(parts.join('\n'));"
                             if let Some(ac) = s.active_cell {
                                 let rows = visible_view(&*s);
                                 if let Some(RenderRow::Data { id: row_id, .. }) = rows.get(ac.row_idx) {
-                                    let row_id = *row_id;
-                                    if let Ok(new_s) = chorale_core::start_edit(&*s, row_id, ac.column_id) {
-                                        // Bug 6 fix: initialize editing_text synchronously so the
-                                        // first render of the editor shows the correct value.
-                                        let init_text = s
-                                            .columns
-                                            .iter()
-                                            .find(|c| c.id == ac.column_id)
-                                            .and_then(|col| {
-                                                s.rows
-                                                    .iter()
-                                                    .find(|(id, _)| *id == row_id)
-                                                    .map(|(_, row)| (col.accessor)(row).to_csv_string())
-                                            })
-                                            .unwrap_or_default();
+                                    if let Ok(new_s) = chorale_core::start_edit(&*s, *row_id, ac.column_id) {
                                         drop(s);
                                         sig_w.set(new_s);
-                                        editing_text.set(init_text);
-                                        edit_error.set(None);
                                     }
                                 }
                             }
@@ -2040,7 +2050,7 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
                         let is_active = active_cell.is_some_and(|ac| ac.row_idx == row_index && ac.column_id == col.id);
                         let is_in_range = range_cells.contains(&(row_index, col.id));
                         let is_focus_cell = fill_focus_cell == Some((row_index, col.id));
-                        data_td(row, col, row_height, variable_row_height, widths.get(&col.id).copied(), cell_renderers.get(col.id), separator_color, sticky_css_map.get(&col.id).map_or("", String::as_str), is_active, is_in_range, row_index, row_id, handle, is_focus_cell, fill_drag_active, fill_hover, editing_text, edit_error)
+                        data_td(row, col, row_height, variable_row_height, widths.get(&col.id).copied(), cell_renderers.get(col.id), separator_color, sticky_css_map.get(&col.id).map_or("", String::as_str), is_active, is_in_range, row_index, row_id, handle, is_focus_cell, fill_drag_active, fill_hover)
                     }
                 }
             }
@@ -2313,13 +2323,8 @@ fn data_td<TRow: Clone + PartialEq + 'static>(
     is_focus_cell: bool,
     mut fill_drag_active: Signal<bool>,
     mut fill_hover: Signal<Option<(usize, ColumnId)>>,
-    mut editing_text: Signal<String>,
-    mut edit_error: Signal<Option<String>>,
 ) -> Element {
     let val = (col.accessor)(row);
-    // Bug 6 fix: pre-compute so the ondoubleclick handler can initialize editing_text
-    // synchronously without re-reading the state.
-    let edit_init_text = val.to_csv_string();
     let align = alignment_css(col.alignment);
     let w = col_width_style(override_width, col.initial_width);
     // Active cell: inset outline; range cell: semi-transparent blue background
@@ -2373,8 +2378,6 @@ fn data_td<TRow: Clone + PartialEq + 'static>(
             },
             ondoubleclick: move |_| {
                 handle.start_edit(row_id, col_id);
-                editing_text.set(edit_init_text.clone());
-                edit_error.set(None);
             },
             onmouseenter: move |_| {
                 if *fill_drag_active.peek() {
