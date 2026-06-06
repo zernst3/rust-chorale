@@ -531,9 +531,30 @@ dioxus.send(parts.join('\n'));"
                         return;
                     }
                     let cur = sig2.read();
-                    let any_changed = measurements
-                        .iter()
-                        .any(|(k, v)| cur.row_heights.get(k).map_or(true, |h| (h - v).abs() > 0.5));
+                    // JP1: Did any row height change vs the cached values?
+                    // Show every measured index along with old/new (we only
+                    // log measurements where new differs from old by > 0.5px
+                    // — the same threshold used to gate the dispatch).
+                    let mut jp1_rows: Vec<String> = Vec::new();
+                    let mut any_changed = false;
+                    for (k, v) in &measurements {
+                        let old = cur.row_heights.get(k).copied().unwrap_or(cur.row_height);
+                        let delta = v - old;
+                        if delta.abs() > 0.5 {
+                            any_changed = true;
+                            jp1_rows.push(format!("idx={} old={:.1} new={:.1} delta={:+.1}", k, old, v, delta));
+                        }
+                    }
+                    if any_changed {
+                        dioxus::document::eval(&format!(
+                            "console.log('[chorale-jp] JP1 measurement changes: scroll_top={:.1} viewport_height={:.1} row_height={:.1} total_view={}; rows changed:\\n{}');",
+                            cur.scroll_top,
+                            cur.viewport_height,
+                            cur.row_height,
+                            view.peek().len(),
+                            jp1_rows.join("\\n"),
+                        ));
+                    }
                     if any_changed {
                         // SCROLL ANCHORING (2026-06-06): when a row's measured
                         // height changes (typical for a freshly-rendered detail
@@ -555,20 +576,39 @@ dioxus.send(parts.join('\n'));"
                         let mut scroll_delta = 0.0_f64;
                         // view_read.len() is the count we use for window math.
                         let total = view.peek().len();
+                        // JP2: which rows are we counting toward the anchor
+                        // delta — those whose top edge sits above the
+                        // current viewport top.
+                        let mut jp2_counted: Vec<String> = Vec::new();
+                        let mut jp2_skipped_at: Option<(usize, f64)> = None;
                         for idx in 0..total {
                             let old_h = cur.row_heights.get(&idx).copied().unwrap_or(default_h);
                             // Stop once we're at or past the current viewport top.
                             if row_top_with_old >= cur_scroll {
+                                jp2_skipped_at = Some((idx, row_top_with_old));
                                 break;
                             }
                             if let Some(new_h) = measurements.get(&idx).copied() {
                                 let bounded_old = old_h.max(0.0);
                                 let bounded_new = new_h.max(0.0);
-                                scroll_delta += bounded_new - bounded_old;
+                                let d = bounded_new - bounded_old;
+                                if d.abs() > 0.5 {
+                                    jp2_counted.push(format!("idx={} row_top={:.1} delta={:+.1}", idx, row_top_with_old, d));
+                                }
+                                scroll_delta += d;
                             }
                             row_top_with_old += old_h.max(0.0);
                         }
                         let new_scroll = (cur_scroll + scroll_delta).max(0.0);
+                        dioxus::document::eval(&format!(
+                            "console.log('[chorale-jp] JP2 anchor pass: cur_scroll={:.1} loop_stopped_at_idx={:?} (row_top={:?}); rows whose delta was counted:\\n{}; scroll_delta={:+.1}; new_scroll={:.1}');",
+                            cur_scroll,
+                            jp2_skipped_at.map(|(i, _)| i),
+                            jp2_skipped_at.map(|(_, t)| format!("{:.1}", t)),
+                            if jp2_counted.is_empty() { String::from("  (none)") } else { jp2_counted.join("\\n") },
+                            scroll_delta,
+                            new_scroll,
+                        ));
 
                         let mut new_state = batch_record_row_heights(&cur, &measurements);
                         new_state.scroll_top = new_scroll;
@@ -578,11 +618,19 @@ dioxus.send(parts.join('\n'));"
                         if scroll_delta.abs() > 0.5 {
                             let cid_scroll = cid.clone();
                             spawn(async move {
+                                // JP3: We actually issued the JS to update DOM scrollTop.
                                 let _ = dioxus::document::eval(&format!(
                                     "(()=>{{const el=document.getElementById('{cid_scroll}'); \
-                                       if(el){{el.scrollTop={new_scroll};}}}})();"
+                                       const before=el?el.scrollTop:null; \
+                                       if(el){{el.scrollTop={new_scroll};}} \
+                                       const after=el?el.scrollTop:null; \
+                                       console.log('[chorale-jp] JP3 DOM scroll write attempt: before='+before+' target={new_scroll} after='+after);}})();"
                                 )).recv::<i32>().await;
                             });
+                        } else {
+                            dioxus::document::eval(
+                                "console.log('[chorale-jp] JP3 DOM scroll skipped: |scroll_delta| <= 0.5');"
+                            );
                         }
                     }
                 }
