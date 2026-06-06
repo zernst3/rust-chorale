@@ -1319,6 +1319,10 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
                 }
             },
             ondragend: move |_| {
+                // Reset both signals: ondragend fires on the source column regardless
+                // of whether drop landed on a valid target, so this is the reliable
+                // cleanup path. Without it, aborting mid-drag (Escape or drop outside)
+                // leaves the blue dashed outline stuck on the last-hovered column.
                 drag_col_id.set(None);
                 drag_over_col.set(None);
             },

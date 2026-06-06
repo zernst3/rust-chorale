@@ -1493,6 +1493,16 @@ mod tests {
         assert_eq!(s2.selection.iter().filter(|&&i| i == id).count(), 1);
     }
 
+    #[test]
+    fn set_selection_deselect_last_row_empties_selection() {
+        let s = make_state();
+        let id = s.rows[0].0;
+        let s2 = set_selection(&s, id, true);
+        assert!(!s2.selection.is_empty());
+        let s3 = set_selection(&s2, id, false);
+        assert!(s3.selection.is_empty());
+    }
+
     // ---- toggle_select_all -------------------------------------------------
 
     #[test]
