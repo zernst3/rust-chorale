@@ -287,6 +287,18 @@ pub use transitions::set_selection;
 /// Toggle between "select all visible rows" and "select none".
 pub use transitions::toggle_select_all;
 
+/// Select every row currently on the visible page (excluding detail panels).
+pub use transitions::select_all_visible_page;
+
+/// Select every row in the filtered + sorted set (across all pages).
+pub use transitions::select_all_filtered;
+
+/// Deselect every row currently on the visible page, leaving other-page selections intact.
+pub use transitions::deselect_all_visible_page;
+
+/// Clear the entire selection across all pages.
+pub use transitions::deselect_all;
+
 /// Show or hide a column.
 pub use transitions::set_column_visibility;
 
@@ -491,6 +503,11 @@ pub use views::visible_rows;
 /// `RowId`s for the current page. Prefer [`visible_view`] when row data is
 /// also needed.
 pub use views::visible_row_ids;
+
+/// Post-filter / post-sort `(RowId, TRow)` pairs for ALL pages (no pagination).
+///
+/// Used by bulk-selection transitions and XLSX export.
+pub use views::filtered_sorted_pairs;
 
 /// Post-filter / post-sort rows for ALL pages (no pagination). Used by `to_csv`.
 pub use views::filtered_sorted_rows;

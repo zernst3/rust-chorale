@@ -758,7 +758,10 @@ pub fn to_csv<TRow: Clone>(state: &TableState<TRow>) -> String {
 // ---------------------------------------------------------------------------
 
 /// Returns filtered + sorted `(RowId, TRow)` pairs (no pagination).
-fn filtered_sorted_pairs<TRow: Clone>(state: &TableState<TRow>) -> Vec<(RowId, TRow)> {
+///
+/// This is the complete set across all pages, used by bulk-selection
+/// transitions (select_all_filtered, deselect_all) and XLSX export.
+pub fn filtered_sorted_pairs<TRow: Clone>(state: &TableState<TRow>) -> Vec<(RowId, TRow)> {
     let mut pairs: Vec<(RowId, TRow)> = state
         .rows
         .iter()

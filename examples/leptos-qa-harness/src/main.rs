@@ -524,8 +524,50 @@ fn App() -> impl IntoView {
                                     <div style="display: flex; align-items: center; gap: 1rem; \
                                                 padding: 0.75rem 1rem; background: #1d4ed8; \
                                                 color: white; font-size: 0.875rem; font-weight: 600; \
-                                                width: 100%; box-sizing: border-box;">
+                                                width: 100%; box-sizing: border-box; flex-wrap: wrap;">
                                         <span>{count}" row(s) selected"</span>
+                                        <div class="chorale-bulk-actions" style="display: flex; gap: 8px;">
+                                            <button
+                                                on:click=move |_| table.select_all_visible_page()
+                                                style="padding: 0.25rem 0.75rem; \
+                                                       background: rgba(255,255,255,0.2); \
+                                                       color: white; \
+                                                       border: 1px solid rgba(255,255,255,0.4); \
+                                                       border-radius: 3px; cursor: pointer; \
+                                                       font-size: 0.8rem;">
+                                                "Select page"
+                                            </button>
+                                            <button
+                                                on:click=move |_| table.select_all_filtered()
+                                                style="padding: 0.25rem 0.75rem; \
+                                                       background: rgba(255,255,255,0.2); \
+                                                       color: white; \
+                                                       border: 1px solid rgba(255,255,255,0.4); \
+                                                       border-radius: 3px; cursor: pointer; \
+                                                       font-size: 0.8rem;">
+                                                "Select all"
+                                            </button>
+                                            <button
+                                                on:click=move |_| table.deselect_all_visible_page()
+                                                style="padding: 0.25rem 0.75rem; \
+                                                       background: rgba(255,255,255,0.2); \
+                                                       color: white; \
+                                                       border: 1px solid rgba(255,255,255,0.4); \
+                                                       border-radius: 3px; cursor: pointer; \
+                                                       font-size: 0.8rem;">
+                                                "Deselect page"
+                                            </button>
+                                            <button
+                                                on:click=move |_| table.deselect_all()
+                                                style="padding: 0.25rem 0.75rem; \
+                                                       background: rgba(255,255,255,0.2); \
+                                                       color: white; \
+                                                       border: 1px solid rgba(255,255,255,0.4); \
+                                                       border-radius: 3px; cursor: pointer; \
+                                                       font-size: 0.8rem;">
+                                                "Deselect all"
+                                            </button>
+                                        </div>
                                         <button style="padding: 0.25rem 0.75rem; \
                                                        background: rgba(255,255,255,0.2); \
                                                        color: white; \

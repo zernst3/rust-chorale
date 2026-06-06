@@ -1,8 +1,9 @@
 //! Leptos hooks for chorale tables.
 
 use chorale_core::{
-    clear_sort, collapse_all_groups, collapse_all_rows, expand_all_groups, load_more_rows,
-    move_column, remove_sort, set_column_visibility, set_column_width, set_filter, set_grouping,
+    clear_sort, collapse_all_groups, collapse_all_rows, deselect_all, deselect_all_visible_page,
+    expand_all_groups, load_more_rows, move_column, remove_sort, select_all_filtered,
+    select_all_visible_page, set_column_visibility, set_column_width, set_filter, set_grouping,
     set_page, set_page_size, set_pagination_mode, set_scroll, set_selection, toggle_group,
     toggle_row_expansion, toggle_select_all, toggle_sort, update_row, ColumnId, FilterValue,
     GroupKey, PaginationMode, RowId, SortAction, StateError, TableState,
@@ -87,6 +88,26 @@ impl<TRow: Clone + PartialEq + Send + Sync + 'static> UseTableHandle<TRow> {
     /// Select all visible rows, or deselect all if all are already selected.
     pub fn toggle_select_all(&self) {
         self.dispatch(|s| toggle_select_all(s));
+    }
+
+    /// Select every row currently on the visible page (excluding detail panels).
+    pub fn select_all_visible_page(&self) {
+        self.dispatch(|s| select_all_visible_page(s));
+    }
+
+    /// Select every row in the filtered + sorted set (across all pages).
+    pub fn select_all_filtered(&self) {
+        self.dispatch(|s| select_all_filtered(s));
+    }
+
+    /// Deselect every row currently on the visible page, leaving other-page selections intact.
+    pub fn deselect_all_visible_page(&self) {
+        self.dispatch(|s| deselect_all_visible_page(s));
+    }
+
+    /// Clear the entire selection across all pages.
+    pub fn deselect_all(&self) {
+        self.dispatch(|s| deselect_all(s));
     }
 
     /// Show or hide `col`.

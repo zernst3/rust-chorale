@@ -237,6 +237,72 @@ pub fn toggle_select_all<TRow: Clone>(state: &TableState<TRow>) -> TableState<TR
     }
 }
 
+/// Select every row currently on the visible page (excluding detail panels).
+#[must_use]
+pub fn select_all_visible_page<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    let page_ids: Vec<RowId> = crate::views::visible_view(state)
+        .into_iter()
+        .filter_map(|r| match r {
+            crate::views::RenderRow::Data { id, .. } => Some(id),
+            _ => None,
+        })
+        .collect();
+    let mut sel = state.selection.clone();
+    for id in page_ids {
+        if !sel.contains(&id) {
+            sel.push(id);
+        }
+    }
+    TableState {
+        selection: sel,
+        ..state.clone()
+    }
+}
+
+/// Select every row in the filtered + sorted set (across all pages).
+#[must_use]
+pub fn select_all_filtered<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    let all_ids: Vec<RowId> = crate::views::filtered_sorted_pairs(state)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    TableState {
+        selection: all_ids,
+        ..state.clone()
+    }
+}
+
+/// Deselect every row currently on the visible page, leaving other-page selections intact.
+#[must_use]
+pub fn deselect_all_visible_page<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    let page_ids: std::collections::HashSet<RowId> = crate::views::visible_view(state)
+        .into_iter()
+        .filter_map(|r| match r {
+            crate::views::RenderRow::Data { id, .. } => Some(id),
+            _ => None,
+        })
+        .collect();
+    let kept: Vec<RowId> = state
+        .selection
+        .iter()
+        .filter(|id| !page_ids.contains(id))
+        .copied()
+        .collect();
+    TableState {
+        selection: kept,
+        ..state.clone()
+    }
+}
+
+/// Clear the entire selection across all pages.
+#[must_use]
+pub fn deselect_all<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    TableState {
+        selection: Vec::new(),
+        ..state.clone()
+    }
+}
+
 /// Jump to page `page` (zero-based).
 ///
 /// # Errors
@@ -1564,6 +1630,50 @@ mod tests {
         let s = make_state();
         let s = toggle_select_all(&s); // select all
         let s2 = toggle_select_all(&s); // deselect all
+        assert!(s2.selection.is_empty());
+    }
+
+    // ---- select_all_visible_page / select_all_filtered / deselect_all_visible_page / deselect_all ---
+
+    #[test]
+    fn select_all_visible_page_covers_current_page_only() {
+        let mut s = make_state();
+        s.page_size = 2; // 3 rows → pages [0,1], [2]
+        let s2 = select_all_visible_page(&s);
+        assert_eq!(s2.selection.len(), 2); // only page 0
+    }
+
+    #[test]
+    fn select_all_filtered_covers_all_pages() {
+        let mut s = make_state();
+        s.page_size = 2;
+        let s2 = select_all_filtered(&s);
+        assert_eq!(s2.selection.len(), 3); // all rows across all pages
+    }
+
+    #[test]
+    fn deselect_all_visible_page_leaves_other_pages_intact() {
+        let mut s = make_state();
+        s.page_size = 2;
+        // Select all rows first
+        let s = select_all_filtered(&s);
+        assert_eq!(s.selection.len(), 3);
+        // Deselect just the current page (page 0: rows[0], rows[1])
+        let s2 = deselect_all_visible_page(&s);
+        assert_eq!(s2.selection.len(), 1); // 3 - 2 = 1
+        // Verify the remaining selected row is rows[2] (from page 1)
+        assert!(!s2.selection.contains(&s.rows[0].0));
+        assert!(!s2.selection.contains(&s.rows[1].0));
+        assert!(s2.selection.contains(&s.rows[2].0));
+    }
+
+    #[test]
+    fn deselect_all_clears_everything() {
+        let mut s = make_state();
+        s.page_size = 2;
+        let s = select_all_filtered(&s);
+        assert_eq!(s.selection.len(), 3);
+        let s2 = deselect_all(&s);
         assert!(s2.selection.is_empty());
     }
 
