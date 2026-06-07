@@ -1250,10 +1250,12 @@ dioxus.send(parts.join('\n'));"
                                 {select_all_th(handle, all_page_selected, sticky_header)}
                             }
                             if has_detail {
-                                // Mirrors header_th's sticky toggling.
-                                // border-bottom matches both header_th and
-                                // select_all_th so the line under the header
-                                // is continuous across all columns.
+                                // Mirrors header_th's sticky toggling +
+                                // explicit-override pattern (see comment
+                                // in header_th). border-bottom matches
+                                // both header_th and select_all_th so the
+                                // line under the header is continuous
+                                // across all columns.
                                 th {
                                     style: if sticky_header {
                                         "width: 24px; padding: 0; \
@@ -1263,6 +1265,8 @@ dioxus.send(parts.join('\n'));"
                                     } else {
                                         "width: 24px; padding: 0; \
                                          border-bottom: 1px solid #ddd; \
+                                         position: static; top: auto; \
+                                         z-index: auto; \
                                          background: #f8f9fa;"
                                     }
                                 }
@@ -1613,10 +1617,18 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
     let col_id = col.id;
     let is_sortable = sort_enabled && col.sortable;
     let initial_width = col.initial_width;
+    // Emit explicit position/top/z-index in BOTH branches. Dioxus 0.7's
+    // inline-style diff is unreliable when transitioning from a non-empty
+    // declaration to nothing — the prior `position: sticky` can persist in
+    // the DOM. Writing `position: static; top: auto; z-index: auto` on the
+    // off branch forces a concrete attribute swap. When a column is ALSO
+    // frozen, `sticky_css` appears later in the style string and its
+    // `position: sticky; left/right; z-index` correctly overrides this
+    // baseline via standard cascade-last-wins.
     let sticky_top_decl = if sticky_header {
         "position: sticky; top: 0; z-index: 1;"
     } else {
-        ""
+        "position: static; top: auto; z-index: auto;"
     };
 
     // Find this column's sort entry (if any) across the whole multi-sort list.
@@ -2311,12 +2323,15 @@ fn select_all_th<TRow: Clone + PartialEq + 'static>(
     all_page_selected: bool,
     sticky_header: bool,
 ) -> Element {
+    // Explicit position/top/z-index in BOTH branches — see header_th's
+    // comment about Dioxus 0.7's unreliable inline-style diff when a
+    // declaration disappears entirely.
     let style = if sticky_header {
         "padding: 0.25rem 0.5rem; border-bottom: 1px solid #ddd; position: sticky; \
          top: 0; background: #f8f9fa; z-index: 1; width: 2.5rem; text-align: center;"
     } else {
-        "padding: 0.25rem 0.5rem; border-bottom: 1px solid #ddd; \
-         background: #f8f9fa; width: 2.5rem; text-align: center;"
+        "padding: 0.25rem 0.5rem; border-bottom: 1px solid #ddd; position: static; \
+         top: auto; z-index: auto; background: #f8f9fa; width: 2.5rem; text-align: center;"
     };
     rsx! {
         th {
