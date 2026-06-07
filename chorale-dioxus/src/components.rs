@@ -239,6 +239,14 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     #[props(default = false)]
     xlsx_export: bool,
     #[props(default = false)] resize_enabled: bool,
+    /// When `true`, the header row stays pinned to the top of the scroll
+    /// container as the user scrolls vertically (`position: sticky; top: 0`
+    /// on every header TH). When `false`, the header scrolls with the body.
+    /// Frozen columns retain their left/right stickiness regardless of this
+    /// flag; this controls only the vertical sticky of the header row.
+    /// Default: `true` (matches standard data-grid UX).
+    #[props(default = true)]
+    sticky_header: bool,
     #[props(default = false)] variable_row_height: bool,
     /// **Inline mode** (default `false`). When `true`, the `<Table>` does NOT
     /// render its own scroll container — the body renders at its natural full
@@ -1239,30 +1247,28 @@ dioxus.send(parts.join('\n'));"
                         tr {
                             style: "background: #f8f9fa;",
                             if selection_enabled {
-                                {select_all_th(handle, all_page_selected)}
+                                {select_all_th(handle, all_page_selected, sticky_header)}
                             }
                             if has_detail {
-                                // Sticky parity with every other column header.
-                                // Without `position: sticky; top: 0; background;
-                                // z-index`, the chevron column has a transparent
-                                // gap at the top of the sticky header, and the
-                                // body's chevron TDs visibly scroll OVER the
-                                // header row through that gap (Zach repro
-                                // 2026-06-06).
-                                //
-                                // `border-bottom: 1px solid #ddd` matches both
-                                // header_th and select_all_th — without it,
-                                // the chevron column had no separator line
-                                // between the header row and row 0, leaving
-                                // a visible gap in the otherwise-continuous
-                                // header underline (Zach repro 2026-06-06).
-                                th { style: "width: 24px; padding: 0; \
-                                            border-bottom: 1px solid #ddd; \
-                                            position: sticky; top: 0; \
-                                            background: #f8f9fa; z-index: 1;" }
+                                // Mirrors header_th's sticky toggling.
+                                // border-bottom matches both header_th and
+                                // select_all_th so the line under the header
+                                // is continuous across all columns.
+                                th {
+                                    style: if sticky_header {
+                                        "width: 24px; padding: 0; \
+                                         border-bottom: 1px solid #ddd; \
+                                         position: sticky; top: 0; \
+                                         background: #f8f9fa; z-index: 1;"
+                                    } else {
+                                        "width: 24px; padding: 0; \
+                                         border-bottom: 1px solid #ddd; \
+                                         background: #f8f9fa;"
+                                    }
+                                }
                             }
                             for col in &visible_cols {
-                                {header_th(col, widths.get(&col.id).copied(), handle, sort_enabled, current_sort, resize_enabled, drag_state, column_reorder_enabled, drag_col_id, drag_over_col, on_column_order_change, sticky_header_css.get(&col.id).map_or("", String::as_str))}
+                                {header_th(col, widths.get(&col.id).copied(), handle, sort_enabled, current_sort, resize_enabled, drag_state, column_reorder_enabled, drag_col_id, drag_over_col, on_column_order_change, sticky_header_css.get(&col.id).map_or("", String::as_str), sticky_header)}
                             }
                         }
                         if filter_enabled {
@@ -1599,6 +1605,7 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
     mut drag_over_col: Signal<Option<ColumnId>>,
     on_column_order_change: Option<EventHandler<Vec<ColumnId>>>,
     sticky_css: &str,
+    sticky_header: bool,
 ) -> Element {
     let w = col_width_style(override_width, col.initial_width);
     let align = alignment_css(col.alignment);
@@ -1606,6 +1613,11 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
     let col_id = col.id;
     let is_sortable = sort_enabled && col.sortable;
     let initial_width = col.initial_width;
+    let sticky_top_decl = if sticky_header {
+        "position: sticky; top: 0; z-index: 1;"
+    } else {
+        ""
+    };
 
     // Find this column's sort entry (if any) across the whole multi-sort list.
     let sort_entry = current_sort
@@ -1649,8 +1661,8 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
         th {
             style: "{extra}padding: 0.5rem 1rem; border-bottom: 1px solid #ddd; \
                     text-align: {align}; white-space: nowrap; overflow: hidden; \
-                    text-overflow: ellipsis; position: sticky; top: 0; \
-                    background: #f8f9fa; z-index: 1; {w} {sticky_css}",
+                    text-overflow: ellipsis; {sticky_top_decl} \
+                    background: #f8f9fa; {w} {sticky_css}",
             draggable: column_reorder_enabled,
             onclick: move |e| {
                 if is_sortable {
@@ -2297,11 +2309,18 @@ fn BooleanFilter<TRow: Clone + PartialEq + 'static>(
 fn select_all_th<TRow: Clone + PartialEq + 'static>(
     handle: UseTableHandle<TRow>,
     all_page_selected: bool,
+    sticky_header: bool,
 ) -> Element {
+    let style = if sticky_header {
+        "padding: 0.25rem 0.5rem; border-bottom: 1px solid #ddd; position: sticky; \
+         top: 0; background: #f8f9fa; z-index: 1; width: 2.5rem; text-align: center;"
+    } else {
+        "padding: 0.25rem 0.5rem; border-bottom: 1px solid #ddd; \
+         background: #f8f9fa; width: 2.5rem; text-align: center;"
+    };
     rsx! {
         th {
-            style: "padding: 0.25rem 0.5rem; border-bottom: 1px solid #ddd; position: sticky; \
-                    top: 0; background: #f8f9fa; z-index: 1; width: 2.5rem; text-align: center;",
+            style: "{style}",
             input {
                 r#type: "checkbox",
                 checked: all_page_selected,

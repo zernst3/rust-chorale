@@ -706,7 +706,7 @@ fn App() -> Element {
                             frozen_columns_on.set(!v);
                         },
                     }
-                    " Frozen Columns (Name=Left, Salary=Right)"
+                    " Frozen Columns and Rows (Name=Left, Salary=Right, header sticky)"
                 }
                 label {
                     input {
@@ -768,6 +768,11 @@ fn App() -> Element {
                 column_toolbar: *col_toolbar_on.read(),
                 csv_export: *csv_export_on.read(),
                 xlsx_export: *xlsx_export_on.read(),
+                // Frozen toggle drives BOTH the column freeze and the
+                // sticky-header. Library default is sticky=true; the
+                // harness explicitly opts out when frozen is off so the
+                // toggle exercises both behaviors visibly.
+                sticky_header: *frozen_columns_on.read(),
                 resize_enabled: *resize_on.read(),
                 variable_row_height: *variable_height_on.read(),
                 on_commit_edit: commit_handler,
