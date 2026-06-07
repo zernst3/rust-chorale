@@ -230,6 +230,14 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     #[props(default)] cell_renderers: CellRenderers,
     #[props(default = false)] column_toolbar: bool,
     #[props(default = false)] csv_export: bool,
+    /// Show an "Export Excel" button next to the CSV export in the pagination
+    /// footer. Exports the full post-filter / post-sort dataset as an .xlsx
+    /// workbook with the active filters baked in. **No-op unless the
+    /// `xlsx` Cargo feature is enabled on `chorale-dioxus` (which
+    /// transitively enables `chorale-core/xlsx`).** Without that feature
+    /// the prop compiles fine but the button does not render.
+    #[props(default = false)]
+    xlsx_export: bool,
     #[props(default = false)] resize_enabled: bool,
     #[props(default = false)] variable_row_height: bool,
     /// **Inline mode** (default `false`). When `true`, the `<Table>` does NOT
@@ -845,6 +853,56 @@ dioxus.send(parts.join('\n'));"
     let nav_btn_dis = "padding:0.25rem 0.6rem;border:1px solid #ddd;border-radius:3px;\
                        font-size:0.875rem;cursor:not-allowed;background:#f0f0f0;color:#aaa;";
 
+    // Build the XLSX export button as an Option<Element> outside the main
+    // rsx so a `#[cfg(feature = "xlsx")]` attribute can gate the whole
+    // expression (rsx! doesn't accept cfg attributes on inline children).
+    // None when the feature is off, the `xlsx_export` prop is missing,
+    // or the prop is false. Same blue-outline styling as the CSV button
+    // with a `margin-left` so the two sit side by side at the right edge
+    // of the pagination footer.
+    let xlsx_button_el: Option<Element> = {
+        #[cfg(feature = "xlsx")]
+        {
+            if xlsx_export {
+                let label = labels.export_xlsx_label.clone();
+                Some(rsx! {
+                    button {
+                        style: "margin-left: 0.5rem; padding:0.25rem 0.75rem;\
+                                border:1px solid #4a90e2; border-radius:3px;\
+                                font-size:0.875rem; cursor:pointer;\
+                                background:white; color:#4a90e2;",
+                        onclick: move |_| {
+                            use chorale_core::{to_xlsx, XlsxOptions};
+                            let sig = handle.signal();
+                            let Ok(bytes) = to_xlsx(&*sig.read(), &XlsxOptions::default()) else {
+                                return;
+                            };
+                            let b64 = to_base64(&bytes);
+                            let js = format!(
+                                r#"(()=>{{
+                                    var r=atob('{b64}'),n=r.length,u=new Uint8Array(n);
+                                    for(var i=0;i<n;i++)u[i]=r.charCodeAt(i);
+                                    var bl=new Blob([u],{{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}});
+                                    var url=URL.createObjectURL(bl),a=document.createElement('a');
+                                    a.href=url;a.download='chorale-export.xlsx';a.click();
+                                    setTimeout(()=>URL.revokeObjectURL(url),100);
+                                }})()"#
+                            );
+                            dioxus::document::eval(&js);
+                        },
+                        "{label}"
+                    }
+                })
+            } else {
+                None
+            }
+        }
+        #[cfg(not(feature = "xlsx"))]
+        {
+            None
+        }
+    };
+
     rsx! {
         div {
             id: "{kb_id}",
@@ -1191,7 +1249,15 @@ dioxus.send(parts.join('\n'));"
                                 // body's chevron TDs visibly scroll OVER the
                                 // header row through that gap (Zach repro
                                 // 2026-06-06).
+                                //
+                                // `border-bottom: 1px solid #ddd` matches both
+                                // header_th and select_all_th — without it,
+                                // the chevron column had no separator line
+                                // between the header row and row 0, leaving
+                                // a visible gap in the otherwise-continuous
+                                // header underline (Zach repro 2026-06-06).
                                 th { style: "width: 24px; padding: 0; \
+                                            border-bottom: 1px solid #ddd; \
                                             position: sticky; top: 0; \
                                             background: #f8f9fa; z-index: 1;" }
                             }
@@ -1374,8 +1440,14 @@ dioxus.send(parts.join('\n'));"
                         span { style: "margin-left: 0.5rem; color: #999;", "\u{00b7}" }
                         GotoPageInput::<TRow> { handle, total_pages, labels: labels.clone() }
                     }
-                    if csv_export {
+                    // `flex: 1` spacer pushes both export buttons to the
+                    // right of the pagination/goto controls. Emitted when
+                    // EITHER export is enabled so the buttons end up
+                    // grouped at the right edge of the same flexbox row.
+                    if csv_export || xlsx_button_el.is_some() {
                         span { style: "flex: 1;" }
+                    }
+                    if csv_export {
                         button {
                             style: "padding:0.25rem 0.75rem;border:1px solid #4a90e2;\
                                     border-radius:3px;font-size:0.875rem;cursor:pointer;\
@@ -1402,6 +1474,7 @@ dioxus.send(parts.join('\n'));"
                             "{labels.export_csv_label}"
                         }
                     }
+                    {xlsx_button_el}
                 }
             }
         }

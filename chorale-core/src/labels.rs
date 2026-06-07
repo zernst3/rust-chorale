@@ -63,6 +63,11 @@ pub struct Labels {
     /// Label for the CSV export button. Default: `"Export CSV"`.
     pub export_csv_label: String,
 
+    // XLSX export
+    /// Label for the XLSX (Excel) export button rendered by the Table when
+    /// `xlsx_export` is on. Default: `"Export Excel"`.
+    pub export_xlsx_label: String,
+
     // Sort (screen-reader text)
     /// Sort ascending aria-label. Default: `"Sort ascending"`.
     pub sort_ascending_label: String,
@@ -102,6 +107,7 @@ impl Default for Labels {
             column_visibility_label: "Columns".into(),
             show_all_columns_label: "Show all".into(),
             export_csv_label: "Export CSV".into(),
+            export_xlsx_label: "Export Excel".into(),
             sort_ascending_label: "Sort ascending".into(),
             sort_descending_label: "Sort descending".into(),
             sort_none_label: "Unsorted".into(),
@@ -126,6 +132,7 @@ impl std::fmt::Debug for Labels {
             .field("column_visibility_label", &self.column_visibility_label)
             .field("show_all_columns_label", &self.show_all_columns_label)
             .field("export_csv_label", &self.export_csv_label)
+            .field("export_xlsx_label", &self.export_xlsx_label)
             .field("sort_ascending_label", &self.sort_ascending_label)
             .field("sort_descending_label", &self.sort_descending_label)
             .field("sort_none_label", &self.sort_none_label)
@@ -149,6 +156,7 @@ impl PartialEq for Labels {
             && self.column_visibility_label == other.column_visibility_label
             && self.show_all_columns_label == other.show_all_columns_label
             && self.export_csv_label == other.export_csv_label
+            && self.export_xlsx_label == other.export_xlsx_label
             && self.sort_ascending_label == other.sort_ascending_label
             && self.sort_descending_label == other.sort_descending_label
             && self.sort_none_label == other.sort_none_label
@@ -172,6 +180,7 @@ mod tests {
         assert_eq!(l.go_to_page_label, "Go to");
         assert_eq!(l.page_size_all_label, "All");
         assert_eq!(l.export_csv_label, "Export CSV");
+        assert_eq!(l.export_xlsx_label, "Export Excel");
         assert_eq!(l.column_visibility_label, "Columns");
         assert_eq!(l.no_rows_label, "No rows match the current filter.");
         assert_eq!(l.select_all_label, "Select all");

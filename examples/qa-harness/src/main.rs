@@ -12,7 +12,7 @@ use chorale_core::{
     PaginationMode, RenderKind, RowId, TableState,
 };
 use chorale_derive::TableRow;
-use chorale_dioxus::{use_table, CellRenderer, CellRenderers, ExportXlsxButton, Table};
+use chorale_dioxus::{use_table, CellRenderer, CellRenderers, Table};
 use chrono::NaiveDate;
 use dioxus::prelude::*;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -759,18 +759,6 @@ fn App() -> Element {
                 }
             }
 
-            if *xlsx_export_on.read() {
-                div {
-                    style: "margin-bottom: 0.5rem;",
-                    ExportXlsxButton {
-                        handle: table,
-                        sheet_name: "Employees".to_string(),
-                        filename: "employees.xlsx".to_string(),
-                        "Export Excel"
-                    }
-                }
-            }
-
             Table {
                 handle: table,
                 sort_enabled: *sort_on.read(),
@@ -779,6 +767,7 @@ fn App() -> Element {
                 cell_renderers: cell_renderers.read().clone(),
                 column_toolbar: *col_toolbar_on.read(),
                 csv_export: *csv_export_on.read(),
+                xlsx_export: *xlsx_export_on.read(),
                 resize_enabled: *resize_on.read(),
                 variable_row_height: *variable_height_on.read(),
                 on_commit_edit: commit_handler,
