@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.0] — 2026-06-05
 
+### ⚠ Breaking changes
+
+**`toggle_sort` requires a `SortAction` parameter.** Multi-column sort (Item 11.0a) added a `SortAction` enum (`Replace` / `Append`) to distinguish "click a header" (replace the sort list) from "Shift-click a header" (append to it). Every call to `toggle_sort` must now pass an action.
+
+```rust
+// v0.1.0
+state.toggle_sort(ColumnId("name"));
+handle.toggle_sort(ColumnId("name"));
+
+// v0.2.0 — pass SortAction::Replace for prior single-column behavior
+use chorale_core::SortAction;
+state.toggle_sort(ColumnId("name"), SortAction::Replace);
+handle.toggle_sort(ColumnId("name"), SortAction::Replace);
+```
+
+Affects both the `chorale_core::toggle_sort` free function and the `UseTableHandle::toggle_sort` method in `chorale-dioxus` and `chorale-leptos`. No silent migration is possible — the compiler will flag every site.
+
 ### Added
 
 **`chorale-core`**

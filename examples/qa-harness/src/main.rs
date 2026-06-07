@@ -586,14 +586,6 @@ fn App() -> Element {
                 label {
                     input {
                         r#type: "checkbox",
-                        checked: *xlsx_export_on.read(),
-                        onchange: move |_| { let v = *xlsx_export_on.read(); xlsx_export_on.set(!v); },
-                    }
-                    " Excel Export"
-                }
-                label {
-                    input {
-                        r#type: "checkbox",
                         checked: *resize_on.read(),
                         onchange: move |_| { let v = *resize_on.read(); resize_on.set(!v); },
                     }
@@ -748,6 +740,14 @@ fn App() -> Element {
                         },
                     }
                     " Use #[derive(TableRow)] columns"
+                }
+                label {
+                    input {
+                        r#type: "checkbox",
+                        checked: *xlsx_export_on.read(),
+                        onchange: move |_| { let v = *xlsx_export_on.read(); xlsx_export_on.set(!v); },
+                    }
+                    " Excel Export"
                 }
             }
 

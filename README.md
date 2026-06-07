@@ -116,6 +116,52 @@ struct Employee {
 
 ## What you get in v0.2.0
 
+### ⚠ Breaking change from v0.1.0
+
+`toggle_sort` now takes a `SortAction` parameter (`Replace` to set sort,
+`Append` to add a secondary/tertiary column to the multi-sort). Every
+call site must pass it explicitly — the compiler will flag any miss.
+
+```rust
+// v0.1.0
+handle.toggle_sort(ColumnId("name"));
+
+// v0.2.0
+handle.toggle_sort(ColumnId("name"), SortAction::Replace);
+```
+
+See [CHANGELOG.md](CHANGELOG.md) for the full migration note.
+
+### Features by version
+
+Every v0.1.0 feature still works in v0.2.0 — these are additive. New
+items land via opt-in props or transitions; nothing was removed.
+
+| Feature | v0.1.0 | v0.2.0 |
+|---|:-:|:-:|
+| **Sort** — single column | ✅ | ✅ |
+| **Sort** — multi-column (Shift+click) with priority badges | — | ✅ |
+| **Filter** — text, multi-select, numeric range, date range, boolean | ✅ | ✅ |
+| **Pagination** — page size, prev/next, windowed buttons, go-to | ✅ | ✅ |
+| **Infinite scroll** mode | — | ✅ |
+| **Selection** — per-row + select-all | ✅ | ✅ |
+| **`selection_toolbar`** slot for bulk-action bars | — | ✅ |
+| **Column visibility toolbar** | ✅ | ✅ |
+| **Column resize** | ✅ | ✅ |
+| **Column reorder** (drag-and-drop) | — | ✅ |
+| **Frozen columns** (`FrozenSide::Left` / `Right`) | — | ✅ |
+| **Fixed-row-height virtualization** | ✅ | ✅ |
+| **Variable-row-height virtualization** | — | ✅ |
+| **Grouping** with collapse/expand + aggregators (sum, avg, min, max, count) | — | ✅ |
+| **Master/detail** sub-tables via `detail_renderer` | — | ✅ |
+| **In-cell editing** with `EditorKind`, validators, commit/cancel | — | ✅ |
+| **Custom cell renderers** + `RenderKind::Badge` | ✅ | ✅ |
+| **CSV export** (RFC 4180) | ✅ | ✅ |
+| **XLSX export** via `ExportXlsxButton` (feature = `"xlsx"`) | — | ✅ |
+| **User-overridable `Labels`** (i18n) | — | ✅ |
+| **`#[derive(TableRow)]`** macro (chorale-derive crate) | — | ✅ |
+| **Leptos adapter** (`chorale-leptos` crate) | — | ✅ |
+
 ### Core table features (both adapters)
 
 - **Sort.** Single-column or multi-column with `SortAction::Replace` (default)
