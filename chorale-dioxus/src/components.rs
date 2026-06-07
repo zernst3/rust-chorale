@@ -292,22 +292,6 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     let has_detail = detail_renderer.is_some();
     let variable_row_height = variable_row_height || has_detail;
 
-    // JR (Just-Render): fires once per Table render. Tells us whether the
-    // Table component is re-rendering on every scroll-down event. If JS0
-    // fires but JR doesn't, Dioxus is skipping the re-render. If JR fires
-    // but JP0 doesn't, the use_effect closure is being optimised out.
-    // Read scroll_top via .peek() to log without subscribing (the rest of
-    // the body subscribes via the .read() below — we just don't want this
-    // log to itself force renders).
-    {
-        let s = handle.signal();
-        let snap = s.peek();
-        dioxus::document::eval(&format!(
-            "console.log('[chorale-jp] JR Table re-rendered; scroll_top={:.1} viewport={:.1} row_heights_cached={} view_data_gen={}');",
-            snap.scroll_top, snap.viewport_height, snap.row_heights.len(), snap.data_generation,
-        ));
-    }
-
     // drag_state: Some((col_id, start_x_px, start_width_px)) while a resize is active.
     let mut drag_state: Signal<Option<(ColumnId, f64, f64)>> = use_signal(|| None);
     // drag_col_id: column being dragged for column-reorder (None when not reordering).
@@ -370,11 +354,8 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
             // state.rows but the view memo's PartialEq short-circuits
             // and the cached visible_view is returned forever, so the
             // cell continues rendering the pre-edit value until an
-            // unrelated transition happens to bump some other field.
-            // Reproduced by Zach 2026-06-06: edit "Diana Thomas123",
-            // click outside → state.rows correct (CP3/CP4 confirmed),
-            // cell still shows "Diana Thomas" until master/detail
-            // expansion changes expanded_rows.
+            // unrelated transition (sort/filter/page/expand) happens to
+            // bump some other field.
             s.data_generation,
         )
     });
@@ -568,29 +549,26 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     });
     {
         let scroll_id_meas = scroll_id.clone();
-        let vrh_at_setup = variable_row_height;
         use_effect(move || {
             // Subscribe to remeasurement triggers BEFORE any conditional /
-            // spawned work — this is what Dioxus actually tracks.
+            // spawned work — this is what Dioxus actually tracks. A
+            // `sig.read()` inside the spawned future below does NOT count
+            // (it runs after the effect completes), so without this read
+            // the effect's dep set would be empty and it would only ever
+            // fire once at initial mount.
             let _ = meas_trigger.read();
-            // JP0: confirm the effect actually fired this tick AND log what
-            // variable_row_height was captured at hook-construction time.
-            dioxus::document::eval(&format!(
-                "console.log('[chorale-jp] JP0 measurement effect fired; vrh_at_setup={}');",
-                vrh_at_setup,
-            ));
             let cid = scroll_id_meas.clone();
             let mut sig2 = handle.signal();
             spawn(async move {
-                // SELECTOR (2026-06-06): use a direct-child chain
-                // (`#{cid} > table > tbody > tr[data-chorale-index]`) rather
-                // than a descendant selector (`#{cid} [data-chorale-index]`).
-                // When a consumer renders a NESTED Table inside a detail
-                // panel, the descendant form matched the child Table's
-                // rows too, producing duplicate `data-chorale-index` keys
-                // (child indexes 0,1,2... collide with parent indexes 0,1,2...)
-                // that corrupted the parent's row_heights HashMap. The
-                // direct-child chain stops at the parent's own tbody.
+                // Direct-child chain rather than a descendant selector:
+                // `#{cid} > table > tbody > tr[data-chorale-index]`. When a
+                // consumer renders a nested Table inside a detail panel, the
+                // descendant form (`#{cid} [data-chorale-index]`) also
+                // matched the child Table's rows, producing duplicate
+                // `data-chorale-index` keys (child 0,1,2... collide with
+                // parent 0,1,2...) that corrupted the parent's row_heights
+                // HashMap. The direct-child chain stops at the parent's
+                // own tbody.
                 let mut js = dioxus::document::eval(&format!(
                     r"const rs=document.querySelectorAll('#{cid} > table > tbody > tr[data-chorale-index]');
 const parts=[];
@@ -598,22 +576,6 @@ rs.forEach(r=>{{parts.push(r.getAttribute('data-chorale-index')+':'+r.getBoundin
 dioxus.send(parts.join('\n'));"
                 ));
                 if let Ok(data) = js.recv::<String>().await {
-                    // JP-RECV: raw response from the DOM-query eval. Tells
-                    // us how many lines came back and what the first
-                    // entry's index:height looked like. If this never
-                    // fires on scroll-down, the spawned future is being
-                    // dropped before the await completes (which means
-                    // use_effect is being torn down between scroll ticks).
-                    let raw_preview = data
-                        .lines()
-                        .take(3)
-                        .collect::<Vec<_>>()
-                        .join(" | ");
-                    let line_count = data.lines().count();
-                    dioxus::document::eval(&format!(
-                        "console.log('[chorale-jp] JP-RECV eval returned {} line(s); first 3: {:?}');",
-                        line_count, raw_preview,
-                    ));
                     let measurements: std::collections::HashMap<usize, f64> = data
                         .lines()
                         .filter_map(|line| {
@@ -624,105 +586,47 @@ dioxus.send(parts.join('\n'));"
                         })
                         .collect();
                     if measurements.is_empty() {
-                        dioxus::document::eval(
-                            "console.log('[chorale-jp] JP-RECV measurements parsed empty; returning early');"
-                        );
                         return;
                     }
                     let cur = sig2.read();
-                    // JP1: Did any row height change vs the cached values?
-                    // Show every measured index along with old/new (we only
-                    // log measurements where new differs from old by > 0.5px
-                    // — the same threshold used to gate the dispatch).
-                    let mut jp1_rows: Vec<String> = Vec::new();
                     let mut any_changed = false;
                     for (k, v) in &measurements {
                         let old = cur.row_heights.get(k).copied().unwrap_or(cur.row_height);
-                        let delta = v - old;
-                        if delta.abs() > 0.5 {
+                        if (v - old).abs() > 0.5 {
                             any_changed = true;
-                            jp1_rows.push(format!("idx={} old={:.1} new={:.1} delta={:+.1}", k, old, v, delta));
+                            break;
                         }
                     }
                     if any_changed {
-                        dioxus::document::eval(&format!(
-                            "console.log('[chorale-jp] JP1 measurement changes: scroll_top={:.1} viewport_height={:.1} row_height={:.1} total_view={}; rows changed:\\n{}');",
-                            cur.scroll_top,
-                            cur.viewport_height,
-                            cur.row_height,
-                            view.peek().len(),
-                            jp1_rows.join("\\n"),
-                        ));
-                    }
-                    if any_changed {
-                        // SCROLL ANCHORING (2026-06-06): when a row's measured
-                        // height changes (typical for a freshly-rendered detail
-                        // panel going from estimate → real), the total height
-                        // of all rows ABOVE the current scroll position can
-                        // change too. If we just apply the new measurements
-                        // without adjusting scroll_top, the visible content
-                        // shifts by the delta — the user sees that as a jump.
-                        //
-                        // We sum the per-row height delta for every row whose
-                        // top edge sits above cur.scroll_top, then bump
-                        // scroll_top by that sum AND issue a JS eval to set
-                        // the DOM scrollTop to match. This keeps the visible
-                        // content visually anchored when the prefix-sum
-                        // changes underneath it.
+                        // Scroll anchoring: when a row's measured height
+                        // changes (typically a freshly-rendered detail panel
+                        // going from estimate → real), the total height of
+                        // all rows ABOVE the current scroll position can
+                        // change too. Applying the new measurements without
+                        // adjusting scroll_top shifts visible content by the
+                        // delta — the user sees that as a jump. Sum the
+                        // per-row height delta for every row whose top edge
+                        // sits above cur.scroll_top, bump scroll_top by that
+                        // sum, and write it back to the DOM so the visible
+                        // content stays visually anchored.
                         let cur_scroll = cur.scroll_top;
                         let default_h = cur.row_height;
                         let mut row_top_with_old = 0.0_f64;
                         let mut scroll_delta = 0.0_f64;
-                        // view_read.len() is the count we use for window math.
                         let total = view.peek().len();
-                        // JP2: which rows are we counting toward the anchor
-                        // delta — those whose top edge sits above the
-                        // current viewport top.
-                        let mut jp2_counted: Vec<String> = Vec::new();
-                        let mut jp2_skipped_at: Option<(usize, f64)> = None;
                         for idx in 0..total {
                             let old_h = cur.row_heights.get(&idx).copied().unwrap_or(default_h);
-                            // Stop once we're at or past the current viewport top.
                             if row_top_with_old >= cur_scroll {
-                                jp2_skipped_at = Some((idx, row_top_with_old));
                                 break;
                             }
                             if let Some(new_h) = measurements.get(&idx).copied() {
                                 let bounded_old = old_h.max(0.0);
                                 let bounded_new = new_h.max(0.0);
-                                let d = bounded_new - bounded_old;
-                                if d.abs() > 0.5 {
-                                    jp2_counted.push(format!("idx={} row_top={:.1} delta={:+.1}", idx, row_top_with_old, d));
-                                }
-                                scroll_delta += d;
+                                scroll_delta += bounded_new - bounded_old;
                             }
                             row_top_with_old += old_h.max(0.0);
                         }
                         let new_scroll = (cur_scroll + scroll_delta).max(0.0);
-                        // Emit valid JS literals — Option<T> debug format
-                        // produces Some(...)/None which JavaScript rejects.
-                        let stopped_idx_js = match jp2_skipped_at {
-                            Some((i, _)) => format!("{}", i),
-                            None => String::from("null"),
-                        };
-                        let stopped_top_js = match jp2_skipped_at {
-                            Some((_, t)) => format!("{:.1}", t),
-                            None => String::from("null"),
-                        };
-                        let counted_str = if jp2_counted.is_empty() {
-                            String::from("  (none)")
-                        } else {
-                            jp2_counted.join("\\n")
-                        };
-                        dioxus::document::eval(&format!(
-                            "console.log('[chorale-jp] JP2 anchor pass: cur_scroll={:.1} loop_stopped_at_idx={} (row_top={}); rows whose delta was counted:\\n{}; scroll_delta={:+.1}; new_scroll={:.1}');",
-                            cur_scroll,
-                            stopped_idx_js,
-                            stopped_top_js,
-                            counted_str,
-                            scroll_delta,
-                            new_scroll,
-                        ));
 
                         let mut new_state = batch_record_row_heights(&cur, &measurements);
                         new_state.scroll_top = new_scroll;
@@ -732,19 +636,10 @@ dioxus.send(parts.join('\n'));"
                         if scroll_delta.abs() > 0.5 {
                             let cid_scroll = cid.clone();
                             spawn(async move {
-                                // JP3: We actually issued the JS to update DOM scrollTop.
                                 let _ = dioxus::document::eval(&format!(
-                                    "(()=>{{const el=document.getElementById('{cid_scroll}'); \
-                                       const before=el?el.scrollTop:null; \
-                                       if(el){{el.scrollTop={new_scroll};}} \
-                                       const after=el?el.scrollTop:null; \
-                                       console.log('[chorale-jp] JP3 DOM scroll write attempt: before='+before+' target={new_scroll} after='+after);}})();"
+                                    "const el=document.getElementById('{cid_scroll}');if(el){{el.scrollTop={new_scroll};}}"
                                 )).recv::<i32>().await;
                             });
-                        } else {
-                            dioxus::document::eval(
-                                "console.log('[chorale-jp] JP3 DOM scroll skipped: |scroll_delta| <= 0.5');"
-                            );
                         }
                     }
                 }
@@ -1258,17 +1153,6 @@ dioxus.send(parts.join('\n'));"
                 },
                 onscroll: move |e| {
                     let st = e.scroll_top();
-                    // JS0: log every onscroll fire with the previous and new
-                    // scroll positions. Tells us if the browser is emitting
-                    // scroll events for both directions and whether chorale's
-                    // state is registering them.
-                    let prev = handle.signal().peek().scroll_top;
-                    let delta = st - prev;
-                    let dir = if delta > 0.5 { "DOWN" } else if delta < -0.5 { "UP" } else { "FLAT" };
-                    dioxus::document::eval(&format!(
-                        "console.log('[chorale-jp] JS0 onscroll fired: prev={:.1} new={:.1} delta={:+.1} dir={}');",
-                        prev, st, delta, dir,
-                    ));
                     handle.set_scroll(st);
                     // Infinite scroll: trigger load_more_rows when within threshold of the bottom.
                     let sig_for_scroll = handle.signal();
@@ -2637,25 +2521,13 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
                         padding: 1px 4px; border: 1px solid #4a90e2; border-radius: 2px;",
                 oninput: move |e| editing_text.set(e.value()),
                 onblur: move |_| {
-                    // INSTRUMENTED for the edit-commit bug. Logs five
-                    // checkpoints to the browser console so we can localize
-                    // where the typed value gets lost.
                     let raw = editing_text.peek().clone();
-                    dioxus::document::eval(&format!(
-                        "console.log('[chorale-edit] CP1 onblur fired; raw=', {:?});",
-                        raw,
-                    ));
                     let result = validate_blur.call(EditValidation {
                         row_id,
                         column_id: col_id,
                         raw_value: raw.clone(),
                     });
-                    let val_ok = result.is_ok();
-                    dioxus::document::eval(&format!(
-                        "console.log('[chorale-edit] CP2 validate result.ok=', {});",
-                        val_ok,
-                    ));
-                    if val_ok {
+                    if result.is_ok() {
                         edit_error.set(None);
                         if let Some(handler) = &on_commit_edit {
                             handler.call(CommittedEdit::new(
@@ -2665,49 +2537,20 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
                                 prior_row_blur.clone(),
                             ));
                         }
-                        // CP3: after handler.call() — what does chorale see
-                        // in state.rows for this row? If this prints the new
-                        // value, the harness write-back landed; the bug is
-                        // downstream (my .write() or render). If it prints
-                        // the old value, the harness didn't write back —
-                        // it's a harness bug, not a chorale bug.
-                        {
-                            let s = handle.signal();
-                            let snap = s.peek();
-                            let post_handler = snap
-                                .rows
-                                .iter()
-                                .find(|(id, _)| *id == row_id)
-                                .and_then(|(_, r)| {
-                                    snap.columns
-                                        .iter()
-                                        .find(|c| c.id == col_id)
-                                        .map(|c| (c.accessor)(r).to_csv_string())
-                                });
-                            // Emit a valid JS literal — {:?} on
-                            // Option<String> produces Some("foo") which
-                            // JavaScript rejects as ReferenceError.
-                            let post_js = match &post_handler {
-                                Some(v) => format!("{:?}", v),
-                                None => String::from("null"),
-                            };
-                            dioxus::document::eval(&format!(
-                                "console.log('[chorale-edit] CP3 post-handler state.rows accessor=', {});",
-                                post_js,
-                            ));
-                        }
                         // Clone-mutate-set, NOT sig.write(). The view memo's
                         // view_key intentionally does not track row content
-                        // (perf optimisation in line 336-339: at 1M rows it
-                        // avoids re-hashing the full dataset per scroll tick).
-                        // sig.write() only invalidates fine-grained subscribers
-                        // of the fields it touched (editing, active_cell,
-                        // range_selection) and DOES NOT invalidate the view
-                        // memo — so even though state.rows had the new row
-                        // (CP3/CP4 confirmed it), the cell read the stale
-                        // memoised view and rendered the OLD value. sig.set()
-                        // on a fresh clone triggers a broader memo invalidation
-                        // that the view memo picks up.
+                        // (perf optimisation: at 1M rows it avoids re-hashing
+                        // the full dataset per scroll tick). sig.write() only
+                        // invalidates fine-grained subscribers of the fields
+                        // it touched (editing, active_cell, range_selection)
+                        // and DOES NOT invalidate the view memo — so even
+                        // though state.rows holds the new row, the cell would
+                        // keep rendering the stale memoised view. sig.set()
+                        // on a fresh clone triggers the broader invalidation
+                        // the view memo picks up. The data_generation bump
+                        // inside update_row carries the cell-edit signal
+                        // through view_key for callers that already update
+                        // via the transition.
                         let mut sig = handle.signal();
                         let new_state = {
                             let snap = sig.peek();
@@ -2718,33 +2561,6 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
                             copy
                         };
                         sig.set(new_state);
-                        // CP4: after my sig.write() — same accessor again.
-                        // If this is now stale relative to CP3, my .write()
-                        // clobbered the row update (Dioxus 0.7 write-clone
-                        // race) and I need a different write strategy.
-                        {
-                            let s = handle.signal();
-                            let snap = s.peek();
-                            let post_my_write = snap
-                                .rows
-                                .iter()
-                                .find(|(id, _)| *id == row_id)
-                                .and_then(|(_, r)| {
-                                    snap.columns
-                                        .iter()
-                                        .find(|c| c.id == col_id)
-                                        .map(|c| (c.accessor)(r).to_csv_string())
-                                });
-                            let post_js = match &post_my_write {
-                                Some(v) => format!("{:?}", v),
-                                None => String::from("null"),
-                            };
-                            let editing_js = if snap.editing.is_some() { "true" } else { "false" };
-                            dioxus::document::eval(&format!(
-                                "console.log('[chorale-edit] CP4 post-my-write state.rows accessor=', {}, '; editing=', {});",
-                                post_js, editing_js,
-                            ));
-                        }
                     }
                     // On validation error, leave editing open so user can fix.
                 },
