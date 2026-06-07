@@ -316,11 +316,17 @@ fn App() -> impl IntoView {
             <h1>"chorale QA Harness (Leptos)"</h1>
             <p>"Dataset: "{row_count}" rows"</p>
 
-            // ── v0.1 feature toggles ─────────────────────────────────────────
+            // ── Feature toggles ──────────────────────────────────────────────
+            //
+            // chorale-leptos is new in v0.2.0; every feature exposed here
+            // ships with that release. The two visual groups below mirror
+            // the original v0.1-vs-v0.2.0 split from the Dioxus harness
+            // (where the Dioxus adapter spanned both versions), kept for
+            // organizational parity but both labelled v0.2.0 here.
             <p style="margin: 0.25rem 0; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: #6b7280;">
-                "v0.1 features"
+                "v0.2.0 features"
             </p>
-            <div style="display:flex; gap:1rem; flex-wrap:wrap; margin-bottom:0.5rem; padding:0.75rem; background:#f5f5f5; border-radius:4px;">
+            <div style="display:flex; gap:1rem; flex-wrap:wrap; margin-bottom:0.5rem; padding:0.75rem; background:#eff6ff; border-radius:4px; border: 1px solid #bfdbfe;">
                 <label>
                     <input
                         type="checkbox"
@@ -389,10 +395,6 @@ fn App() -> impl IntoView {
                 </label>
             </div>
 
-            // ── v0.2.0 feature toggles ───────────────────────────────────────
-            <p style="margin: 0.25rem 0; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: #6b7280;">
-                "v0.2.0 features"
-            </p>
             <div style="display:flex; gap:1rem; flex-wrap:wrap; margin-bottom:1rem; padding:0.75rem; background:#eff6ff; border-radius:4px; border: 1px solid #bfdbfe;">
                 <label>
                     <input
