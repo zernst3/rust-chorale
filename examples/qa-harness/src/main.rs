@@ -12,7 +12,7 @@ use chorale_core::{
     PaginationMode, RenderKind, RowId, TableState,
 };
 use chorale_derive::TableRow;
-use chorale_dioxus::{use_table, CellRenderer, CellRenderers, Table};
+use chorale_dioxus::{use_table, CellRenderer, CellRenderers, ExportXlsxButton, Table};
 use chrono::NaiveDate;
 use dioxus::prelude::*;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -373,6 +373,7 @@ fn App() -> Element {
     let mut selection_on = use_signal(|| false);
     let mut col_toolbar_on = use_signal(|| false);
     let mut csv_export_on = use_signal(|| false);
+    let mut xlsx_export_on = use_signal(|| false);
     let mut resize_on = use_signal(|| false);
 
     // ── v0.2.0 toggles ──────────────────────────────────────────────────────
@@ -597,6 +598,14 @@ fn App() -> Element {
                 label {
                     input {
                         r#type: "checkbox",
+                        checked: *xlsx_export_on.read(),
+                        onchange: move |_| { let v = *xlsx_export_on.read(); xlsx_export_on.set(!v); },
+                    }
+                    " Excel Export"
+                }
+                label {
+                    input {
+                        r#type: "checkbox",
                         checked: *resize_on.read(),
                         onchange: move |_| { let v = *resize_on.read(); resize_on.set(!v); },
                     }
@@ -759,6 +768,18 @@ fn App() -> Element {
                     style: "margin-bottom: 0.25rem; font-size: 0.875rem; color: #374151; \
                             font-weight: 500;",
                     "Selection: {table.signal().read().selection.len()} row(s)"
+                }
+            }
+
+            if *xlsx_export_on.read() {
+                div {
+                    style: "margin-bottom: 0.5rem;",
+                    ExportXlsxButton {
+                        handle: table,
+                        sheet_name: "Employees".to_string(),
+                        filename: "employees.xlsx".to_string(),
+                        "Export Excel"
+                    }
                 }
             }
 

@@ -70,6 +70,12 @@ mod hooks;
 /// visual effect.
 pub use components::Table;
 
+/// Button component that exports the current filtered+sorted view as an XLSX
+/// file. Requires the `xlsx` feature on both `chorale-dioxus` and
+/// `chorale-core`. See [`components::ExportXlsxButton`] for prop details.
+#[cfg(feature = "xlsx")]
+pub use components::ExportXlsxButton;
+
 /// Type-erased cell renderer: maps a [`CellValue`] to a Dioxus [`Element`].
 ///
 /// `Arc<dyn Fn(&CellValue) -> Element + Send + Sync + 'static>`
