@@ -292,6 +292,22 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     let has_detail = detail_renderer.is_some();
     let variable_row_height = variable_row_height || has_detail;
 
+    // JR (Just-Render): fires once per Table render. Tells us whether the
+    // Table component is re-rendering on every scroll-down event. If JS0
+    // fires but JR doesn't, Dioxus is skipping the re-render. If JR fires
+    // but JP0 doesn't, the use_effect closure is being optimised out.
+    // Read scroll_top via .peek() to log without subscribing (the rest of
+    // the body subscribes via the .read() below — we just don't want this
+    // log to itself force renders).
+    {
+        let s = handle.signal();
+        let snap = s.peek();
+        dioxus::document::eval(&format!(
+            "console.log('[chorale-jp] JR Table re-rendered; scroll_top={:.1} viewport={:.1} row_heights_cached={} view_data_gen={}');",
+            snap.scroll_top, snap.viewport_height, snap.row_heights.len(), snap.data_generation,
+        ));
+    }
+
     // drag_state: Some((col_id, start_x_px, start_width_px)) while a resize is active.
     let mut drag_state: Signal<Option<(ColumnId, f64, f64)>> = use_signal(|| None);
     // drag_col_id: column being dragged for column-reorder (None when not reordering).
@@ -544,6 +560,22 @@ rs.forEach(r=>{{parts.push(r.getAttribute('data-chorale-index')+':'+r.getBoundin
 dioxus.send(parts.join('\n'));"
                 ));
                 if let Ok(data) = js.recv::<String>().await {
+                    // JP-RECV: raw response from the DOM-query eval. Tells
+                    // us how many lines came back and what the first
+                    // entry's index:height looked like. If this never
+                    // fires on scroll-down, the spawned future is being
+                    // dropped before the await completes (which means
+                    // use_effect is being torn down between scroll ticks).
+                    let raw_preview = data
+                        .lines()
+                        .take(3)
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    let line_count = data.lines().count();
+                    dioxus::document::eval(&format!(
+                        "console.log('[chorale-jp] JP-RECV eval returned {} line(s); first 3: {:?}');",
+                        line_count, raw_preview,
+                    ));
                     let measurements: std::collections::HashMap<usize, f64> = data
                         .lines()
                         .filter_map(|line| {
@@ -554,6 +586,9 @@ dioxus.send(parts.join('\n'));"
                         })
                         .collect();
                     if measurements.is_empty() {
+                        dioxus::document::eval(
+                            "console.log('[chorale-jp] JP-RECV measurements parsed empty; returning early');"
+                        );
                         return;
                     }
                     let cur = sig2.read();
@@ -1185,6 +1220,17 @@ dioxus.send(parts.join('\n'));"
                 },
                 onscroll: move |e| {
                     let st = e.scroll_top();
+                    // JS0: log every onscroll fire with the previous and new
+                    // scroll positions. Tells us if the browser is emitting
+                    // scroll events for both directions and whether chorale's
+                    // state is registering them.
+                    let prev = handle.signal().peek().scroll_top;
+                    let delta = st - prev;
+                    let dir = if delta > 0.5 { "DOWN" } else if delta < -0.5 { "UP" } else { "FLAT" };
+                    dioxus::document::eval(&format!(
+                        "console.log('[chorale-jp] JS0 onscroll fired: prev={:.1} new={:.1} delta={:+.1} dir={}');",
+                        prev, st, delta, dir,
+                    ));
                     handle.set_scroll(st);
                     // Infinite scroll: trigger load_more_rows when within threshold of the bottom.
                     let sig_for_scroll = handle.signal();
