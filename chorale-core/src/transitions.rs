@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use crate::error::StateError;
+use crate::range::RangeSelection;
 use crate::state::TableState;
 use crate::types::{
     ActiveCell, ColumnId, EditTarget, FilterValue, GroupKey, NavDirection, PaginationMode,
@@ -939,6 +940,13 @@ pub fn set_active_cell<TRow: Clone>(
 /// If `active_cell` is `None`, moves to the first cell (top-left) for Down/Right
 /// and the last cell (bottom-right) for Up/Left. Returns the state unchanged when
 /// there are no visible rows or columns.
+///
+/// Also collapses `range_selection` to a single-cell range at the new active
+/// cell, matching Excel / Google Sheets keyboard semantics: arrow-only
+/// navigation clears any prior range. SHIFT+arrow extending the selection
+/// then anchors from the cell the keyboard cursor is currently on. The same
+/// collapse applies to every `move_active_cell_*` variant in this module
+/// (Ctrl+arrow, Home/End, PageUp/Down, Ctrl+Home/End).
 #[must_use]
 pub fn move_active_cell<TRow: Clone>(
     state: &TableState<TRow>,
@@ -960,8 +968,10 @@ pub fn move_active_cell<TRow: Clone>(
             NavDirection::Up | NavDirection::Left => (last_row, last_col_idx),
             _ => (0, 0),
         };
+        let target = cols[ci];
         return TableState {
-            active_cell: Some(ActiveCell::new(r, cols[ci])),
+            active_cell: Some(ActiveCell::new(r, target)),
+            range_selection: vec![RangeSelection::single(r, target)],
             ..state.clone()
         };
     }
@@ -979,8 +989,10 @@ pub fn move_active_cell<TRow: Clone>(
         NavDirection::Right => (row, (col_idx + 1).min(last_col_idx)),
     };
 
+    let new_col = cols[new_col_idx];
     TableState {
-        active_cell: Some(ActiveCell::new(new_row, cols[new_col_idx])),
+        active_cell: Some(ActiveCell::new(new_row, new_col)),
+        range_selection: vec![RangeSelection::single(new_row, new_col)],
         ..state.clone()
     }
 }
@@ -1017,8 +1029,10 @@ pub fn move_active_cell_to_edge<TRow: Clone>(
         NavDirection::Right => (row, last_col_idx),
     };
 
+    let new_col = cols[new_col_idx];
     TableState {
-        active_cell: Some(ActiveCell::new(new_row, cols[new_col_idx])),
+        active_cell: Some(ActiveCell::new(new_row, new_col)),
+        range_selection: vec![RangeSelection::single(new_row, new_col)],
         ..state.clone()
     }
 }
@@ -1056,8 +1070,10 @@ pub fn move_active_cell_page<TRow: Clone>(
         _ => return state.clone(),
     };
 
+    let new_col = cols[col_idx];
     TableState {
-        active_cell: Some(ActiveCell::new(new_row, cols[col_idx])),
+        active_cell: Some(ActiveCell::new(new_row, new_col)),
+        range_selection: vec![RangeSelection::single(new_row, new_col)],
         ..state.clone()
     }
 }
@@ -1079,6 +1095,7 @@ pub fn move_active_cell_home<TRow: Clone>(state: &TableState<TRow>) -> TableStat
     };
     TableState {
         active_cell: Some(ActiveCell::new(row, cols[0])),
+        range_selection: vec![RangeSelection::single(row, cols[0])],
         ..state.clone()
     }
 }
@@ -1101,6 +1118,7 @@ pub fn move_active_cell_end<TRow: Clone>(state: &TableState<TRow>) -> TableState
     let last_col = *cols.last().unwrap_or(&cols[0]);
     TableState {
         active_cell: Some(ActiveCell::new(row, last_col)),
+        range_selection: vec![RangeSelection::single(row, last_col)],
         ..state.clone()
     }
 }
@@ -1115,6 +1133,7 @@ pub fn move_active_cell_first<TRow: Clone>(state: &TableState<TRow>) -> TableSta
     }
     TableState {
         active_cell: Some(ActiveCell::new(0, cols[0])),
+        range_selection: vec![RangeSelection::single(0, cols[0])],
         ..state.clone()
     }
 }
@@ -1130,6 +1149,7 @@ pub fn move_active_cell_last<TRow: Clone>(state: &TableState<TRow>) -> TableStat
     let last_col = *cols.last().unwrap_or(&cols[0]);
     TableState {
         active_cell: Some(ActiveCell::new(row_count - 1, last_col)),
+        range_selection: vec![RangeSelection::single(row_count - 1, last_col)],
         ..state.clone()
     }
 }
@@ -1144,10 +1164,8 @@ pub fn clear_active_cell<TRow: Clone>(state: &TableState<TRow>) -> TableState<TR
 }
 
 // ---------------------------------------------------------------------------
-// Item 16: Range selection transitions (CC-1, API-1)
+// Range selection transitions
 // ---------------------------------------------------------------------------
-
-use crate::range::RangeSelection;
 
 /// Begin a new range selection anchored at the given cell.
 ///
