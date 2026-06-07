@@ -217,7 +217,7 @@ pub fn ExportXlsxButton<TRow: Clone + 'static>(
 /// | `variable_row_height` | `bool` | `false` | Enable variable-row-height virtualization (VIRT-2). When `true`, the component measures each rendered row's height after mount via a DOM eval and caches the result in `state.row_heights`. The `row_height` prop (or `state.row_height`) is used as the fallback for unmeasured rows. Requires a web target. |
 /// | `validate_edit` | `ValidateEditFn` | no-op | Optional synchronous validator called before a cell edit is committed. Return `Ok(())` to allow, `Err(msg)` to show an inline error. |
 /// | `on_commit_edit` | `Option<EventHandler<CommittedEdit<TRow>>>` | `None` | Fired after a successful commit. Receives the new raw value and a `PriorEdit` snapshot for rollback. |
-/// | `selection_toolbar` | `Option<Element>` | `None` | Optional slot rendered above the table when `state.selection` is non-empty. Use for bulk-action bars. Wrapped in `div.chorale-selection-toolbar`. |
+/// | `selection_toolbar` | `Option<Element>` | `None` | Optional slot rendered above the table whenever the slot is `Some`, regardless of selection size. Use for bulk-action bars; include affordances like "Select all" that are useful in the empty-selection state. Wrapped in `div.chorale-selection-toolbar`. |
 /// | `labels` | `Option<Labels>` | `None` | All user-visible strings (filter placeholder, pagination labels, CSV button, etc.). `None` uses English defaults. Override for i18n. |
 /// | `column_reorder_enabled` | `bool` | `false` | Show drag handles on column headers. Drop fires `move_column` and triggers `on_column_order_change`. |
 /// | `on_column_order_change` | `Option<EventHandler<Vec<ColumnId>>>` | `None` | Called with the new `column_order` vec after a successful column drag-and-drop. |
@@ -1108,13 +1108,19 @@ dioxus.send(parts.join('\n'));"
                 {column_visibility_toolbar(&all_col_defs, &col_visibility, handle, &labels)}
             }
 
-            if !state.selection.is_empty() {
-                if let Some(toolbar) = selection_toolbar {
-                    div {
-                        class: "chorale-selection-toolbar",
-                        style: "width: 100%; box-sizing: border-box; border-bottom: 2px solid #1d4ed8;",
-                        {toolbar}
-                    }
+            // Toolbar renders whenever the slot is filled. Empty-selection
+            // gating was a footgun: the toolbar typically includes the
+            // "Select all" / "Select page" actions that the user needs to
+            // REACH the non-empty state. Hiding it on empty selection
+            // hid those affordances exactly when they were most useful.
+            // Consumers wanting empty-vs-non-empty styling can branch
+            // inside their toolbar Element by reading state.selection
+            // through the handle.
+            if let Some(toolbar) = selection_toolbar {
+                div {
+                    class: "chorale-selection-toolbar",
+                    style: "width: 100%; box-sizing: border-box; border-bottom: 2px solid #1d4ed8;",
+                    {toolbar}
                 }
             }
 

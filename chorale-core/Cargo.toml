@@ -16,7 +16,13 @@ workspace = true
 
 [features]
 default = []
-xlsx = ["dep:rust_xlsxwriter"]
+# `rust_xlsxwriter`'s `wasm` feature swaps `std::time::SystemTime::now()`
+# for `js_sys::Date::now()` so workbook timestamp metadata can be set
+# under wasm32-unknown-unknown. Without it the writer panics with
+# "time not implemented on this platform" the moment a consumer
+# clicks Export Excel in a browser build (Zach reproduced
+# 2026-06-06 in the qa-harness).
+xlsx = ["dep:rust_xlsxwriter", "rust_xlsxwriter/wasm"]
 
 [dependencies]
 uuid = { version = "1", features = ["v4", "js"] }
