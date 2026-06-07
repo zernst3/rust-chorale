@@ -529,32 +529,70 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     // measures their heights via getBoundingClientRect, and dispatches a batch
     // state update if any measurement differs from the cached value by > 0.5px.
     // The threshold prevents convergence loops caused by sub-pixel float rounding.
+    //
+    // SUBSCRIPTION (2026-06-06): the prior version had no reactive subscription
+    // in its outer closure — `sig.read()` was only called inside the spawned
+    // future, which is async and runs AFTER the effect, so Dioxus saw the
+    // effect as having zero dependencies and only ran it ONCE on initial
+    // mount. Result: parent table's row_heights stayed empty forever, scroll
+    // math used the uniform 40px fallback, and the master/detail layout
+    // visibly jumped when the user scrolled past an expanded panel.
+    //
+    // The fix mirrors the pattern at the page_memo / column_order_memo /
+    // edit_target_memo use_effects above: derive a memo over the fields that
+    // should trigger remeasurement, read it at the top of use_effect to
+    // register the subscription, then run the measurement body.
+    //
+    // Trigger fields: a coarse scroll bucket (row-aligned, so we re-measure
+    // when the visible window slides by a row but not on sub-row jitter),
+    // viewport_height, the expanded_rows set (master/detail toggles), the
+    // data_generation counter (cell edits that could affect row height), the
+    // row count (insertions/deletions), and the current page.
+    let meas_trigger = use_memo(move || {
+        let s = sig.read();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+        let row_h = if s.row_height > 0.0 { s.row_height } else { 1.0 };
+        #[allow(clippy::cast_possible_truncation)]
+        let scroll_bucket = (s.scroll_top / row_h).floor() as i64;
+        #[allow(clippy::cast_possible_truncation)]
+        let viewport_bucket = s.viewport_height.round() as i64;
+        (
+            scroll_bucket,
+            viewport_bucket,
+            s.expanded_rows.clone(),
+            s.data_generation,
+            s.rows.len(),
+            s.page,
+            s.page_size,
+        )
+    });
     {
         let scroll_id_meas = scroll_id.clone();
         let vrh_at_setup = variable_row_height;
         use_effect(move || {
+            // Subscribe to remeasurement triggers BEFORE any conditional /
+            // spawned work — this is what Dioxus actually tracks.
+            let _ = meas_trigger.read();
             // JP0: confirm the effect actually fired this tick AND log what
             // variable_row_height was captured at hook-construction time.
-            // If you toggled Master/Detail after mount and JP0 shows
-            // vrh_at_setup=false, the closure was constructed with the
-            // initial-render value and never picked up the toggle —
-            // measurements never run.
             dioxus::document::eval(&format!(
                 "console.log('[chorale-jp] JP0 measurement effect fired; vrh_at_setup={}');",
                 vrh_at_setup,
             ));
-            // Don't gate on vrh_at_setup any more — the cost of an
-            // always-on measurement pass is one DOM query + a hash diff,
-            // and the alternative (stale closure capture) is worse than
-            // the perf cost. State.row_heights is only consulted by
-            // visible_window_variable, which is only used when
-            // variable_row_height is true downstream of where it's read
-            // fresh from the prop chain.
             let cid = scroll_id_meas.clone();
             let mut sig2 = handle.signal();
             spawn(async move {
+                // SELECTOR (2026-06-06): use a direct-child chain
+                // (`#{cid} > table > tbody > tr[data-chorale-index]`) rather
+                // than a descendant selector (`#{cid} [data-chorale-index]`).
+                // When a consumer renders a NESTED Table inside a detail
+                // panel, the descendant form matched the child Table's
+                // rows too, producing duplicate `data-chorale-index` keys
+                // (child indexes 0,1,2... collide with parent indexes 0,1,2...)
+                // that corrupted the parent's row_heights HashMap. The
+                // direct-child chain stops at the parent's own tbody.
                 let mut js = dioxus::document::eval(&format!(
-                    r"const rs=document.querySelectorAll('#{cid} [data-chorale-index]');
+                    r"const rs=document.querySelectorAll('#{cid} > table > tbody > tr[data-chorale-index]');
 const parts=[];
 rs.forEach(r=>{{parts.push(r.getAttribute('data-chorale-index')+':'+r.getBoundingClientRect().height);}});
 dioxus.send(parts.join('\n'));"
