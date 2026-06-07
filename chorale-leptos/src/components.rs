@@ -904,6 +904,7 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
     sticky_css: &str,
     is_active_cell: bool,
     is_in_range: bool,
+    is_selected: bool,
     row_index: usize,
     handle: UseTableHandle<TRow>,
     is_focus_cell: bool,
@@ -930,6 +931,17 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
     };
     let range_css = if is_in_range && !is_active_cell {
         "background:rgba(0,120,212,0.1);"
+    } else {
+        ""
+    };
+    // Sticky/frozen TDs hardcode `background:#fff` in sticky_css so they
+    // cover scrolled content behind them. That whitewashes the row's
+    // selection background. Append a selection-blue declaration AFTER
+    // sticky_css so the cascade lands on the selected color for frozen
+    // cells. Non-sticky cells already inherit from the TR; the extra
+    // declaration is harmless.
+    let selection_bg = if is_selected {
+        "background:#eff6ff;"
     } else {
         ""
     };
@@ -998,7 +1010,7 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                  text-align:{align};height:{row_height}px;overflow:hidden;\
                  white-space:nowrap;text-overflow:ellipsis;cursor:default;\
                  position:relative;\
-                 {w}{sticky_css}{range_css}{active_css}"
+                 {w}{sticky_css}{range_css}{active_css}{selection_bg}"
             )
             on:click=move |ev: leptos::ev::MouseEvent| {
                 let ctrl = ev.ctrl_key() || ev.meta_key();
@@ -1084,6 +1096,7 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 sticky_body_css.get(&col.id).map_or("", String::as_str),
                 is_active,
                 is_in_range,
+                is_selected && selection_enabled,
                 row_index,
                 handle,
                 is_focus_cell,

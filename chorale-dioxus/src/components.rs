@@ -2449,7 +2449,7 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
                         let is_active = active_cell.is_some_and(|ac| ac.row_idx == row_index && ac.column_id == col.id);
                         let is_in_range = range_cells.contains(&(row_index, col.id));
                         let is_focus_cell = fill_focus_cell == Some((row_index, col.id));
-                        data_td(row, col, row_height, variable_row_height, widths.get(&col.id).copied(), cell_renderers.get(col.id), separator_color, sticky_css_map.get(&col.id).map_or("", String::as_str), is_active, is_in_range, row_index, row_id, handle, is_focus_cell, fill_drag_active, fill_hover)
+                        data_td(row, col, row_height, variable_row_height, widths.get(&col.id).copied(), cell_renderers.get(col.id), separator_color, sticky_css_map.get(&col.id).map_or("", String::as_str), is_active, is_in_range, is_selected && selection_enabled, row_index, row_id, handle, is_focus_cell, fill_drag_active, fill_hover)
                     }
                 }
             }
@@ -2763,6 +2763,7 @@ fn data_td<TRow: Clone + PartialEq + 'static>(
     sticky_css: &str,
     is_active_cell: bool,
     is_in_range: bool,
+    is_selected: bool,
     row_index: usize,
     row_id: RowId,
     handle: UseTableHandle<TRow>,
@@ -2780,18 +2781,31 @@ fn data_td<TRow: Clone + PartialEq + 'static>(
     // even though state is correctly updated. A child overlay node that
     // either exists or doesn't forces a structural DOM mutation that the
     // diff can't drop.
+    //
+    // Selected-row override: sticky/frozen TDs hardcode `background: #fff`
+    // in sticky_css so they cover scrolled content behind them when the
+    // user scrolls horizontally. That whitewashes the row's `#eff6ff`
+    // selection background. Append a selection-blue background AFTER
+    // sticky_css (CSS cascade: last-declaration wins) so frozen cells
+    // join the row highlight. Non-sticky cells already inherit from the
+    // TR via transparency; the extra declaration is harmless on them.
+    let selection_bg = if is_selected {
+        "background: #eff6ff;"
+    } else {
+        ""
+    };
     let style = if variable_row_height {
         format!(
             "position: relative; padding: 0.5rem 1rem; text-align: {align}; \
              box-sizing: border-box; box-shadow: inset 0 -1px 0 {separator_color}; \
-             cursor: default; {w} {sticky_css}"
+             cursor: default; {w} {sticky_css} {selection_bg}"
         )
     } else {
         format!(
             "position: relative; padding: 0.5rem 1rem; height: {row_height}px; text-align: {align}; \
              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; \
              box-sizing: border-box; box-shadow: inset 0 -1px 0 {separator_color}; \
-             cursor: default; {w} {sticky_css}"
+             cursor: default; {w} {sticky_css} {selection_bg}"
         )
     };
     let content = if let Some(renderer) = custom_renderer {
