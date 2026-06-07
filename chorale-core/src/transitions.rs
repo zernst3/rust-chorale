@@ -1842,6 +1842,85 @@ mod tests {
         assert_eq!(s2.rows[0].1, s.rows[0].1);
     }
 
+    // ── data_generation counter ──────────────────────────────────────────────
+    //
+    // Regression: row-content changes must bump data_generation. The dioxus
+    // adapter's view_key memo includes data_generation in its tuple so cell
+    // edits invalidate the cached visible_view; without the bump the cell
+    // would keep rendering the pre-edit value until an unrelated transition
+    // happened.
+
+    #[test]
+    fn update_row_bumps_data_generation() {
+        let s = make_state();
+        let id = s.rows[0].0;
+        let s2 = update_row(
+            &s,
+            id,
+            TestRow {
+                name: "edited".into(),
+                score: 1.0,
+            },
+        );
+        assert_eq!(s2.data_generation, s.data_generation.wrapping_add(1));
+    }
+
+    #[test]
+    fn update_row_unknown_id_still_bumps_data_generation() {
+        // update_row always clones rows + always reconstructs state, so even
+        // an unknown id pays the cost. Treating the bump as "any
+        // update_row call" is a simpler invariant than "only on successful
+        // match"; documenting the behavior here so a future refactor can't
+        // silently drift it.
+        let s = make_state();
+        let unknown = RowId::new();
+        let s2 = update_row(
+            &s,
+            unknown,
+            TestRow {
+                name: "ghost".into(),
+                score: 0.0,
+            },
+        );
+        assert_eq!(s2.data_generation, s.data_generation.wrapping_add(1));
+    }
+
+    #[test]
+    fn non_row_mutating_transition_does_not_bump_data_generation() {
+        // Scroll, sort, selection, etc. must not bump data_generation — the
+        // adapter's view_key memo would over-invalidate and PERF-1 (the
+        // two-level memo) would lose its short-circuit. Sampled across a
+        // few representative transitions; not exhaustive, but enough to
+        // catch a future refactor that wires data_generation into the
+        // wrong path.
+        let s = make_state();
+        let s2 = set_scroll(&s, 100.0);
+        assert_eq!(s2.data_generation, s.data_generation);
+        let s3 = toggle_sort(&s, col_name(), SortAction::Replace);
+        assert_eq!(s3.data_generation, s.data_generation);
+        let s4 = set_selection(&s, s.rows[0].0, true);
+        assert_eq!(s4.data_generation, s.data_generation);
+    }
+
+    #[test]
+    fn data_generation_wraps_on_overflow() {
+        // wrapping_add documented invariant — make sure we use it, not
+        // checked_add (which would panic on overflow in debug builds and
+        // saturate in release).
+        let mut s = make_state();
+        s.data_generation = u64::MAX;
+        let id = s.rows[0].0;
+        let s2 = update_row(
+            &s,
+            id,
+            TestRow {
+                name: "x".into(),
+                score: 0.0,
+            },
+        );
+        assert_eq!(s2.data_generation, 0);
+    }
+
     // ---- toggle_select_all with active filter ----------------------------
 
     #[test]
@@ -2778,6 +2857,102 @@ mod tests {
             let s2 = move_active_cell(&s, NavDirection::Down);
             assert!(s2.active_cell.unwrap().row_idx <= 2);
         }
+    }
+
+    // ── range_selection collapses on keyboard nav ────────────────────────────
+    //
+    // Regression: arrow / Ctrl+arrow / Home / End / PageUp/Down / Ctrl+Home/End
+    // must each collapse range_selection to a single-cell range at the new
+    // active cell. Before the fix, range_selection stayed where it was at the
+    // last click, so SHIFT+arrow extended from the old click position instead
+    // of from the keyboard cursor.
+
+    /// Helper: assert that `state.range_selection` is exactly one single-cell
+    /// range positioned at `state.active_cell`.
+    fn assert_range_collapsed_to_active(state: &TableState<TestRow>) {
+        let ac = state
+            .active_cell
+            .expect("expected active_cell to be Some after move");
+        assert_eq!(
+            state.range_selection.len(),
+            1,
+            "expected range_selection to hold exactly one range after move, got {:?}",
+            state.range_selection
+        );
+        let r = &state.range_selection[0];
+        assert_eq!(r.anchor, (ac.row_idx, ac.column_id));
+        assert_eq!(r.focus, (ac.row_idx, ac.column_id));
+    }
+
+    #[test]
+    fn move_active_cell_collapses_range_to_new_cell() {
+        // Start with a multi-cell range, then arrow-down.
+        let s = start_range_selection(&make_state(), 0, col_name());
+        let s = extend_range_to(&s, 2, col_score());
+        assert!(s.range_selection[0].anchor != s.range_selection[0].focus);
+        let s2 = move_active_cell(&s, NavDirection::Down);
+        assert_range_collapsed_to_active(&s2);
+    }
+
+    #[test]
+    fn move_active_cell_to_edge_collapses_range_to_new_cell() {
+        let s = start_range_selection(&make_state(), 0, col_name());
+        let s = extend_range_to(&s, 1, col_score());
+        let s2 = move_active_cell_to_edge(&s, NavDirection::Down);
+        assert_range_collapsed_to_active(&s2);
+    }
+
+    #[test]
+    fn move_active_cell_page_collapses_range_to_new_cell() {
+        let s = start_range_selection(&make_state(), 0, col_name());
+        let s = extend_range_to(&s, 1, col_score());
+        let s2 = move_active_cell_page(&s, NavDirection::Down, 2);
+        assert_range_collapsed_to_active(&s2);
+    }
+
+    #[test]
+    fn move_active_cell_home_collapses_range_to_new_cell() {
+        let s = set_active_cell(&make_state(), 1, col_score()).unwrap();
+        let s = start_range_selection(&s, 1, col_score());
+        let s = extend_range_to(&s, 2, col_score());
+        let s2 = move_active_cell_home(&s);
+        assert_range_collapsed_to_active(&s2);
+    }
+
+    #[test]
+    fn move_active_cell_end_collapses_range_to_new_cell() {
+        let s = set_active_cell(&make_state(), 1, col_name()).unwrap();
+        let s = start_range_selection(&s, 1, col_name());
+        let s = extend_range_to(&s, 2, col_name());
+        let s2 = move_active_cell_end(&s);
+        assert_range_collapsed_to_active(&s2);
+    }
+
+    #[test]
+    fn move_active_cell_first_collapses_range_to_new_cell() {
+        let s = start_range_selection(&make_state(), 1, col_score());
+        let s = extend_range_to(&s, 2, col_score());
+        let s2 = move_active_cell_first(&s);
+        assert_range_collapsed_to_active(&s2);
+    }
+
+    #[test]
+    fn move_active_cell_last_collapses_range_to_new_cell() {
+        let s = start_range_selection(&make_state(), 0, col_name());
+        let s = extend_range_to(&s, 1, col_score());
+        let s2 = move_active_cell_last(&s);
+        assert_range_collapsed_to_active(&s2);
+    }
+
+    #[test]
+    fn move_active_cell_from_none_initializes_range() {
+        // When active_cell starts as None, the first arrow press should
+        // both set active_cell AND initialize range_selection to a single
+        // cell at that position.
+        let s = make_state();
+        assert!(s.active_cell.is_none());
+        let s2 = move_active_cell(&s, NavDirection::Down);
+        assert_range_collapsed_to_active(&s2);
     }
 
     // ── Item 16: range selection ─────────────────────────────────────────────
