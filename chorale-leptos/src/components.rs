@@ -103,7 +103,7 @@ impl PartialEq for ValidateEditFn {
 // ---------------------------------------------------------------------------
 
 /// Base64-encode raw bytes using the standard alphabet (A-Za-z0-9+/).
-#[cfg(feature = "xlsx")]
+#[cfg(all(feature = "xlsx", target_arch = "wasm32"))]
 fn to_base64(bytes: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
@@ -130,10 +130,12 @@ fn to_base64(bytes: &[u8]) -> String {
 
 /// Button that exports the current filtered+sorted view as an XLSX file.
 ///
-/// Requires the `xlsx` feature on both `chorale-leptos` and `chorale-core`.
-/// On click, calls [`chorale_core::to_xlsx`] and triggers a browser download
-/// via a `<a>` element with a data URL on WASM targets.
-#[cfg(feature = "xlsx")]
+/// Requires the `xlsx` feature on both `chorale-leptos` and `chorale-core`,
+/// plus a `wasm32` target — the click handler uses browser APIs
+/// (`document.createElement`, `<a download>`) so the component is only
+/// available in CSR builds. Native (SSR) builds can render the button
+/// markup via plain `view!` if needed.
+#[cfg(all(feature = "xlsx", target_arch = "wasm32"))]
 #[component]
 pub fn ExportXlsxButton<TRow: Clone + PartialEq + Send + Sync + 'static>(
     /// Table handle providing access to the current state.
@@ -172,7 +174,7 @@ pub fn ExportXlsxButton<TRow: Clone + PartialEq + Send + Sync + 'static>(
                     let _ = document.body().map(|b| b.remove_child(&a));
                 }
                 #[cfg(not(target_arch = "wasm32"))]
-                let _ = (&sheet_name, &filename);
+                let _ = (&handle, &sheet_name, &filename);
             }
         >
             {children()}

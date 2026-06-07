@@ -19,3 +19,25 @@ all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 unwrap_used = "warn"
 expect_used = "warn"
+
+# Pedantic lints that trigger on intentional design patterns in this
+# codebase. Allowed at workspace level rather than sprinkled as
+# per-site `#[allow(...)]` because the patterns are pervasive and the
+# scrutiny they ask for is already covered by other gates.
+#
+# Float-to-int and int-to-float casts in virtualization math
+# (visible_window, scroll geometry, prefix-sum row heights) are
+# intentional. Inputs are bounded (viewport sizes, row indices) so
+# truncation / sign loss / precision loss are not real risks.
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+# Render functions in chorale-dioxus and chorale-leptos take many
+# bool toggles (sort_enabled, filter_enabled, selection_enabled,
+# sticky_header, etc.) — refactoring into enums hurts readability
+# more than it helps. Same for header_th / data_tr internal helpers.
+fn_params_excessive_bools = "allow"
+# rsx! blocks make render functions long by nature; splitting them
+# fragments the markup. Caps the lint without removing the signal
+# elsewhere in the codebase.
+too_many_lines = "allow"

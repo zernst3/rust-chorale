@@ -246,7 +246,7 @@ pub fn select_all_visible_page<TRow: Clone>(state: &TableState<TRow>) -> TableSt
         .into_iter()
         .filter_map(|r| match r {
             crate::views::RenderRow::Data { id, .. } => Some(id),
-            _ => None,
+            crate::views::RenderRow::DetailPanel { .. } => None,
         })
         .collect();
     let mut sel = state.selection.clone();
@@ -281,7 +281,7 @@ pub fn deselect_all_visible_page<TRow: Clone>(state: &TableState<TRow>) -> Table
         .into_iter()
         .filter_map(|r| match r {
             crate::views::RenderRow::Data { id, .. } => Some(id),
-            _ => None,
+            crate::views::RenderRow::DetailPanel { .. } => None,
         })
         .collect();
     let kept: Vec<RowId> = state
@@ -1588,14 +1588,14 @@ mod tests {
             .iter()
             .filter_map(|r| match r {
                 crate::views::RenderRow::Data { row, .. } => Some(row.dept),
-                _ => None,
+                crate::views::RenderRow::DetailPanel { .. } => None,
             })
             .collect();
         let scores: Vec<i64> = view
             .iter()
             .filter_map(|r| match r {
                 crate::views::RenderRow::Data { row, .. } => Some(row.score),
-                _ => None,
+                crate::views::RenderRow::DetailPanel { .. } => None,
             })
             .collect();
         assert_eq!(depts, vec!["A", "A", "B", "B"]);
@@ -3077,7 +3077,7 @@ mod tests {
     fn collapse_all_rows_clears() {
         let s = make_state();
         let id0 = s.rows[0].0;
-        let id1 = s.rows.get(1).map(|r| r.0).unwrap_or(id0);
+        let id1 = s.rows.get(1).map_or(id0, |r| r.0);
         let s2 = toggle_row_expansion(&s, id0);
         let s3 = toggle_row_expansion(&s2, id1);
         let s4 = collapse_all_rows(&s3);
