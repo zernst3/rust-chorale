@@ -15,4 +15,31 @@ pub enum StateError {
     /// `set_column_width` was called with a non-positive value.
     #[error("column width must be positive, got {0}")]
     InvalidColumnWidth(String),
+
+    /// `start_edit` was called for a column that has no `EditorKind` configured.
+    #[error("column {0} is not editable")]
+    ColumnNotEditable(crate::types::ColumnId),
+
+    /// `set_column_order` or `move_column` received a `ColumnId` not found in `state.columns`.
+    #[error("unknown column {0}")]
+    UnknownColumnId(crate::types::ColumnId),
+
+    /// `set_column_order` received a duplicate `ColumnId`.
+    #[error("duplicate column {0}")]
+    DuplicateColumnId(crate::types::ColumnId),
+
+    /// A transition was called in a mode that does not support it.
+    ///
+    /// Example: `set_page` in `PaginationMode::InfiniteScroll`,
+    /// or `load_more_rows` in `PaginationMode::Pages`.
+    #[error("transition not valid in current pagination mode")]
+    InvalidModeForTransition,
+
+    /// `set_active_cell` was called with a row index that exceeds the visible row count.
+    #[error("row index is out of bounds")]
+    RowIndexOutOfBounds,
+
+    /// `set_active_cell` was called with a column ID that is not in the visible column list.
+    #[error("column not found or not visible")]
+    ColumnNotFound,
 }

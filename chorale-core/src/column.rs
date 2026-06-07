@@ -3,6 +3,79 @@ use std::sync::Arc;
 
 use crate::types::{Alignment, CellValue, ColumnId, CurrencyCode};
 
+/// How to aggregate rows within a group for a column.
+///
+/// Set via [`ColumnDef::aggregator`]. Aggregation applies when grouping is
+/// active (`state.grouping` is non-empty). The aggregated result appears in
+/// each `GroupedRow::Header`'s `aggregates` vec at this column's position in
+/// the effective column order.
+///
+/// `AggregatorKind` is `#[non_exhaustive]` so additional built-in aggregators
+/// can be added in future minor releases.
+#[non_exhaustive]
+pub enum AggregatorKind<TRow> {
+    /// Sum of numeric cell values (`CellValue::Integer` and `Float`).
+    Sum,
+    /// Average of numeric cell values. Returns `CellValue::Text("—")` when no
+    /// numeric values are present.
+    Average,
+    /// Count of rows in the group. Always returns `CellValue::Integer`.
+    Count,
+    /// Minimum value (uses `CellValue::cmp_for_sort`).
+    Min,
+    /// Maximum value (uses `CellValue::cmp_for_sort`).
+    Max,
+    /// Host-supplied aggregation. Called with the group's rows; returns any `CellValue`.
+    #[allow(clippy::type_complexity)]
+    Custom(Arc<dyn Fn(&[&TRow]) -> CellValue + Send + Sync>),
+}
+
+impl<TRow> Clone for AggregatorKind<TRow> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Sum => Self::Sum,
+            Self::Average => Self::Average,
+            Self::Count => Self::Count,
+            Self::Min => Self::Min,
+            Self::Max => Self::Max,
+            Self::Custom(f) => Self::Custom(Arc::clone(f)),
+        }
+    }
+}
+
+impl<TRow> std::fmt::Debug for AggregatorKind<TRow> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Sum => write!(f, "Sum"),
+            Self::Average => write!(f, "Average"),
+            Self::Count => write!(f, "Count"),
+            Self::Min => write!(f, "Min"),
+            Self::Max => write!(f, "Max"),
+            Self::Custom(_) => write!(f, "Custom(<fn>)"),
+        }
+    }
+}
+
+/// Which edge a column is pinned to. Defaults to `None` (scrollable).
+///
+/// Set via [`ColumnDef::frozen`]. The adapter renders left-frozen columns at
+/// the left edge (CSS `position: sticky; left: Xpx`), right-frozen columns at
+/// the right edge, and scrollable columns in between.
+///
+/// `FrozenSide` is `#[non_exhaustive]` so additional pin positions (e.g. a
+/// top/bottom axis for row pinning) can be added in future minor releases.
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum FrozenSide {
+    /// Column scrolls with the table (default).
+    #[default]
+    None,
+    /// Column is pinned to the left edge.
+    Left,
+    /// Column is pinned to the right edge.
+    Right,
+}
+
 /// Maps a `CellValue` text variant (or `Empty`) to a badge label and CSS
 /// color token. Used by `RenderKind::Badge`.
 ///
@@ -116,12 +189,38 @@ pub enum FilterKind {
     Boolean,
 }
 
+/// What kind of inline editor the adapter should render for an editable column.
+///
+/// Set via `ColumnDef::editor(kind)`. A column with `editor: None` (the default)
+/// is read-only — `start_edit` will return `Err(ColumnNotEditable)` for it.
+#[non_exhaustive]
+#[derive(Clone, Debug)]
+pub enum EditorKind {
+    /// Free-text `<input type="text">`.
+    Text,
+    /// Numeric `<input type="number">` with optional bounds and step.
+    Number {
+        /// Inclusive minimum value, or `None` for unbounded.
+        min: Option<f64>,
+        /// Inclusive maximum value, or `None` for unbounded.
+        max: Option<f64>,
+        /// Step increment for the spin-button UI, or `None` to let the browser decide.
+        step: Option<f64>,
+    },
+    /// Date picker `<input type="date">`.
+    Date,
+    /// Boolean toggle `<input type="checkbox">`.
+    BoolToggle,
+    /// Custom: the host supplies a renderer via the adapter's `cell_renderers` prop.
+    /// The adapter falls back to a text input if no custom renderer is provided.
+    Custom,
+}
+
 /// How the adapter renders a cell's value by default.
 ///
 /// `Custom` is intentionally absent: custom cell rendering requires Dioxus
 /// types (`Element`, `EventHandler`) and lives in `chorale-dioxus`
-/// per CHORALE-CORE-1. See recon-2 § 7b (and the CHORALE-CORE-1
-/// auto-call entry 2026-06-03-B).
+/// per CHORALE-CORE-1.
 #[non_exhaustive]
 #[derive(Clone, Debug, Default)]
 pub enum RenderKind {
@@ -173,6 +272,21 @@ pub struct ColumnDef<TRow> {
     /// Optional dynamic CSS class resolver for body cells of this column.
     /// See `CellClassFn` in `crate::theme`.
     pub cell_class: Option<crate::theme::CellClassFn<TRow>>,
+    /// What kind of inline editor to render when this cell is in edit mode.
+    /// `None` (default) means the column is read-only; `start_edit` will return
+    /// `Err(StateError::ColumnNotEditable)` for it.
+    pub editor: Option<EditorKind>,
+    /// Which edge this column is pinned to, or `None` for scrollable (default).
+    ///
+    /// Set via `.frozen(FrozenSide::Left)` / `.frozen(FrozenSide::Right)`.
+    /// The adapter renders frozen columns with CSS `position: sticky` and a
+    /// computed `left`/`right` offset.
+    pub frozen: FrozenSide,
+    /// How to aggregate this column's values within a group.
+    ///
+    /// `None` (default) means the column shows no aggregate in group headers.
+    /// Only applies when grouping is active (`state.grouping` is non-empty).
+    pub aggregator: Option<AggregatorKind<TRow>>,
 }
 
 impl<TRow> ColumnDef<TRow> {
@@ -194,6 +308,9 @@ impl<TRow> ColumnDef<TRow> {
             render_kind: RenderKind::Text,
             header_class: None,
             cell_class: None,
+            editor: None,
+            frozen: FrozenSide::None,
+            aggregator: None,
         }
     }
 
@@ -247,6 +364,34 @@ impl<TRow> ColumnDef<TRow> {
         self
     }
 
+    /// Mark this column as editable with the given editor kind.
+    ///
+    /// A column without `.editor(...)` is read-only: `start_edit` returns
+    /// `Err(StateError::ColumnNotEditable)` for it.
+    #[must_use]
+    pub fn editor(mut self, kind: EditorKind) -> Self {
+        self.editor = Some(kind);
+        self
+    }
+
+    /// Pin this column to an edge. `FrozenSide::None` (the default) leaves the
+    /// column scrollable; `Left` / `Right` fix it at that edge.
+    #[must_use]
+    pub fn frozen(mut self, side: FrozenSide) -> Self {
+        self.frozen = side;
+        self
+    }
+
+    /// Set an aggregation function for this column.
+    ///
+    /// When grouping is active, each group header shows the aggregated value
+    /// for this column in its `aggregates` vec. `None` (the default) shows no aggregate.
+    #[must_use]
+    pub fn aggregator(mut self, kind: AggregatorKind<TRow>) -> Self {
+        self.aggregator = Some(kind);
+        self
+    }
+
     /// True if the column has any filter UI configured (anything other than
     /// `FilterKind::None`).
     #[must_use]
@@ -268,6 +413,9 @@ impl<TRow> Clone for ColumnDef<TRow> {
             render_kind: self.render_kind.clone(),
             header_class: self.header_class.clone(),
             cell_class: self.cell_class.clone(),
+            editor: self.editor.clone(),
+            frozen: self.frozen.clone(),
+            aggregator: self.aggregator.clone(),
         }
     }
 }

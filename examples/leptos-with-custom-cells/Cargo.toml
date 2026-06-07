@@ -1,0 +1,15 @@
+[package]
+name = "leptos-with-custom-cells"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Run with: trunk serve --open --package leptos-with-custom-cells
+
+[lints]
+workspace = true
+
+[dependencies]
+chorale-core = { path = "../../chorale-core", version = "0.2.0" }
+chorale-leptos = { path = "../../chorale-leptos", version = "0.2.0" }
+leptos = { version = "0.8", features = ["csr"] }

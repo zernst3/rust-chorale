@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 use crate::column::ColumnDef;
-use crate::types::{ColumnId, FilterValue, RowId, SortState};
+use crate::types::{
+    ActiveCell, ColumnId, EditTarget, FilterValue, GroupKey, GroupedPaginationMode, PaginationMode,
+    RowId, SortState,
+};
 
 /// The result of `visible_window()`: which rows to render and how large the
 /// top/bottom spacer divs should be so the scrollbar reflects the full list.
@@ -50,6 +53,25 @@ pub struct TableState<TRow: Clone> {
     pub column_visibility: HashMap<ColumnId, bool>,
     /// Column width overrides in px. Missing entry = `initial_width` or auto.
     pub column_widths: HashMap<ColumnId, f64>,
+    /// Explicit column render order.
+    ///
+    /// Empty (default) = definition order. When non-empty, columns render in
+    /// this order; IDs not listed are appended at the end in definition order
+    /// so newly-added columns always appear.
+    pub column_order: Vec<ColumnId>,
+    /// Which cell (if any) is currently open for in-cell editing.
+    ///
+    /// `start_edit` sets this; `commit_edit` and `cancel_edit` clear it.
+    /// Only one cell can be in edit mode at a time; opening a second cell
+    /// implicitly cancels the first (no orphaned lock).
+    pub editing: Option<EditTarget>,
+    /// Per-row height cache for variable-row-height virtualization (VIRT-2).
+    ///
+    /// Keyed by row index within the current post-filter/sort/paginated page view.
+    /// Empty map → all rows use the fixed `row_height` fallback.
+    /// Invalidated automatically by `toggle_sort`, `set_filter`, and `set_page`
+    /// (indices shift on any of those transitions).
+    pub row_heights: HashMap<usize, f64>,
     // --- Virtualization fields (VIRT-1) ---
     /// Current scroll offset of the scroll container in px.
     pub scroll_top: f64,
@@ -60,6 +82,57 @@ pub struct TableState<TRow: Clone> {
     /// Number of rows to render beyond the visible window on each side
     /// (overscan). Defaults to 3 per recon-2 § 2.
     pub buffer_rows: usize,
+    /// Whether rows are shown in fixed-size pages or accumulated via scroll.
+    ///
+    /// Defaults to `PaginationMode::Pages` (v0.1.0 behavior). Set to
+    /// `PaginationMode::InfiniteScroll` to enable the accumulating-rows mode.
+    pub pagination_mode: PaginationMode,
+    /// In `PaginationMode::InfiniteScroll`, how many post-filter-sort rows are
+    /// currently "loaded" (visible to the user). Grows by `page_size` each
+    /// time `load_more_rows` is called. In `Pages` mode, always 0.
+    pub loaded_row_count: usize,
+    /// Ordered list of columns to group by. Empty = no grouping.
+    ///
+    /// The first element is the outermost group; subsequent elements create
+    /// nested subgroups. Set via [`crate::transitions::set_grouping`].
+    pub grouping: Vec<ColumnId>,
+    /// Group keys that are currently collapsed. Empty = all expanded.
+    ///
+    /// When a key is present, `visible_grouped_view` omits that group's data
+    /// rows. Toggle via [`crate::transitions::toggle_group`].
+    pub collapsed_groups: std::collections::HashSet<GroupKey>,
+    /// Row IDs that are currently expanded (showing a detail panel below them).
+    /// Mirrors `collapsed_groups` but opt-IN: rows default to collapsed.
+    /// Empty default. Toggled by `toggle_row_expansion`.
+    pub expanded_rows: std::collections::HashSet<RowId>,
+    /// How pagination interacts with grouped rows. Defaults to `DataRowsOnly`.
+    ///
+    /// `DataRowsOnly`: page controls count data rows only; headers repeat on
+    /// each page that contains their rows. `Virtualized`: pagination disabled
+    /// while grouping is active; the full grouped tree is rendered.
+    pub grouped_pagination: GroupedPaginationMode,
+    /// The cell that currently holds keyboard focus, if any.
+    ///
+    /// `None` on mount; becomes `Some` on first arrow key press or cell click.
+    /// Set via `set_active_cell` / `move_active_cell` transitions. The adapter
+    /// renders a focus ring (CSS `--chorale-active-cell-outline`) on the cell
+    /// whose `(row_idx, column_id)` matches this field.
+    pub active_cell: Option<ActiveCell>,
+    /// Currently selected cell ranges (multi-rect).
+    ///
+    /// Empty vec = no range active. Each `RangeSelection` is an anchor/focus
+    /// pair of `(row_idx, ColumnId)`. Set via `start_range_selection` /
+    /// `extend_range_to` / `add_disjoint_range` / `select_all` /
+    /// `clear_range_selection`.
+    pub range_selection: Vec<crate::range::RangeSelection>,
+    /// Monotonic counter bumped whenever the underlying row data mutates
+    /// (currently: `update_row`). Adapters cache derived views (visible
+    /// slices, etc.) keyed on cheap signals like `rows.len()` and miss row
+    /// CONTENT changes — including in-cell edits where the row count
+    /// stays constant. Tracking this counter in such cache keys forces a
+    /// recompute on every row mutation without paying the O(n) cost of
+    /// re-hashing the full dataset per render.
+    pub data_generation: u64,
 }
 
 impl<TRow: Clone + std::fmt::Debug> std::fmt::Debug for TableState<TRow> {
@@ -73,10 +146,22 @@ impl<TRow: Clone + std::fmt::Debug> std::fmt::Debug for TableState<TRow> {
             .field("page_size", &self.page_size)
             .field("column_visibility", &self.column_visibility)
             .field("column_widths", &self.column_widths)
+            .field("column_order", &self.column_order)
+            .field("editing", &self.editing)
+            .field("row_heights", &self.row_heights)
             .field("scroll_top", &self.scroll_top)
             .field("viewport_height", &self.viewport_height)
             .field("row_height", &self.row_height)
             .field("buffer_rows", &self.buffer_rows)
+            .field("pagination_mode", &self.pagination_mode)
+            .field("loaded_row_count", &self.loaded_row_count)
+            .field("grouping", &self.grouping)
+            .field("collapsed_groups", &self.collapsed_groups)
+            .field("expanded_rows", &self.expanded_rows)
+            .field("grouped_pagination", &self.grouped_pagination)
+            .field("active_cell", &self.active_cell)
+            .field("range_selection", &self.range_selection)
+            .field("data_generation", &self.data_generation)
             .finish_non_exhaustive()
     }
 }
@@ -93,10 +178,22 @@ impl<TRow: Clone> Clone for TableState<TRow> {
             page_size: self.page_size,
             column_visibility: self.column_visibility.clone(),
             column_widths: self.column_widths.clone(),
+            column_order: self.column_order.clone(),
+            editing: self.editing,
+            row_heights: self.row_heights.clone(),
             scroll_top: self.scroll_top,
             viewport_height: self.viewport_height,
             row_height: self.row_height,
             buffer_rows: self.buffer_rows,
+            pagination_mode: self.pagination_mode,
+            loaded_row_count: self.loaded_row_count,
+            grouping: self.grouping.clone(),
+            collapsed_groups: self.collapsed_groups.clone(),
+            expanded_rows: self.expanded_rows.clone(),
+            grouped_pagination: self.grouped_pagination,
+            active_cell: self.active_cell,
+            range_selection: self.range_selection.clone(),
+            data_generation: self.data_generation,
         }
     }
 }
@@ -108,6 +205,7 @@ impl<TRow: Clone> TableState<TRow> {
     /// - `row_height = 40.0` px, `viewport_height = 500.0` px
     /// - `buffer_rows = 3` (overscan rows rendered beyond the visible window)
     /// - No active sort, filters, selection, or column overrides.
+    /// - `active_cell = None`, `range_selection = []`.
     ///
     /// # Example
     ///
@@ -132,10 +230,22 @@ impl<TRow: Clone> TableState<TRow> {
             page_size: 50,
             column_visibility: HashMap::new(),
             column_widths: HashMap::new(),
+            column_order: vec![],
+            editing: None,
+            row_heights: HashMap::new(),
             scroll_top: 0.0,
             viewport_height: 500.0,
             row_height: 40.0,
             buffer_rows: 3,
+            pagination_mode: PaginationMode::Pages,
+            loaded_row_count: 0,
+            grouping: vec![],
+            collapsed_groups: std::collections::HashSet::new(),
+            expanded_rows: std::collections::HashSet::new(),
+            grouped_pagination: GroupedPaginationMode::DataRowsOnly,
+            data_generation: 0,
+            active_cell: None,
+            range_selection: vec![],
         }
     }
 

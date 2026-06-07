@@ -1,288 +1,384 @@
 # chorale
 
-A framework-agnostic, type-safe table library for Rust. Currently ships
-with a Dioxus adapter; adapters for Leptos, Yew, and Sycamore are
+A framework-agnostic, type-safe data-table library for Rust. Ships with
+a Dioxus adapter and a Leptos adapter; adapters for Yew and Sycamore are
 planned for future releases. Inspired by
 [TanStack Table](https://tanstack.com/table).
 
-**On Dioxus today:** `chorale-dioxus` is a working table component you
-add to `Cargo.toml` and use. Sort, filter (text, multi-select, numeric
-range, date range, boolean), pagination, fixed-row-height
-virtualization, selection, custom cells, column resize, CSV export. All
-the v0.1 features ship ready, no separate rendering work.
-
-**Other frameworks (planned, not shipping yet):** `chorale-leptos`,
-`chorale-yew`, and `chorale-sycamore` are reserved on crates.io as
-`0.0.0` placeholders. The Leptos adapter is on the v0.2 roadmap; Yew
-and Sycamore adapters are planned for later releases. Until each
-adapter ships, `chorale-core` (the framework-agnostic logic crate) can
-be depended on directly if you want to write the rendering layer
-yourself, but no framework other than Dioxus has a ready table
-component today.
-
 > **A note on "headless":** chorale uses the term in the
 > [TanStack](https://tanstack.com/table) /
-> [Radix UI](https://www.radix-ui.com/) sense, where it means the
-> library's logic (sort, filter, paginate, virtualize, select) lives in
-> a separate crate from any rendering, so the same logic can power
-> adapters for different UI frameworks as those adapters get written.
-> This is a different meaning from the Rust infra / web-scraping world
-> where "headless" means "no display server." Sorry for the collision;
-> if you're here from infra, you're in the right place anyway.
+> [Radix UI](https://www.radix-ui.com/) sense — the logic (sort, filter,
+> paginate, virtualize, select) lives in a separate crate from any
+> rendering, so the same logic can power adapters for different UI
+> frameworks. This differs from the Rust infra / web-scraping world where
+> "headless" means "no display server."
 
 ## Status
 
-`chorale-core` v0.1.0 and `chorale-dioxus` v0.1.0 are published. The
-`draft-release/v0.2.0` branch is active; see `CHANGELOG.md` for what has
-shipped so far. All six `chorale-*` crate names are reserved on crates.io:
-([chorale](https://crates.io/crates/chorale),
+`chorale-core` v0.2.0, `chorale-dioxus` v0.2.0, `chorale-leptos` v0.2.0,
+and `chorale-derive` v0.2.0 are published. All four share a single
+`draft-release/v0.2.0` branch; see `CHANGELOG.md` for the full feature list.
+
+All six `chorale-*` crate names are reserved on crates.io:
+[chorale](https://crates.io/crates/chorale),
 [chorale-core](https://crates.io/crates/chorale-core),
 [chorale-dioxus](https://crates.io/crates/chorale-dioxus),
 [chorale-leptos](https://crates.io/crates/chorale-leptos),
 [chorale-yew](https://crates.io/crates/chorale-yew),
-[chorale-sycamore](https://crates.io/crates/chorale-sycamore)). The
-`chorale-leptos` adapter is in design and the placeholder will be replaced
-when it ships in v0.2.0.
+[chorale-sycamore](https://crates.io/crates/chorale-sycamore).
+The `chorale-yew` and `chorale-sycamore` placeholders remain at `0.0.0`
+until those adapters are built.
 
-## Quickstart
-
-A working sortable, text-filterable table is a row type, a
-`Vec<ColumnDef<Row>>`, and `use_table` plus `<Table>`:
+## Quickstart — Dioxus
 
 ```rust
-use chorale_core::{
-    Alignment, CellValue, ColumnDef, ColumnId, FilterKind, RenderKind, RowId, TableState,
-};
+use chorale_core::{CellValue, ColumnDef, ColumnId, FilterKind, RowId, TableState};
 use chorale_dioxus::{use_table, Table};
 use dioxus::prelude::*;
-use std::sync::Arc;
 
 #[derive(Clone, PartialEq)]
 struct Book { title: String, author: String, year: i64 }
 
 fn columns() -> Vec<ColumnDef<Book>> {
     vec![
-        ColumnDef {
-            id: ColumnId("title"),
-            header: "Title".into(),
-            accessor: Arc::new(|b: &Book| CellValue::Text(b.title.clone())),
-            sortable: true,
-            filter: FilterKind::Text,
-            initial_width: Some(280.0),
-            alignment: Alignment::Left,
-            render_kind: RenderKind::Text,
-            header_class: None,
-            cell_class: None,
-        },
-        // ... author, year
+        ColumnDef::new(ColumnId("title"), "Title", |b: &Book| {
+            CellValue::Text(b.title.clone())
+        }).sortable().filter(FilterKind::Text).initial_width(280.0),
+        // … author, year
     ]
 }
 
 #[component]
 fn App() -> Element {
-    let table = use_table(|| TableState::new(rows(), columns()));
+    let table = use_table(|| TableState::new(rows_with_ids(), columns()));
     rsx! { Table { handle: table, sort_enabled: true, filter_enabled: true } }
 }
 ```
 
-The full version is in [`examples/basic`](examples/basic/src/main.rs).
+Full version: [`examples/basic`](examples/basic/src/main.rs).
+Build with: `cargo install dioxus-cli && dx serve --package basic`
 
-## What you get in v0.1
+## Quickstart — Leptos
 
-Each item is implemented in `chorale-dioxus` and demonstrated by at least one
-example:
+```rust
+use chorale_core::{CellValue, ColumnDef, ColumnId, FilterKind};
+use chorale_leptos::{use_chorale_table, Table};
+use leptos::prelude::*;
 
-- **Sort.** Single-column, ASC / DESC / none cycle. Comparison flows through
-  the column's `CellValue` accessor, so the sort order matches the displayed
-  value, not the underlying field.
+#[derive(Clone, PartialEq)]
+struct Book { title: String, author: String, year: i64 }
+
+fn columns() -> Vec<ColumnDef<Book>> {
+    vec![
+        ColumnDef::new(ColumnId("title"), "Title", |b: &Book| {
+            CellValue::Text(b.title.clone())
+        }).sortable().filter(FilterKind::Text).initial_width(280.0),
+        // … author, year
+    ]
+}
+
+#[component]
+fn App() -> impl IntoView {
+    // Note: Vec<Book> — no RowIds needed; use_chorale_table assigns them.
+    let table = use_chorale_table(books(), columns());
+    view! { <Table handle=table sort_enabled=true filter_enabled=true /> }
+}
+
+fn main() {
+    leptos::mount::mount_to_body(App);
+}
+```
+
+Full version: [`examples/leptos-basic`](examples/leptos-basic/src/main.rs).
+Build with: `cargo install trunk && cd examples/leptos-basic && trunk serve --open`
+
+## Using `#[derive(TableRow)]`
+
+```rust
+use chorale_derive::TableRow;
+use chorale_core::{CellValue, ColumnId, FilterKind};
+
+#[derive(Clone, PartialEq, TableRow)]
+struct Employee {
+    #[chorale(header = "Full Name", filter = "text", sortable)]
+    name: String,
+    #[chorale(header = "Salary", sortable)]
+    salary: i64,
+    #[chorale(skip)]
+    internal_id: u64,
+}
+
+// Generates:
+// impl Employee {
+//     pub fn chorale_columns() -> Vec<ColumnDef<Employee>> { … }
+// }
+```
+
+## What you get in v0.2.0
+
+### ⚠ Breaking change from v0.1.0
+
+`toggle_sort` now takes a `SortAction` parameter (`Replace` to set sort,
+`Append` to add a secondary/tertiary column to the multi-sort). Every
+call site must pass it explicitly — the compiler will flag any miss.
+
+```rust
+// v0.1.0
+handle.toggle_sort(ColumnId("name"));
+
+// v0.2.0
+handle.toggle_sort(ColumnId("name"), SortAction::Replace);
+```
+
+See [CHANGELOG.md](CHANGELOG.md) for the full migration note.
+
+### Features by version
+
+Every v0.1.0 feature still works in v0.2.0 — these are additive. New
+items land via opt-in props or transitions; nothing was removed.
+
+| Feature | v0.1.0 | v0.2.0 |
+|---|:-:|:-:|
+| **Sort** — single column | ✅ | ✅ |
+| **Sort** — multi-column (Shift+click) with priority badges | — | ✅ |
+| **Filter** — text, multi-select, numeric range, date range, boolean | ✅ | ✅ |
+| **Pagination** — page size, prev/next, windowed buttons, go-to | ✅ | ✅ |
+| **Infinite scroll** mode | — | ✅ |
+| **Selection** — per-row + select-all | ✅ | ✅ |
+| **`selection_toolbar`** slot for bulk-action bars | — | ✅ |
+| **Column visibility toolbar** | ✅ | ✅ |
+| **Column resize** | ✅ | ✅ |
+| **Column reorder** (drag-and-drop) | — | ✅ |
+| **Frozen columns** (`FrozenSide::Left` / `Right`) | — | ✅ |
+| **Fixed-row-height virtualization** | ✅ | ✅ |
+| **Variable-row-height virtualization** | — | ✅ |
+| **Grouping** with collapse/expand + aggregators (sum, avg, min, max, count) | — | ✅ |
+| **Master/detail** sub-tables via `detail_renderer` | — | ✅ |
+| **In-cell editing** with `EditorKind`, validators, commit/cancel | — | ✅ |
+| **Custom cell renderers** + `RenderKind::Badge` | ✅ | ✅ |
+| **CSV export** (RFC 4180) | ✅ | ✅ |
+| **XLSX export** via `ExportXlsxButton` (feature = `"xlsx"`) | — | ✅ |
+| **User-overridable `Labels`** (i18n) | — | ✅ |
+| **`#[derive(TableRow)]`** macro (chorale-derive crate) | — | ✅ |
+| **Leptos adapter** (`chorale-leptos` crate) | — | ✅ |
+
+### Core table features (both adapters)
+
+- **Sort.** Single-column or multi-column with `SortAction::Replace` (default)
+  or `SortAction::Append` (Shift+click). Sort priority badges show which
+  column is primary, secondary, etc.
 - **Filter.** Per-column filter shape declared on `ColumnDef`. Five kinds:
-  text substring, multi-select, dual-handle numeric range, date range, and
-  tri-state boolean. The adapter renders the matching UI; the matcher lives
-  in `chorale-core` and matches against the column's `CellValue`.
-- **Pagination.** Configurable page size, prev / next / windowed page
-  buttons with ellipses, plus a "Go to" number input (commits on Enter or
-  blur, clamps out-of-range values) for jumping across hundreds of pages.
-  Page change resets `scroll_top` and the DOM scroll position so the new
-  page lands at the top.
-- **Selection.** Per-row checkbox plus a header select-all that toggles only
-  the visible page. Selection state is a `Vec<RowId>` on `TableState`, readable
-  directly or via `handle.selected_ids()` / `handle.selection_count()`.
-- **Custom cells.** Two paths: declarative `RenderKind::Badge` driven by a
-  `BadgeVariantMap`, or `CellRenderers` (a per-column
-  `Arc<dyn Fn(&CellValue) -> Element>`) for arbitrary Dioxus markup.
-- **Column visibility toolbar.** Optional checklist that toggles columns
-  on and off without losing their state.
+  text substring, multi-select, dual-bound numeric range, date range, and
+  tri-state boolean.
+- **Pagination.** Configurable page size, prev / next / windowed page buttons
+  with ellipsis, plus a "Go to" number input for jumping across hundreds of
+  pages.
+- **Infinite scroll.** `PaginationMode::InfiniteScroll` loads rows in batches
+  as the user scrolls near the bottom. Switch back to Pages mode at any time.
+- **Selection.** Per-row checkboxes plus a header select-all. Readable via
+  `handle.selected_ids()` / `handle.selection_count()`.
+- **Grouping and aggregation.** Group by one or more columns; collapse and
+  expand groups. Per-column aggregators (sum, average, min, max, count)
+  appear in group header rows.
+- **Custom cells.** `RenderKind::Badge` (declarative pill rendering) or
+  `CellRenderers` (per-column arbitrary framework markup).
+- **Column visibility toolbar.** Toggle any column on or off at runtime.
 - **Column resize.** Drag the right edge of any header. Widths persist in
   `TableState::column_widths`.
-- **CSV export.** Optional toolbar button. Exports the full post-filter,
-  post-sort dataset (not just the current page) with RFC 4180 quoting.
-- **Sticky headers and fixed-row-height virtualization.** Always-on. Only
-  rows in the viewport plus a small overscan buffer are mounted as `<tr>`
-  elements, validated against a 10 000-row dataset in the
-  `virtualized-10k-rows` and `qa-harness` examples.
+- **Column reorder.** Drag-and-drop column headers to rearrange column order.
+- **Frozen columns.** Mark columns `FrozenSide::Left` or `FrozenSide::Right`
+  to stick them in place while scrolling.
+- **Variable-row-height virtualization.** Set per-row heights in
+  `TableState::row_heights`; the window math automatically handles mixed heights.
+- **Fixed-row-height virtualization.** Always-on when all rows share the same
+  height. O(1) per scroll event regardless of dataset size.
+- **In-cell editing.** `EditorKind::Text` on a column makes it double-click
+  editable. Validation via `validate_edit` callback. Commit/cancel via
+  Enter/Escape/Tab.
+- **CSV export.** Exports the full post-filter, post-sort dataset with RFC 4180
+  quoting.
+- **User-overridable labels.** Pass a custom `Labels` struct to override every
+  user-visible string — filter placeholder, pagination labels, export button
+  text — for i18n without patching the library.
+- **`selection_toolbar` slot.** Pass a child component shown only when one or
+  more rows are selected (bulk-action toolbar pattern).
+- **Master/detail (sub-tables, Item 12).** Expandable rows reveal a per-row
+  detail panel. Pass an optional `detail_renderer` prop to `<Table>`; a 24px
+  chevron column appears and clicking it calls `toggle_row_expansion`. Mount a
+  child `<Table>` (or any element) inside the renderer for nested grids.
 
-Deferred to v0.2: variable-row-height virtualization, in-cell editing,
-grouping and aggregation, column reorder, frozen columns.
+### `chorale-derive`
+
+`#[derive(TableRow)]` generates `fn chorale_columns() -> Vec<ColumnDef<Self>>`
+from struct fields. Attributes: `header`, `sortable`, `filter`, `initial_width`,
+`alignment`, `render_kind`, `skip`.
 
 ## Architecture
 
-Two crates, with a hard, lint-enforced boundary between them.
+Two persistent layers separated by a hard, lint-enforced boundary.
 
 ### `chorale-core`
 
-Framework-agnostic state plus pure functions over it. The crate has zero UI
-dependencies (CHORALE-CORE-1) and never holds a framework's element or
-event type in its public surface.
+Framework-agnostic state plus pure functions over it. Zero UI dependencies
+(CHORALE-CORE-1). Transitions are immutable: every transition takes
+`&TableState<TRow>` and returns a fresh state (CHORALE-CORE-2).
 
 | Module | Surface |
 |---|---|
 | `state` | `TableState<TRow>`, `VirtualWindow` |
-| `column` | `ColumnDef<TRow>`, `RenderKind`, `FilterKind`, `BadgeVariantMap` |
-| `types` | `CellValue`, `FilterValue`, `SortState`, `RowId`, `ColumnId`, `Alignment`, `CurrencyCode` |
-| `transitions` | `toggle_sort`, `set_filter`, `set_page`, `set_page_size`, `set_scroll`, `set_selection`, `toggle_select_all`, `set_column_visibility`, `set_column_width`, `update_row` |
-| `views` | `visible_view`, `visible_rows`, `visible_row_ids`, `visible_window`, `filtered_sorted_rows`, `to_csv` |
-| `theme` | `Theme`, `CellClassFn`, `RowClassFn` |
+| `column` | `ColumnDef<TRow>`, `RenderKind`, `FilterKind`, `BadgeVariantMap`, `EditorKind`, `FrozenSide` |
+| `types` | `CellValue`, `FilterValue`, `SortState`, `RowId`, `ColumnId`, `Alignment`, `CurrencyCode`, `GroupKey`, `PaginationMode` |
+| `transitions` | `toggle_sort`, `set_filter`, `set_page`, `set_page_size`, `set_scroll`, `set_selection`, `toggle_select_all`, `set_column_visibility`, `set_column_width`, `update_row`, `move_column`, `set_grouping`, `toggle_group`, `expand_all_groups`, `collapse_all_groups`, `set_pagination_mode`, `load_more_rows`, `start_edit`, `commit_edit`, `cancel_edit`, `toggle_row_expansion`, `collapse_all_rows` |
+| `views` | `visible_view`, `visible_grouped_view`, `visible_rows`, `visible_row_ids`, `visible_window`, `filtered_sorted_rows`, `to_csv`, `frozen_left_columns`, `frozen_right_columns`, `scrollable_columns` |
+| `labels` | `Labels` |
 | `error` | `StateError` |
-
-Transitions are immutable: every transition takes `&TableState<TRow>` and
-returns a fresh state, never mutates in place (CHORALE-CORE-2). This is what
-makes time-travel debugging, undo stacks, and reactive integration
-straightforward.
 
 ### `chorale-dioxus`
 
-The Dioxus adapter. Wraps `TableState<TRow>` in a `Signal`, exposes a typed
-`UseTableHandle<TRow>` with one method per core transition, and renders the
-`<Table>` component:
+Wraps `TableState<TRow>` in a Dioxus `Signal<T>`, exposes `UseTableHandle<TRow>`
+(a `Copy` typed handle), and renders the `<Table>` component. Uses a two-level
+memo (PERF-1) so scroll events never retrigger the filter/sort/paginate
+pipeline at scale.
 
 ```rust
 Table {
     handle: table,
-    sort_enabled: true,            // default true
-    filter_enabled: false,         // default false
-    selection_enabled: false,
-    column_toolbar: false,
-    csv_export: false,
-    resize_enabled: false,
-    cell_renderers: ...,           // default empty
+    sort_enabled: true,
+    filter_enabled: true,
+    selection_enabled: true,
+    column_toolbar: true,
+    csv_export: true,
+    resize_enabled: true,
+    column_reorder_enabled: true,
+    // … labels, cell_renderers, validate_edit, on_commit_edit, selection_toolbar
 }
 ```
 
-Each prop above the default opts you into one of the v0.1 capabilities.
+### `chorale-leptos`
+
+Same pattern as `chorale-dioxus`, but wraps `TableState<TRow>` in a Leptos
+`RwSignal<T>`. The `UseTableHandle<TRow>` is `Copy` via a manual `impl Copy`
+(not `#[derive]`, which would add an unwanted `TRow: Copy` bound). The
+`Table` component accepts identical props to the Dioxus version.
+
+```rust
+view! {
+    <Table
+        handle=table
+        sort_enabled=true
+        filter_enabled=true
+        selection_enabled=true
+    />
+}
+```
 
 ## Filtering
 
-Declare a column's filter shape on its `ColumnDef`. For example:
-
 ```rust
-filter: FilterKind::MultiSelect {
-    options: vec!["Active".into(), "Suspended".into(), "Inactive".into()],
-},
+ColumnDef::new(ColumnId("status"), "Status", |e: &Employee| {
+    CellValue::Text(e.status.clone())
+})
+.filter(FilterKind::MultiSelect {
+    options: vec!["Active".into(), "Inactive".into(), "Pending".into()],
+})
 ```
-
-The five kinds map onto five `FilterValue` variants and five UIs in the
-adapter:
 
 | `FilterKind` | Adapter UI | Matches against |
 |---|---|---|
-| `None` | empty cell (column not filterable) | nothing |
+| `None` | no filter cell | nothing |
 | `Text` | text input, case-insensitive substring | `CellValue::Text` |
-| `MultiSelect { options }` | `<details>` dropdown with checkbox list plus outside-click watcher | `CellValue::Text` against the selected set |
-| `NumericRange { min, max, step }` | dual-handle range slider with compact min / max labels | `CellValue::Integer` or `Float` |
-| `DateRange` | two native `<input type="date">` fields | `CellValue::Date` or `DateTime` |
-| `Boolean` | tri-state All / Yes / No select | `CellValue::Boolean` |
-
-When a column has an active filter, a `×` button appears at the right of its
-filter cell with a `title="Clear Filter"` tooltip, wired to
-`handle.set_filter(col_id, None)`.
+| `MultiSelect { options }` | `<details>` dropdown with checkboxes | `CellValue::Text` |
+| `NumericRange { min, max, step }` | dual-bound range inputs | `CellValue::Integer` or `Float` |
+| `DateRange` | two `<input type="date">` fields | `CellValue::Date` or `DateTime` |
+| `Boolean` | tri-state All / Yes / No | `CellValue::Boolean` |
 
 ## Virtualization
 
-Fixed-row-height only in v0.1. The window math is O(1) per scroll event: two
-integer divisions to derive `start_index` and `end_index`, no binary search.
+The window math is O(1) per scroll event: two integer divisions from
+`scroll_top`, `viewport_height`, and `row_height`. The adapter renders a
+top-pad spacer, the windowed data rows, and a bottom-pad spacer; total
+tbody height always equals `total_rows × row_height`, so the scrollbar
+reflects the full dataset.
 
-The window math is `visible_window(scroll_top, viewport_height, row_height,
-total_rows, buffer_rows)` and lives in `chorale-core`. The adapter renders a
-`top_pad` spacer TR, the windowed data rows, and a `bottom_pad` spacer TR.
-Total tbody height equals `total_rows * row_height` independent of which
-window is rendered, so the scrollbar always reflects the full dataset.
+**PERF-1 (two-level memo):** a cheap `view_key` memo tracks only the fields
+that affect `visible_view` output. The expensive pipeline subscribes to
+`view_key`, not to the full signal — scroll and selection never retrigger
+filter/sort/paginate. At 1M rows this eliminates ~30 MB of allocation per
+scroll tick.
 
-**Fine-grained reactivity (v0.2.0, PERF-1).** The adapter uses a two-level
-memo pattern: a cheap `view_key` memo tracks only the fields that affect
-`visible_view` output (`page`, `page_size`, `sort`, `filters`, `rows.len()`).
-The expensive filter/sort/paginate pipeline subscribes to `view_key`, not
-to the full signal — so scroll and selection events no longer retrigger
-it. At 1 M rows this eliminates ~30 MB of allocation per scroll tick. See
-`docs/perf-2026-06-04-fine-grained-reactivity.md` for the decision record.
+Three non-obvious requirements both adapters handle for you:
 
-Three non-obvious requirements the Dioxus adapter handles for you, all of
-which would also apply to any future adapter:
-
-1. **`overflow-anchor: none` on the scroll container.** Chrome and Firefox
-   default to scroll anchoring, which adjusts `scrollTop` in response to DOM
-   mutations near the viewport. Virtualization is the pathological case:
-   every scroll triggers a render that swaps rendered TRs, the browser
-   compensates with another `scrollTop` adjustment, which fires another
-   scroll event. The result is a runaway scroll until the user hits the
-   top or bottom. Opting out is one CSS property.
-2. **Synchronous `scrollTop` reads.** Reading the scroll position via
-   `dioxus::document::eval` is async, and the lag lets the rendered window
-   fall behind the DOM during fast scrolling. The visible result is
-   bottom-padding empty space appearing under the rendered rows.
-   `ScrollData::scroll_top()` reads synchronously from the event.
-3. **Row separator via `box-shadow`, not TR `border-bottom`.** With
-   `border-collapse: collapse`, a TR's bottom border adds 1px of layout per
-   data row, but the top / bottom spacer TRs have no border. The result is
-   that tbody height equals `total_rows * row_height + N_rendered`, and
-   `N_rendered` shifts as the user scrolls, drifting the scroll extents
-   render to render. `box-shadow: inset 0 -1px 0 <color>` paints the
-   separator without participating in layout.
-
-If you write a chorale-* adapter for another framework, all three of the
-above apply to your scroll container too.
+1. **`overflow-anchor: none`.** Without it, browser scroll anchoring fights
+   DOM mutations during virtualization, producing a runaway scroll loop.
+2. **Synchronous `scrollTop` reads.** Async reads let the rendered window fall
+   behind the DOM during fast scrolling.
+3. **Row separators via `box-shadow`.** `border-bottom` on `<tr>` adds layout
+   pixels that shift scroll extents. `box-shadow: inset 0 -1px 0` paints
+   the separator without participating in layout.
 
 ## Examples
 
-Every example is a Dioxus-web crate. Install the CLI once
-(`cargo install dioxus-cli`), then run any one of them:
+### Dioxus examples
 
-```bash
-dx serve --package <example-name>   # opens http://localhost:8080
-```
+Install once: `cargo install dioxus-cli`. Run: `dx serve --package <name>`
 
 | Example | Demonstrates |
 |---|---|
-| `basic` | The smallest working table: sort plus text filter on a hand-coded dataset. |
-| `with-selection` | Per-row and select-all checkboxes plus a live selection count read from the signal. |
-| `with-custom-cells` | `RenderKind::Badge` (declarative) versus `CellRenderers` (arbitrary Dioxus markup, demonstrated with a health-bar progress indicator). |
-| `with-column-resize` | Drag the right edge of any column header to resize. |
-| `virtualized-10k-rows` | 10 010-row dataset (intentionally not a round multiple of page size, so the last page is partial) rendered through the fixed-row-height virtualization. |
-| `virtualized-1m-rows` | 1 000 000-row stress test. Sort and filter intentionally disabled (the v0.2 residual) so the example isolates virtualization scroll performance at scale. |
-| `qa-harness` | All v0.1 features behind one set of toggles. The exhaustive smoke test. |
+| `basic` | Minimal table: sort + text filter. |
+| `with-selection` | Per-row and select-all checkboxes, live count via `selection_count()`. |
+| `with-custom-cells` | `RenderKind::Badge` vs `CellRenderers` (arbitrary Dioxus markup). |
+| `with-column-resize` | Drag-to-resize column borders. |
+| `virtualized-10k-rows` | 10 010-row dataset through fixed-row-height virtualization. |
+| `virtualized-1m-rows` | 1 000 000-row stress test isolating scroll performance. |
+| `qa-harness` | All v0.2.0 features behind runtime toggles; the exhaustive smoke test. |
 
-Stop the running `dx serve` (Ctrl+C) before starting another, or pass
-`--port 8081` to run two side by side.
+### Leptos examples
+
+Install once: `cargo install trunk`. Run from inside the example directory:
+`trunk serve --open`
+
+| Example | Demonstrates |
+|---|---|
+| `leptos-basic` | Same as `basic`, using the Leptos adapter. |
+| `leptos-with-selection` | Selection with reactive `selection_count()` in Leptos signals. |
+| `leptos-with-custom-cells` | `CellRenderers` returning Leptos `AnyView`. |
+| `leptos-with-column-resize` | Column resize in Leptos. |
+| `leptos-virtualized-10k-rows` | 10 010-row virtualization in Leptos. |
+| `leptos-virtualized-1m-rows` | 1M-row stress test with two-stage mount (shows "Initializing…"). |
+| `leptos-qa-harness` | Full v0.2.0 QA harness for the Leptos adapter. |
+
+## Feature and architecture comparison
+
+Both adapters provide identical feature coverage. The differences are in the
+reactive primitive and build toolchain:
+
+| | `chorale-dioxus` | `chorale-leptos` |
+|---|---|---|
+| Reactive primitive | `Signal<T>` | `RwSignal<T>` |
+| Handle type | `UseTableHandle<TRow>: Copy` | `UseTableHandle<TRow>: Copy` |
+| Initial rows | `Vec<(RowId, TRow)>` | `Vec<TRow>` (RowIds assigned internally) |
+| Entry hook | `use_table(|| TableState::new(…))` | `use_chorale_table(rows, cols)` |
+| Component syntax | `rsx! { Table { handle: table, … } }` | `view! { <Table handle=table … /> }` |
+| Build tool | `dx serve` (Dioxus CLI) | `trunk serve` |
+| Custom cell type | `Element` | `AnyView` |
+
+The table logic (sort, filter, paginate, virtualize, group, edit) is shared via
+`chorale-core` and behaves identically in both adapters.
 
 ## Writing an adapter for another framework
 
-To publish `chorale-<framework>`:
-
 1. Depend on `chorale-core` and your framework's reactive primitive.
-2. Wrap `TableState<TRow>` in the framework's signal or store equivalent
-   (Dioxus `Signal`, Leptos `RwSignal`, Yew `Reducible`, etc.).
-3. Expose a typed handle (analogous to `UseTableHandle`) with one method per
-   core transition. Each method calls the transition, then writes the
-   returned state back into the signal.
-4. Render the table body from `visible_view(&state)` plus
-   `visible_window(...)`. The window result carries `top_pad_px` and
-   `bottom_pad_px` you place around the rendered rows.
-5. Honor the three virtualization requirements above. They are not
-   Dioxus-specific.
+2. Wrap `TableState<TRow>` in the framework's signal or store.
+3. Expose a typed `UseTableHandle<TRow>` (make it `Copy` via a manual `impl Copy`
+   rather than `#[derive(Copy)]` to avoid a spurious `TRow: Copy` bound).
+4. Each handle method calls a core transition and writes the returned state
+   back into the signal.
+5. Render from `visible_view(&state)` + `visible_window(...)`. Honor the three
+   virtualization requirements (overflow-anchor, synchronous scroll reads,
+   box-shadow row separators).
 
-`chorale-core` deliberately does not know about your framework's element
-type. The boundary CHORALE-CORE-1 enforces is what makes adapter authoring
-tractable: you write the bridge to your framework's reactive model, never a
-fork of the table logic.
+The `chorale-dioxus` and `chorale-leptos` crates are both under 1 400 lines and
+serve as reference implementations.
 
 ## MSRV
 
@@ -290,34 +386,21 @@ Rust 1.78. Pinned in `workspace.package.rust-version`.
 
 ## Development guardrails
 
-This library was built using
-[Camerata](https://github.com/zernst3/camerata-ai), an AI-orchestration
-guardrail tool I authored. The installed rule set is committed at the repo
-root for transparency:
+Built with [Camerata](https://github.com/zernst3/camerata-ai). Guardrail files
+committed for transparency:
 
-- `AGENTS.md` is the prose-tier principles digest the authoring agent reads
-  at the start of every change (orchestration discipline, architectural
-  commitments).
-- `CONVENTIONS.md` is the structured / mechanical-tier conventions the agent
-  applies during code generation (Rust and Dioxus patterns, error layering,
-  async discipline, signal usage).
-- `camerata.lock` records installed principle ids and content hashes so
-  `camerata outdated` can detect upstream drift.
-
-These are framework-level guardrails, not chorale-specific. They are
-committed so any reviewer can see which rules the implementation was written
-against, and re-run the same checks on a contribution.
-
-Chorale-specific code conventions live in [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md).
+- `AGENTS.md` — prose-tier principles (orchestration, architectural commitments).
+- `CONVENTIONS.md` — mechanical conventions (Rust patterns, signal usage).
+- `docs/CONVENTIONS.md` — chorale-specific code conventions.
 
 ## Contributing
 
-Open an issue before opening a non-trivial PR. The CI gates are
+Open an issue before a non-trivial PR. CI gates:
 `cargo check --workspace --all-targets`,
 `cargo clippy --workspace --all-targets -- -D warnings`, and
-`cargo test --workspace`. All three need to pass.
+`cargo test --workspace`. All three must pass.
 
 ## License
 
-Dual-licensed under MIT or Apache-2.0 at your option. See
-[LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).
+Dual-licensed under MIT or Apache-2.0 at your option.
+[LICENSE-MIT](LICENSE-MIT) · [LICENSE-APACHE](LICENSE-APACHE)

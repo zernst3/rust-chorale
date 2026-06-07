@@ -1,0 +1,29 @@
+[package]
+name = "chorale-derive"
+version = "0.2.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Proc-macro for automatic ColumnDef generation from a #[derive(TableRow)] struct."
+readme = "../README.md"
+keywords = ["table", "derive", "macro", "headless"]
+categories = ["gui", "proc-macros"]
+
+[lib]
+proc-macro = true
+
+[lints]
+workspace = true
+
+[dependencies]
+syn  = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+
+[features]
+chrono = []
+
+[dev-dependencies]
+chorale-core = { path = "../chorale-core" }

@@ -43,13 +43,11 @@ pub fn set_page(state: &TableState<TRow>, page: usize) -> Result<TableState<TRow
 pub fn toggle_sort(&mut self, col: ColumnId) { ... }
 ```
 
-**Why:** matches the TanStack Table convention chorale is positioning against ("TanStack Table for Rust"). TanStack's whole API is immutable-state-returns-new (`setSorting`, `setFiltering`, etc.) so reactive systems can compare old-and-new by value-equality and trigger renders only when state actually changes. With a `&mut self` signature, Dioxus `Signal` (and Leptos `RwSignal`) can't tell whether the state changed because the mutation happens in-place — they'd over-render. The immutable signature gives reactivity systems first-class change detection without leaking signal types into core.
+**Why:** aligns with the immutable-state-returns-new convention TanStack Table established (`setSorting`, `setFiltering`, etc.), so reactive systems can compare old-and-new by value-equality and trigger renders only when state actually changes. With a `&mut self` signature, Dioxus `Signal` (and Leptos `RwSignal`) can't tell whether the state changed because the mutation happens in-place — they'd over-render. The immutable signature gives reactivity systems first-class change detection without leaking signal types into core.
 
 A second consequence: time-travel debugging and undo/redo come almost for free. `Vec<TableState>` is the history; no serialize/diff machinery required.
 
 **How to apply:** if you find yourself wanting to write `&mut self` on a state transition, stop. Convert the signature to `&TableState<TRow> -> TableState<TRow>`. The cost (one struct clone per transition) is negligible for a typical table state and is paid for by the cleaner reactive integration.
-
-Established in the recon-1 differentiation memo (2026-05-31). The original CHORALE-CORE-2 specified `&mut self`; revised here to immutable-functional to match the TanStack Table positioning the memo locks in.
 
 ---
 

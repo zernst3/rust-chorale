@@ -12,3 +12,13 @@ Cargo.lock
 # repo.
 .overnight-chorale-*
 docs/recon/
+
+# Personal study notes Zach uses while reviewing in-flight design. Synthesizes
+# the recon memos with Rust mechanics explanations; not part of the public
+# documentation set. Regenerated after each implementation milestone with
+# real code references pulled from chorale-core/src/ and chorale-dioxus/src/.
+docs/v0.2.0-design-overview.md
+
+# Local screen recordings (videos copied in for bot review, never tracked)
+Screen Recording*.mov
+*.mp4

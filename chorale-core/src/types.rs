@@ -52,6 +52,175 @@ impl std::fmt::Display for ColumnId {
     }
 }
 
+/// Identifies the cell currently open for in-cell editing.
+///
+/// Stored as `TableState::editing: Option<EditTarget>`. `start_edit` sets it;
+/// `commit_edit` and `cancel_edit` clear it.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EditTarget {
+    /// The row containing the cell being edited.
+    pub row_id: RowId,
+    /// The column containing the cell being edited.
+    pub column_id: ColumnId,
+}
+
+/// Snapshot of a cell's prior state, sufficient to roll back an optimistic
+/// commit if the host's persistence call fails.
+///
+/// Returned to the host as part of [`CommittedEdit`] so that the host can
+/// pass it back to [`crate::transitions::revert_edit`] from an async error path.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PriorEdit<TRow: Clone> {
+    /// Row that was edited.
+    pub row_id: RowId,
+    /// Column that was edited.
+    pub column_id: ColumnId,
+    /// Full row snapshot before the edit — pass this to `revert_edit` on failure.
+    pub prior_row: TRow,
+}
+
+/// Payload delivered to the adapter's `on_commit_edit` callback.
+///
+/// Contains both the new raw value the user typed and a [`PriorEdit`] snapshot
+/// for optional rollback via `revert_edit`.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommittedEdit<TRow: Clone> {
+    /// Row that was edited.
+    pub row_id: RowId,
+    /// Column that was edited.
+    pub column_id: ColumnId,
+    /// The raw string value the user typed in the editor input.
+    pub value: String,
+    /// Prior state snapshot for rollback.
+    pub prior: PriorEdit<TRow>,
+}
+
+impl<TRow: Clone> PriorEdit<TRow> {
+    /// Construct a `PriorEdit` snapshot.
+    #[must_use]
+    pub fn new(row_id: RowId, column_id: ColumnId, prior_row: TRow) -> Self {
+        Self {
+            row_id,
+            column_id,
+            prior_row,
+        }
+    }
+}
+
+impl<TRow: Clone> CommittedEdit<TRow> {
+    /// Construct a `CommittedEdit` payload.
+    #[must_use]
+    pub fn new(row_id: RowId, column_id: ColumnId, value: String, prior_row: TRow) -> Self {
+        Self {
+            row_id,
+            column_id,
+            value,
+            prior: PriorEdit::new(row_id, column_id, prior_row),
+        }
+    }
+}
+
+/// Opaque key identifying a group (the concatenated group-by column values).
+///
+/// `GroupKey` is formed by joining the group-by column values for a row with a
+/// `\0` delimiter. Two rows with identical values for all active `state.grouping`
+/// columns produce equal keys.
+///
+/// Construct explicitly via [`GroupKey::from_values`] to pre-collapse specific
+/// groups without having to walk the grouped view first.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct GroupKey(pub(crate) String);
+
+impl GroupKey {
+    /// Construct a `GroupKey` from the ordered group-by column values for a row.
+    ///
+    /// The internal format is an opaque `\0`-delimited concatenation;
+    /// the exact format is an implementation detail.
+    #[must_use]
+    pub fn from_values(vals: &[impl AsRef<str>]) -> Self {
+        Self(
+            vals.iter()
+                .map(AsRef::as_ref)
+                .collect::<Vec<_>>()
+                .join("\0"),
+        )
+    }
+}
+
+impl std::fmt::Display for GroupKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Identifies the cell that currently holds keyboard focus.
+///
+/// Stored as `TableState::active_cell: Option<ActiveCell>`. Starts as `None`
+/// on mount; becomes `Some` on first click or arrow key press. Only one cell
+/// can hold focus at a time.
+///
+/// `row_idx` is the **post-filter, post-sort visible row index** (0 = first
+/// visible row on the current page). It is not a stable `RowId`; if the filter
+/// or sort changes, the adapter is responsible for clamping the index to the
+/// new visible row count.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ActiveCell {
+    /// Post-filter, post-sort visible row index (0 = first visible row).
+    pub row_idx: usize,
+    /// The column containing the focused cell.
+    pub column_id: ColumnId,
+}
+
+impl ActiveCell {
+    /// Create a new `ActiveCell`.
+    #[must_use]
+    pub fn new(row_idx: usize, column_id: ColumnId) -> Self {
+        Self { row_idx, column_id }
+    }
+}
+
+/// Direction for active-cell navigation transitions.
+///
+/// Passed to `move_active_cell`, `move_active_cell_to_edge`, and
+/// `move_active_cell_page`. `#[non_exhaustive]` so additional directions
+/// (e.g. `TabRight`, `ShiftTabLeft`) can be added without breaking matches.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NavDirection {
+    /// Move up (previous visible row).
+    Up,
+    /// Move down (next visible row).
+    Down,
+    /// Move left (previous visible column).
+    Left,
+    /// Move right (next visible column).
+    Right,
+}
+
+/// How pagination interacts with grouped rows.
+///
+/// `GroupedPaginationMode` is `#[non_exhaustive]` so additional modes can be
+/// added in future minor releases without breaking existing match arms.
+///
+/// Default is `DataRowsOnly`.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GroupedPaginationMode {
+    /// Paginate data rows only. Group headers re-render on each page that
+    /// contains their rows. Pagination controls remain active. **Default.**
+    #[default]
+    DataRowsOnly,
+    /// Disable pagination when `state.grouping` is non-empty; render the full
+    /// grouped tree. The adapter hides page controls when grouping is active
+    /// and this mode is set. Relies on virtualization for scale.
+    Virtualized,
+}
+
 /// Sort direction for a column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SortDirection {
@@ -59,6 +228,43 @@ pub enum SortDirection {
     Asc,
     /// Descending order (largest first).
     Desc,
+}
+
+/// How the table exposes rows to the user.
+///
+/// `PaginationMode` is `#[non_exhaustive]` so additional modes (e.g. cursor-based
+/// server pagination) can be added in future minor releases without breaking
+/// existing match arms.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PaginationMode {
+    /// Rows divided into fixed-size pages (v0.1.0 behavior). **Default.**
+    #[default]
+    Pages,
+    /// Rows accumulate as the user scrolls; no explicit page boundary.
+    ///
+    /// `loaded_row_count` in `TableState` tracks how many rows are currently
+    /// visible. `load_more_rows` increases it by `page_size` per call.
+    InfiniteScroll,
+}
+
+/// How a sort toggle should behave: replace the entire sort list or append to it.
+///
+/// Passed as the `action` argument to [`crate::toggle_sort`].
+/// The adapter passes `Replace` for a plain click and `Append` for Shift+click.
+///
+/// Per Decision #4 of Item 11.0a: NOT `#[non_exhaustive]` — exactly two
+/// semantically distinct actions; exhaustive matches are the right tradeoff.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SortAction {
+    /// Replace the entire sort with just this column (plain click).
+    ///
+    /// Cycles: None → Asc → Desc → None, clearing all other sort columns.
+    Replace,
+    /// Append this column as the lowest-priority sort (Shift+click).
+    ///
+    /// Cycles: absent → Asc → Desc → removed. Does not disturb other columns.
+    Append,
 }
 
 /// Active sort on a single column.
