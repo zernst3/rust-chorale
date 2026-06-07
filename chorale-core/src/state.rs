@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::column::ColumnDef;
 use crate::types::{
@@ -34,7 +35,13 @@ pub struct VirtualWindow {
 pub struct TableState<TRow: Clone> {
     /// The full dataset as `(RowId, row)` pairs. `RowId` is stable across
     /// sort, filter, and pagination so selection + edits survive reordering.
-    pub rows: Vec<(RowId, TRow)>,
+    ///
+    /// Wrapped in `Arc` so `state.clone()` is O(1) on this field — most
+    /// transitions never touch rows, so they pay only a refcount bump.
+    /// The one mutating path is `update_row`, which uses `Arc::make_mut`
+    /// for copy-on-write. Read access works unchanged via `Deref` to
+    /// `Vec<(RowId, TRow)>`.
+    pub rows: Arc<Vec<(RowId, TRow)>>,
     /// Column definitions in display order. Accessor closures are stored here.
     pub columns: Vec<ColumnDef<TRow>>,
     /// Active sort states. Empty vec = natural (insertion) order. In v0.1.0
@@ -221,7 +228,7 @@ impl<TRow: Clone> TableState<TRow> {
     #[must_use]
     pub fn new(rows: Vec<(RowId, TRow)>, columns: Vec<ColumnDef<TRow>>) -> Self {
         Self {
-            rows,
+            rows: Arc::new(rows),
             columns,
             sort: vec![],
             filters: HashMap::new(),
@@ -297,6 +304,8 @@ impl<TRow: Clone> TableState<TRow> {
 #[cfg(test)]
 #[allow(clippy::float_cmp, clippy::unwrap_used, clippy::cast_precision_loss)]
 mod tests {
+    use std::sync::Arc;
+
     use super::TableState;
     use crate::column::{ColumnDef, FilterKind, RenderKind};
     use crate::types::{Alignment, CellValue, ColumnId, FilterValue, RowId};
@@ -315,7 +324,7 @@ mod tests {
     }
 
     fn make_state_n(n: usize) -> TableState<R> {
-        let rows = (0..n)
+        let rows: Vec<_> = (0..n)
             .map(|i| {
                 (
                     RowId::new(),
@@ -341,7 +350,7 @@ mod tests {
                 .render_kind(RenderKind::Number),
         ];
         TableState {
-            rows,
+            rows: Arc::new(rows),
             columns,
             ..TableState::new(vec![], vec![])
         }

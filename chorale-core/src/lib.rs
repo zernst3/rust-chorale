@@ -563,7 +563,7 @@ pub use views::visible_grouped_view;
 /// Returned by [`visible_grouped_view`]. `#[non_exhaustive]`.
 pub use views::GroupedRow;
 
-/// What the renderer should draw for one virtualized row slot (Data or DetailPanel).
+/// What the renderer should draw for one virtualized row slot (`Data` or `DetailPanel`).
 ///
 /// Returned by [`visible_view`] to support master/detail layouts.
 pub use views::RenderRow;

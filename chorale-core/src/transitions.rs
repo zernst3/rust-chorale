@@ -5,6 +5,7 @@
 //! No `&mut self`. No signals. No async. Unit-testable without a framework.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::error::StateError;
 use crate::range::RangeSelection;
@@ -245,7 +246,7 @@ pub fn select_all_visible_page<TRow: Clone>(state: &TableState<TRow>) -> TableSt
         .into_iter()
         .filter_map(|r| match r {
             crate::views::RenderRow::Data { id, .. } => Some(id),
-            _ => None,
+            crate::views::RenderRow::DetailPanel { .. } => None,
         })
         .collect();
     let mut sel = state.selection.clone();
@@ -280,7 +281,7 @@ pub fn deselect_all_visible_page<TRow: Clone>(state: &TableState<TRow>) -> Table
         .into_iter()
         .filter_map(|r| match r {
             crate::views::RenderRow::Data { id, .. } => Some(id),
-            _ => None,
+            crate::views::RenderRow::DetailPanel { .. } => None,
         })
         .collect();
     let kept: Vec<RowId> = state
@@ -425,21 +426,19 @@ pub fn update_row<TRow: Clone>(
     row_id: RowId,
     new_row: TRow,
 ) -> TableState<TRow> {
-    let mut rows = state.rows.clone();
-    if let Some(slot) = rows.iter_mut().find(|(id, _)| *id == row_id) {
+    let mut new_state = state.clone(); // rows clone is O(1) via Arc::clone
+    if let Some(slot) = Arc::make_mut(&mut new_state.rows)
+        .iter_mut()
+        .find(|(id, _)| *id == row_id)
+    {
         slot.1 = new_row;
     }
-    TableState {
-        rows,
-        // Bump data_generation so adapter view caches that key on this
-        // counter (e.g., the dioxus view memo) recompute on row-content
-        // changes. Without this, in-cell edits land in state.rows but the
-        // cached visible_view is never recomputed and the cell renders
-        // stale text until an unrelated transition (sort/filter/page/
-        // grouping/expansion) happens to bump a different key field.
-        data_generation: state.data_generation.wrapping_add(1),
-        ..state.clone()
-    }
+    // Bump data_generation so the adapter view memo (which keys on this
+    // counter) recomputes on row-content changes. Without this, in-cell
+    // edits land in state.rows but the cached visible_view stays stale
+    // until an unrelated transition bumps a different key field.
+    new_state.data_generation = state.data_generation.wrapping_add(1);
+    new_state
 }
 
 /// Record the measured height (px) for row at `index` in the current page view.
@@ -1353,7 +1352,7 @@ mod tests {
             ),
         ];
         TableState {
-            rows,
+            rows: Arc::new(rows),
             columns: make_columns(),
             ..TableState::new(vec![], vec![])
         }
@@ -1589,14 +1588,14 @@ mod tests {
             .iter()
             .filter_map(|r| match r {
                 crate::views::RenderRow::Data { row, .. } => Some(row.dept),
-                _ => None,
+                crate::views::RenderRow::DetailPanel { .. } => None,
             })
             .collect();
         let scores: Vec<i64> = view
             .iter()
             .filter_map(|r| match r {
                 crate::views::RenderRow::Data { row, .. } => Some(row.score),
-                _ => None,
+                crate::views::RenderRow::DetailPanel { .. } => None,
             })
             .collect();
         assert_eq!(depts, vec!["A", "A", "B", "B"]);
@@ -2523,7 +2522,7 @@ mod tests {
             ),
         ];
         TableState {
-            rows,
+            rows: Arc::new(rows),
             columns: make_columns(),
             ..make_state()
         }
@@ -3078,7 +3077,7 @@ mod tests {
     fn collapse_all_rows_clears() {
         let s = make_state();
         let id0 = s.rows[0].0;
-        let id1 = s.rows.get(1).map(|r| r.0).unwrap_or(id0);
+        let id1 = s.rows.get(1).map_or(id0, |r| r.0);
         let s2 = toggle_row_expansion(&s, id0);
         let s3 = toggle_row_expansion(&s2, id1);
         let s4 = collapse_all_rows(&s3);

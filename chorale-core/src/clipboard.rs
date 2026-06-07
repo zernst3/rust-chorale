@@ -659,7 +659,7 @@ mod tests {
             crate::views::RenderRow::Data { row, .. } => {
                 assert_eq!(row.name.as_str(), "Alice");
             }
-            _ => panic!("Expected RenderRow::Data"),
+            crate::views::RenderRow::DetailPanel { .. } => panic!("Expected RenderRow::Data"),
         }
     }
 

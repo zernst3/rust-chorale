@@ -510,7 +510,7 @@ pub fn visible_window_variable<S: std::hash::BuildHasher>(
 /// Returns the `RowId`s of rows on the current page (post-sort/post-filter).
 ///
 /// In `PaginationMode::InfiniteScroll`, returns the first `loaded_row_count` rows.
-/// DetailPanel rows are excluded. Used by `toggle_select_all`.
+/// `DetailPanel` rows are excluded. Used by `toggle_select_all`.
 #[must_use]
 pub fn visible_row_ids<TRow: Clone>(state: &TableState<TRow>) -> Vec<RowId> {
     visible_view(state)
@@ -525,7 +525,7 @@ pub fn visible_row_ids<TRow: Clone>(state: &TableState<TRow>) -> Vec<RowId> {
 /// Returns the rows on the current page (post-sort/post-filter).
 ///
 /// In `PaginationMode::InfiniteScroll`, returns the first `loaded_row_count` rows.
-/// DetailPanel rows are excluded.
+/// `DetailPanel` rows are excluded.
 ///
 /// Data pipeline per the work-queue spec and recon-2 § 5:
 ///   raw rows → filter → sort → paginate
@@ -757,7 +757,8 @@ pub fn to_csv<TRow: Clone>(state: &TableState<TRow>) -> String {
 /// Returns filtered + sorted `(RowId, TRow)` pairs (no pagination).
 ///
 /// This is the complete set across all pages, used by bulk-selection
-/// transitions (select_all_filtered, deselect_all) and XLSX export.
+/// transitions (`select_all_filtered`, `deselect_all`) and XLSX export.
+#[must_use]
 pub fn filtered_sorted_pairs<TRow: Clone>(state: &TableState<TRow>) -> Vec<(RowId, TRow)> {
     let mut pairs: Vec<(RowId, TRow)> = state
         .rows
@@ -819,6 +820,7 @@ fn csv_quote(s: &str) -> String {
 #[allow(clippy::float_cmp, clippy::cast_precision_loss, clippy::unwrap_used)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     use crate::column::ColumnDef;
     use crate::state::TableState;
@@ -874,7 +876,7 @@ mod tests {
             .render_kind(crate::column::RenderKind::Number),
         ];
         TableState {
-            rows,
+            rows: Arc::new(rows),
             columns,
             ..TableState::new(vec![], vec![])
         }
@@ -958,7 +960,7 @@ mod tests {
     fn to_csv_quotes_commas_in_values() {
         let mut s = make_state();
         // Inject a row with a comma in the name
-        s.rows.push((
+        Arc::make_mut(&mut s.rows).push((
             RowId::new(),
             R {
                 name: "Smith, Jr.".into(),
@@ -1030,11 +1032,11 @@ mod tests {
         assert_eq!(view.len(), 2);
         match &view[0] {
             RenderRow::Data { row, .. } => assert_eq!(row.name, "Alice"),
-            _ => panic!("Expected RenderRow::Data"),
+            RenderRow::DetailPanel { .. } => panic!("Expected RenderRow::Data"),
         }
         match &view[1] {
             RenderRow::Data { row, .. } => assert_eq!(row.name, "Charlie"),
-            _ => panic!("Expected RenderRow::Data"),
+            RenderRow::DetailPanel { .. } => panic!("Expected RenderRow::Data"),
         }
     }
 
@@ -1777,19 +1779,19 @@ mod tests {
         assert_eq!(view.len(), 4);
         match &view[0] {
             RenderRow::Data { row, .. } => assert_eq!(row.region, "East"), // East < West
-            _ => panic!("Expected RenderRow::Data"),
+            RenderRow::DetailPanel { .. } => panic!("Expected RenderRow::Data"),
         }
         match &view[1] {
             RenderRow::Data { row, .. } => assert_eq!(row.dept, "Eng"), // West/Eng < West/Sales
-            _ => panic!("Expected RenderRow::Data"),
+            RenderRow::DetailPanel { .. } => panic!("Expected RenderRow::Data"),
         }
         match &view[2] {
             RenderRow::Data { row, .. } => assert_eq!(row.score, 10), // West/Sales/10 < West/Sales/30
-            _ => panic!("Expected RenderRow::Data"),
+            RenderRow::DetailPanel { .. } => panic!("Expected RenderRow::Data"),
         }
         match &view[3] {
             RenderRow::Data { row, .. } => assert_eq!(row.score, 30),
-            _ => panic!("Expected RenderRow::Data"),
+            RenderRow::DetailPanel { .. } => panic!("Expected RenderRow::Data"),
         }
     }
 

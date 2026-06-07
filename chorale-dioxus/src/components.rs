@@ -171,7 +171,7 @@ pub fn ExportXlsxButton<TRow: Clone + 'static>(
         let sig = handle.signal();
         let state = sig.peek();
         let mut opts = XlsxOptions::default();
-        opts.sheet_name = sheet_name.clone();
+        opts.sheet_name.clone_from(&sheet_name);
         let Ok(bytes) = to_xlsx(&*state, &opts) else {
             return;
         };
@@ -179,14 +179,14 @@ pub fn ExportXlsxButton<TRow: Clone + 'static>(
         let dl = js_string_literal(&filename);
         // atob → Uint8Array → Blob → object URL → anchor click
         let js = format!(
-            r#"(()=>{{
+            r"(()=>{{
                 var r=atob('{b64}'),n=r.length,u=new Uint8Array(n);
                 for(var i=0;i<n;i++)u[i]=r.charCodeAt(i);
                 var bl=new Blob([u],{{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}});
                 var url=URL.createObjectURL(bl),a=document.createElement('a');
                 a.href=url;a.download={dl};a.click();
                 setTimeout(()=>URL.revokeObjectURL(url),100);
-            }})()"#
+            }})()"
         );
         dioxus::document::eval(&js);
     };
@@ -903,14 +903,14 @@ dioxus.send(parts.join('\n'));"
                             };
                             let b64 = to_base64(&bytes);
                             let js = format!(
-                                r#"(()=>{{
+                                r"(()=>{{
                                     var r=atob('{b64}'),n=r.length,u=new Uint8Array(n);
                                     for(var i=0;i<n;i++)u[i]=r.charCodeAt(i);
                                     var bl=new Blob([u],{{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}});
                                     var url=URL.createObjectURL(bl),a=document.createElement('a');
                                     a.href=url;a.download='chorale-export.xlsx';a.click();
                                     setTimeout(()=>URL.revokeObjectURL(url),100);
-                                }})()"#
+                                }})()"
                             );
                             dioxus::document::eval(&js);
                         },
@@ -1396,7 +1396,7 @@ dioxus.send(parts.join('\n'));"
                                             let parent = state.rows.iter()
                                                 .find(|(rid, _)| *rid == pid)
                                                 .map(|(_, r)| r.clone());
-                                            detail_panel_tr(pid, parent, &detail_renderer, effective_col_count, win.start_index + i)
+                                            detail_panel_tr(pid, parent, detail_renderer.as_ref(), effective_col_count, win.start_index + i)
                                         }
                                     }
                                 }
@@ -1567,7 +1567,7 @@ fn compute_window_slice<TRow: Clone>(
 fn detail_panel_tr<TRow: Clone + PartialEq + 'static>(
     parent_row_id: RowId,
     parent_row: Option<TRow>,
-    detail_renderer: &Option<Callback<TRow, Element>>,
+    detail_renderer: Option<&Callback<TRow, Element>>,
     colspan: usize,
     row_index: usize,
 ) -> Element {
@@ -3089,6 +3089,8 @@ fn render_page_btn<TRow: Clone + PartialEq + 'static>(
 #[cfg(test)]
 #[allow(clippy::float_cmp, clippy::unwrap_used)]
 mod tests {
+    use std::sync::Arc;
+
     use chorale_core::{
         visible_row_ids, visible_view, visible_window_for_state, Alignment, CellValue, ColumnDef,
         ColumnId, RenderKind, RenderRow, RowId, SortDirection, SortState, TableState,
@@ -3187,7 +3189,7 @@ mod tests {
     #[test]
     fn compute_window_slice_handles_empty_view() {
         let mut state = make_state(0.0, 40.0, 300.0);
-        state.rows.clear();
+        Arc::make_mut(&mut state.rows).clear();
         let view = visible_view(&state);
         let (win, slice) = compute_window_slice(&state, &view, false);
         assert_eq!(win.start_index, 0);
