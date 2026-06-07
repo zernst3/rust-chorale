@@ -578,7 +578,12 @@ fn multiselect_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 {count_label}
             </button>
             <Show when=move || is_open.get()>
-                <div style="position:absolute;top:100%;left:0;z-index:100;\
+                // z-index must be high enough to win against the table's
+                // sticky-header cells (which create stacking contexts at
+                // z-index: 1) AND against any frozen-column body cells
+                // (which use frozen_column_z_index, default 2). 9999
+                // guarantees the dropdown floats above the entire table.
+                <div style="position:absolute;top:100%;left:0;z-index:9999;\
                              background:white;border:1px solid #ddd;border-radius:3px;\
                              padding:0.25rem;min-width:8rem;max-height:200px;\
                              overflow-y:auto;box-shadow:0 2px 8px rgba(0,0,0,0.15);">
@@ -1706,26 +1711,24 @@ where
                 }
             }}
 
-            // Selection toolbar slot
-            {move || {
-                let non_empty = sig.with(|s| !s.selection.is_empty());
-                if non_empty {
-                    selection_toolbar.as_ref().map(|slot| {
-                        view! {
-                            <div
-                                class="chorale-selection-toolbar"
-                                style="padding:0.5rem 1rem;border-bottom:1px solid #ddd;\
-                                       background:#fffbeb;"
-                            >
-                                {slot()}
-                            </div>
-                        }
-                        .into_any()
-                    })
-                } else {
-                    None
+            // Selection toolbar slot. Renders whenever the slot is provided,
+            // regardless of selection size — consumer-supplied toolbars
+            // typically include "Select all" affordances that are useful
+            // exactly in the empty-selection state. The wrapper carries
+            // only structural styling; the slot's own content provides
+            // visual treatment.
+            {selection_toolbar.as_ref().map(|slot| {
+                view! {
+                    <div
+                        class="chorale-selection-toolbar"
+                        style="width:100%;box-sizing:border-box;\
+                               border-bottom:2px solid #1d4ed8;"
+                    >
+                        {slot()}
+                    </div>
                 }
-            }}
+                .into_any()
+            })}
 
             // Virtualized scroll container
             <div

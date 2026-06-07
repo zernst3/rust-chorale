@@ -52,6 +52,14 @@ Affects both the `chorale_core::toggle_sort` free function and the `UseTableHand
 
   Originally routed to v0.3.0 Tier 2 (gap-analysis line 209); pulled into
   v0.2.0 on 2026-06-06 for a consumer-app dependency.
+- **XLSX export (Item 18).** `to_xlsx` serializes the full post-filter / post-sort
+  dataset to an Excel-compatible `.xlsx` workbook. Behind a `xlsx` Cargo feature
+  (`chorale-core/xlsx` + `chorale-dioxus/xlsx`) so consumers who don't need it
+  don't pull in the `rust_xlsxwriter` dependency. Mirror prop `xlsx_export: bool`
+  on `<Table>` shows an "Export Excel" button in the pagination footer with the
+  same styling as `csv_export`; a standalone `ExportXlsxButton` component is
+  also re-exported for layouts that want the button elsewhere. Per-column
+  `Currency`, `Date`, and `Number` render kinds map to native Excel cell formats.
 - `StateError::InvalidModeForTransition`, `StateError::UnknownColumnId` variants.
 - `NaiveDate` re-export so adapter crates do not need a direct `chrono` dependency.
 

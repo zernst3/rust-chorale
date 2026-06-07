@@ -568,22 +568,6 @@ fn App() -> impl IntoView {
                                                 "Deselect all"
                                             </button>
                                         </div>
-                                        <button style="padding: 0.25rem 0.75rem; \
-                                                       background: rgba(255,255,255,0.2); \
-                                                       color: white; \
-                                                       border: 1px solid rgba(255,255,255,0.4); \
-                                                       border-radius: 3px; cursor: pointer; \
-                                                       font-size: 0.8rem;">
-                                            "[Delete Selected]"
-                                        </button>
-                                        <button style="padding: 0.25rem 0.75rem; \
-                                                       background: rgba(255,255,255,0.2); \
-                                                       color: white; \
-                                                       border: 1px solid rgba(255,255,255,0.4); \
-                                                       border-radius: 3px; cursor: pointer; \
-                                                       font-size: 0.8rem;">
-                                            "[Export Selected]"
-                                        </button>
                                     </div>
                                 }
                             })
