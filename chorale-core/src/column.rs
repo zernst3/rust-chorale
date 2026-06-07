@@ -220,8 +220,7 @@ pub enum EditorKind {
 ///
 /// `Custom` is intentionally absent: custom cell rendering requires Dioxus
 /// types (`Element`, `EventHandler`) and lives in `chorale-dioxus`
-/// per CHORALE-CORE-1. See recon-2 § 7b (and the CHORALE-CORE-1
-/// auto-call entry 2026-06-03-B).
+/// per CHORALE-CORE-1.
 #[non_exhaustive]
 #[derive(Clone, Debug, Default)]
 pub enum RenderKind {

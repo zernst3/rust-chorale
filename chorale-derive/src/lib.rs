@@ -22,7 +22,6 @@
 //! // }
 //! ```
 //!
-//! See `docs/recon/2026-06-04-item-11-0d-chorale-derive.md` for the full spec.
 
 extern crate proc_macro;
 

@@ -41,10 +41,8 @@ pub struct Row<TRow> {
 
 /// Cell metadata passed to `CellClassFn` resolvers.
 ///
-/// Uses pure-data fields only (no Dioxus types) so this type stays in
-/// `chorale-core` per CHORALE-CORE-1. This differs from the `CellContext`
-/// shape in recon-2 § 7c (which included `EventHandler<TRow>` and belongs
-/// in `chorale-dioxus`). See auto-call ledger entry 2026-06-03-B.
+/// Pure-data fields only (no Dioxus types) so this type stays in
+/// `chorale-core` per CHORALE-CORE-1.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct CellInfo<'a, TRow> {

@@ -441,9 +441,6 @@ pub fn visible_window(
 /// The complexity is O(n) over `total_rows` for the prefix-sum build.
 /// If profiling later shows cost above 2 ms at scale, the prefix-sum can
 /// be cached in `TableState` as a subsequent non-breaking field addition.
-///
-/// Per VIRT-2: introduced in v0.2.0 (Item 6 — variable-row-height
-/// virtualization, signed off 2026-06-04).
 #[must_use]
 pub fn visible_window_variable<S: std::hash::BuildHasher>(
     row_heights: &HashMap<usize, f64, S>,
@@ -1796,7 +1793,7 @@ mod tests {
         }
     }
 
-    // ---- Bug 8 regression: collapse-all must still show group headers ------
+    // ---- collapse-all must still show group headers ----------------------
 
     #[test]
     fn collapse_all_groups_still_shows_headers() {

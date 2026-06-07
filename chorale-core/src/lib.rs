@@ -528,8 +528,6 @@ pub use views::visible_window_for_state;
 /// different heights. Pass `&state.row_heights` as the first argument.
 /// Rows not yet measured fall back to `default_row_height`. The window
 /// geometry uses a prefix-sum array (O(n)) and binary search.
-///
-/// Per VIRT-2 (v0.2.0 Item 6, signed off 2026-06-04).
 pub use views::visible_window_variable;
 
 /// Serialize the post-filter / post-sort view (all pages) to an RFC 4180 CSV string.

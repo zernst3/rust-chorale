@@ -201,35 +201,39 @@ pub fn ExportXlsxButton<TRow: Clone + 'static>(
 /// Renders column headers, an optional filter row, virtualized data rows,
 /// pagination controls, and optional selection checkboxes. All features are
 /// opt-in via props; the minimal form shows a read-only sorted table.
-///
-/// ## Props
-///
-/// | Prop | Type | Default | Effect |
-/// |---|---|---|---|
-/// | `handle` | `UseTableHandle<TRow>` | — | Required. Reactive handle from `use_table`. |
-/// | `sort_enabled` | `bool` | `true` | Show sort-direction arrows and make sortable headers clickable. Set `false` to render headers as plain text without clearing existing sort state. |
-/// | `filter_enabled` | `bool` | `false` | Show a filter input row below the column headers. Each column renders its `FilterKind` UI: text input, numeric range, date range, multi-select dropdown, or boolean radio group. |
-/// | `selection_enabled` | `bool` | `false` | Show a checkbox column on the left. The header checkbox toggles selection for all visible rows on the current page. Read the selection via `handle.signal().read().selection`. |
-/// | `cell_renderers` | `CellRenderers` | empty | Per-column custom renderers that override `RenderKind`. Pass `CellRenderers::new(map)` with a `HashMap<ColumnId, CellRenderer>`. |
-/// | `column_toolbar` | `bool` | `false` | Show a column visibility toolbar above the table. Each column gets a toggle checkbox. |
-/// | `csv_export` | `bool` | `false` | Show a "Download CSV" button above the table. Exports the full post-filter/post-sort dataset (not just the current page). |
-/// | `resize_enabled` | `bool` | `false` | Show drag handles on column header borders. Dragging adjusts `column_widths` in the table state. |
-/// | `variable_row_height` | `bool` | `false` | Enable variable-row-height virtualization (VIRT-2). When `true`, the component measures each rendered row's height after mount via a DOM eval and caches the result in `state.row_heights`. The `row_height` prop (or `state.row_height`) is used as the fallback for unmeasured rows. Requires a web target. |
-/// | `validate_edit` | `ValidateEditFn` | no-op | Optional synchronous validator called before a cell edit is committed. Return `Ok(())` to allow, `Err(msg)` to show an inline error. |
-/// | `on_commit_edit` | `Option<EventHandler<CommittedEdit<TRow>>>` | `None` | Fired after a successful commit. Receives the new raw value and a `PriorEdit` snapshot for rollback. |
-/// | `selection_toolbar` | `Option<Element>` | `None` | Optional slot rendered above the table whenever the slot is `Some`, regardless of selection size. Use for bulk-action bars; include affordances like "Select all" that are useful in the empty-selection state. Wrapped in `div.chorale-selection-toolbar`. |
-/// | `labels` | `Option<Labels>` | `None` | All user-visible strings (filter placeholder, pagination labels, CSV button, etc.). `None` uses English defaults. Override for i18n. |
-/// | `column_reorder_enabled` | `bool` | `false` | Show drag handles on column headers. Drop fires `move_column` and triggers `on_column_order_change`. |
-/// | `on_column_order_change` | `Option<EventHandler<Vec<ColumnId>>>` | `None` | Called with the new `column_order` vec after a successful column drag-and-drop. |
+/// Per-prop docs live on each field below.
 #[component]
 pub fn Table<TRow: Clone + PartialEq + 'static>(
+    /// Required. Reactive handle returned by `use_table`.
     handle: UseTableHandle<TRow>,
-    #[props(default = true)] sort_enabled: bool,
-    #[props(default = false)] filter_enabled: bool,
-    #[props(default = false)] selection_enabled: bool,
-    #[props(default)] cell_renderers: CellRenderers,
-    #[props(default = false)] column_toolbar: bool,
-    #[props(default = false)] csv_export: bool,
+    /// Show sort-direction arrows and make sortable headers clickable.
+    /// Setting this to `false` renders headers as plain text without
+    /// clearing any existing sort state.
+    #[props(default = true)]
+    sort_enabled: bool,
+    /// Show a filter input row below the column headers. Each column
+    /// renders its `FilterKind` UI: text input, numeric range, date
+    /// range, multi-select dropdown, or boolean radio group.
+    #[props(default = false)]
+    filter_enabled: bool,
+    /// Show a checkbox column on the left. The header checkbox toggles
+    /// selection for all visible rows on the current page. Read the
+    /// selection via `handle.signal().read().selection`.
+    #[props(default = false)]
+    selection_enabled: bool,
+    /// Per-column custom renderers that override the column's `RenderKind`.
+    /// Pass `CellRenderers::new(map)` with a `HashMap<ColumnId, CellRenderer>`.
+    #[props(default)]
+    cell_renderers: CellRenderers,
+    /// Show a column visibility toolbar above the table. Each column gets
+    /// a toggle checkbox.
+    #[props(default = false)]
+    column_toolbar: bool,
+    /// Show an "Export CSV" button in the pagination footer. Exports the
+    /// full post-filter / post-sort dataset (not just the current page) in
+    /// RFC 4180 format.
+    #[props(default = false)]
+    csv_export: bool,
     /// Show an "Export Excel" button next to the CSV export in the pagination
     /// footer. Exports the full post-filter / post-sort dataset as an .xlsx
     /// workbook with the active filters baked in. **No-op unless the
@@ -238,7 +242,10 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     /// the prop compiles fine but the button does not render.
     #[props(default = false)]
     xlsx_export: bool,
-    #[props(default = false)] resize_enabled: bool,
+    /// Show drag handles on column header borders. Dragging adjusts the
+    /// `column_widths` map in the table state.
+    #[props(default = false)]
+    resize_enabled: bool,
     /// When `true`, the header row stays pinned to the top of the scroll
     /// container as the user scrolls vertically (`position: sticky; top: 0`
     /// on every header TH). When `false`, the header scrolls with the body.
@@ -247,7 +254,13 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     /// Default: `true` (matches standard data-grid UX).
     #[props(default = true)]
     sticky_header: bool,
-    #[props(default = false)] variable_row_height: bool,
+    /// Enable variable-row-height virtualization (VIRT-2). When `true`, the
+    /// component measures each rendered row's height after mount via a DOM
+    /// eval and caches it in `state.row_heights`. The `row_height` field on
+    /// `TableState` is used as the fallback for unmeasured rows. Web target
+    /// only.
+    #[props(default = false)]
+    variable_row_height: bool,
     /// **Inline mode** (default `false`). When `true`, the `<Table>` does NOT
     /// render its own scroll container — the body renders at its natural full
     /// height and any overflow is handled by the parent's scroll context.
@@ -258,18 +271,37 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     /// hand-off discontinuities (master/detail panels, sidebars, modals).
     /// The consumer should keep the dataset small enough that rendering every
     /// row at once is acceptable (typically <500 rows).
-    #[props(default = false)] inline: bool,
-    #[props(default)] validate_edit: ValidateEditFn,
+    #[props(default = false)]
+    inline: bool,
+    /// Optional synchronous validator called before a cell edit is
+    /// committed. Return `Ok(())` to allow, `Err(msg)` to display `msg` as
+    /// an inline error and leave the editor open.
+    #[props(default)]
+    validate_edit: ValidateEditFn,
+    /// Fired after a cell edit successfully commits. Receives the new raw
+    /// value and a `PriorEdit` snapshot suitable for rollback.
     on_commit_edit: Option<EventHandler<CommittedEdit<TRow>>>,
-    #[props(default)] selection_toolbar: Option<Element>,
-    /// Optional per-row detail renderer. When `Some`, a 24px chevron column is
-    /// prepended; clicking it calls `toggle_row_expansion`. `RenderRow::DetailPanel`
-    /// rows render as `<tr><td colspan>` containing the returned `Element`.
-    ///
-    /// Per CHANGELOG Item N (master/detail, MD-B).
-    #[props(default)] detail_renderer: Option<Callback<TRow, Element>>,
-    #[props(default)] labels: Option<Labels>,
-    #[props(default = false)] column_reorder_enabled: bool,
+    /// Optional bulk-action toolbar slot rendered above the table whenever
+    /// it is `Some`, regardless of selection size. Include affordances like
+    /// "Select all" that are useful in the empty-selection state.
+    /// Wrapped in `div.chorale-selection-toolbar`.
+    #[props(default)]
+    selection_toolbar: Option<Element>,
+    /// Optional per-row detail renderer. When `Some`, a 24px chevron column
+    /// is prepended; clicking it calls `toggle_row_expansion`. Detail rows
+    /// render as `<tr><td colspan>` containing the returned `Element`.
+    #[props(default)]
+    detail_renderer: Option<Callback<TRow, Element>>,
+    /// Override every user-visible string (filter placeholder, pagination
+    /// labels, export buttons, etc.). `None` uses English defaults.
+    #[props(default)]
+    labels: Option<Labels>,
+    /// Show drag handles on column headers. Successful drops fire
+    /// `move_column` on the handle and trigger `on_column_order_change`.
+    #[props(default = false)]
+    column_reorder_enabled: bool,
+    /// Called with the new `column_order` vec after a successful column
+    /// drag-and-drop.
     on_column_order_change: Option<EventHandler<Vec<ColumnId>>>,
     /// Fired when the Tab key moves focus to a cell whose column has `EditorKind` configured.
     /// The parent can use this to call `handle.start_edit(row_id, col_id)`.
@@ -347,7 +379,6 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     // → the view memo does NOT re-run the filter+sort+paginate pipeline.
     //
     // At 1M rows this eliminates ~30 MB of allocation per scroll tick.
-    // See docs/perf-2026-06-04-fine-grained-reactivity.md for rationale.
     //
     // Known limitation: update_row changes a row's value without changing
     // rows.len(), so view won't recompute immediately. The view re-syncs on
@@ -405,16 +436,13 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     // Column reorder cleanup: when state.column_order changes (= a drop just
     // applied), force-clear drag_col_id + drag_over_col.
     //
-    // Why: the ondragend handler lives on the SOURCE <th>, but after a
-    // successful drop the columns are re-rendered in a new arrangement, so
-    // the source <th>'s element identity may not survive long enough to fire
-    // ondragend reliably. Result: drag_col_id stays set and the dashed
+    // The ondragend handler lives on the SOURCE <th>, but after a successful
+    // drop the columns are re-rendered in a new arrangement, so the source
+    // <th>'s element identity may not survive long enough to fire ondragend
+    // reliably. Without this effect, drag_col_id stays set and the dashed
     // drop-target outline persists on whichever column ended up in the slot,
-    // even though no drag is in progress. Reproduced 2026-06-06 by Zach in
-    // screen recordings vid2 and vid5.
-    //
-    // This use_effect catches every successful reorder by watching
-    // column_order; both signals reset on any change.
+    // even though no drag is in progress. Watching column_order catches
+    // every successful reorder and resets both signals.
     {
         let column_order_memo = use_memo(move || sig.read().column_order.clone());
         let mut drag_col_id_w = drag_col_id;
@@ -452,15 +480,15 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
         });
     }
 
-    // Bug 6 fix: clear active cell + range when the keyboard container loses focus
-    // to an element outside the table. onfocusin/out bubble so we can catch it on
-    // the outer div. We use JS to check relatedTarget vs the container boundary.
+    // Clear active cell + range when the keyboard container loses focus to
+    // an element outside the table. focusin/out bubble so we catch them on
+    // the outer div via a capturing document-level mousedown listener that
+    // checks relatedTarget vs the container boundary. Edit commits are
+    // handled separately in editor_td's onblur; this path only cleans up
+    // range/active state.
     {
         let kb_id_focus = kb_id.clone();
         let click_outside_counter: Signal<u32> = use_signal(|| 0);
-        // (Edit commit moved to editor_td's onblur handler; click-outside
-        // only handles range/active cleanup now, no need to clone validator
-        // or commit handler here.)
         // Spawn an async eval that listens for a custom "chorale-blur" event
         // dispatched from the onmousedown on the document.
         {
@@ -520,31 +548,17 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
         });
     }
 
-    // VIRT-2: variable-row-height measurement loop.
-    // Always called (hooks must be unconditional); no-op when variable_row_height=false.
-    // After each render, queries rendered rows by data-chorale-index attribute,
-    // measures their heights via getBoundingClientRect, and dispatches a batch
-    // state update if any measurement differs from the cached value by > 0.5px.
-    // The threshold prevents convergence loops caused by sub-pixel float rounding.
+    // VIRT-2: variable-row-height measurement loop. Hooks must be
+    // unconditional, so this is always called and no-ops when
+    // variable_row_height=false. The 0.5px diff threshold below the
+    // dispatch site prevents convergence loops caused by sub-pixel float
+    // rounding.
     //
-    // SUBSCRIPTION (2026-06-06): the prior version had no reactive subscription
-    // in its outer closure — `sig.read()` was only called inside the spawned
-    // future, which is async and runs AFTER the effect, so Dioxus saw the
-    // effect as having zero dependencies and only ran it ONCE on initial
-    // mount. Result: parent table's row_heights stayed empty forever, scroll
-    // math used the uniform 40px fallback, and the master/detail layout
-    // visibly jumped when the user scrolled past an expanded panel.
-    //
-    // The fix mirrors the pattern at the page_memo / column_order_memo /
-    // edit_target_memo use_effects above: derive a memo over the fields that
-    // should trigger remeasurement, read it at the top of use_effect to
-    // register the subscription, then run the measurement body.
-    //
-    // Trigger fields: a coarse scroll bucket (row-aligned, so we re-measure
-    // when the visible window slides by a row but not on sub-row jitter),
-    // viewport_height, the expanded_rows set (master/detail toggles), the
-    // data_generation counter (cell edits that could affect row height), the
-    // row count (insertions/deletions), and the current page.
+    // `meas_trigger` is the reactive dependency that drives remeasurement.
+    // It must be read at the TOP of the effect body — a `sig.read()` inside
+    // the spawned future runs after the effect completes and does not count
+    // as a Dioxus dependency, so without this read the effect would only
+    // fire once at initial mount and row_heights would stay empty forever.
     let meas_trigger = use_memo(move || {
         let s = sig.read();
         #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
@@ -566,12 +580,7 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     {
         let scroll_id_meas = scroll_id.clone();
         use_effect(move || {
-            // Subscribe to remeasurement triggers BEFORE any conditional /
-            // spawned work — this is what Dioxus actually tracks. A
-            // `sig.read()` inside the spawned future below does NOT count
-            // (it runs after the effect completes), so without this read
-            // the effect's dep set would be empty and it would only ever
-            // fire once at initial mount.
+            // Register the meas_trigger subscription (see comment above).
             let _ = meas_trigger.read();
             let cid = scroll_id_meas.clone();
             let mut sig2 = handle.signal();
@@ -1296,16 +1305,13 @@ dioxus.send(parts.join('\n'));"
 
                     tbody {
                         if is_grouped {
-                            // GroupedPaginationMode::Virtualized previously rendered the FULL
-                            // grouped tree at once (e.g. 10K data rows + N group headers in the
-                            // qa-harness Group-by-Role case). Browser froze under that DOM weight.
-                            // Reproduced 2026-06-06 by Zach in screen recording vid5.
-                            //
-                            // Slice to a window when Virtualized mode is on — same scroll-driven
-                            // math as the non-grouped data-row case. start_index / end_index are
-                            // derived from scroll_top / viewport_height / row_height. Buffer rows
-                            // ensure smooth scrolling. DataRowsOnly mode is already paginated, so
-                            // no slicing needed there.
+                            // GroupedPaginationMode::Virtualized slices to a scroll-driven
+                            // window — start_index / end_index from scroll_top /
+                            // viewport_height / row_height, with buffer rows for smooth
+                            // scrolling. Without slicing, a 10k-row grouped dataset
+                            // (~10k data rows + N group headers) would render every row
+                            // at once and freeze the browser under the DOM weight.
+                            // DataRowsOnly mode is already paginated, so no slicing.
                             {
                                 let grouped_len = grouped_view_read.len();
                                 let (start_idx, end_idx) = if is_virtualized_grouped && grouped_len > 0 {
@@ -1559,17 +1565,14 @@ fn detail_panel_tr<TRow: Clone + PartialEq + 'static>(
     row_index: usize,
 ) -> Element {
     let key = format!("{parent_row_id:?}");
-    // data-chorale-index is what the VIRT-2 measurement loop queries to read
-    // each <tr>'s getBoundingClientRect().height back into state.row_heights.
-    // Without it, the detail panel's actual rendered height (e.g. 200 px for
-    // a 5-item child table) never enters the cache, the variable-height
-    // virtualizer falls back to state.row_height (40 px) for this slot, and
-    // the running total used by visible_window_variable underestimates total
-    // content height by (real - estimate) per expanded row. The visible
-    // result: layout offset and scroll math drift, then snap together at
-    // the boundary as the user scrolls — the "jump" Zach reproduced
-    // 2026-06-06. Adding the attribute lets the existing measurement loop
-    // treat detail panels like any other variable-height row.
+    // data-chorale-index lets the VIRT-2 measurement loop record this
+    // panel's actual rendered height (e.g. 200 px for a 5-item child table)
+    // in state.row_heights. Without it, visible_window_variable would fall
+    // back to state.row_height (40 px) for the panel slot — its prefix-sum
+    // would underestimate content height by (real - estimate) per expanded
+    // row, and scroll math would drift then snap at boundaries (the
+    // "jump"). With the attribute, detail panels are measured like any
+    // other variable-height row.
     match (parent_row, detail_renderer) {
         (Some(prow), Some(renderer)) => {
             let content = renderer.call(prow);
@@ -1661,13 +1664,12 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
         && drag_col_id.read().is_some_and(|id| id != col_id)
         && *drag_over_col.read() == Some(col_id);
 
-    // STRUCTURAL OVERLAY (2026-06-06 fix): render the drop-target dashed
-    // outline as a child <div> instead of an inline `outline:` style on the
-    // <th>. Inline-style updates on <th> were not reliably picked up by
-    // Dioxus 0.7's diff after column reorder, so the outline persisted on
-    // the column that occupied the source slot post-drop (vid2). Adding or
-    // removing a child node forces Dioxus to do a structural mutation
-    // instead of an attribute diff.
+    // Drop-target dashed outline renders as a child <div>, not an inline
+    // `outline:` style on the <th>. Dioxus 0.7's inline-style diff is
+    // unreliable on header THs after column reorder — the outline would
+    // persist on the column that occupied the source slot post-drop.
+    // Adding or removing a child node forces a structural DOM mutation
+    // that the diff can't drop.
 
     rsx! {
         th {
@@ -2764,18 +2766,13 @@ fn data_td<TRow: Clone + PartialEq + 'static>(
     let val = (col.accessor)(row);
     let align = alignment_css(col.alignment);
     let w = col_width_style(override_width, col.initial_width);
-    // STRUCTURAL HIGHLIGHTS (2026-06-06 fix for vid new1/new2): move
-    // is_in_range + is_active_cell visual treatment OUT of the inline style
-    // string and INTO conditionally-rendered overlay <div>s.
-    //
-    // Why: with the prior inline-style approach, plain-click clears in
-    // chorale-core were correctly mutating state.range_selection (verified
-    // by unit tests), but Dioxus 0.7 was not reliably re-emitting the
-    // updated `style` attribute on the previously-highlighted <td>s — the
-    // blue background visually persisted. By rendering the highlight as a
-    // child overlay node that either exists or doesn't, Dioxus has to
-    // structurally add/remove a DOM node and cannot silently keep stale
-    // attribute state.
+    // is_in_range + is_active_cell visuals render as conditional overlay
+    // <div>s, NOT as inline-style declarations on the <td>. Dioxus 0.7's
+    // attribute diff doesn't reliably re-emit a changed `style` on <td>s
+    // when range_selection clears, so the blue highlight visually persists
+    // even though state is correctly updated. A child overlay node that
+    // either exists or doesn't forces a structural DOM mutation that the
+    // diff can't drop.
     let style = if variable_row_height {
         format!(
             "position: relative; padding: 0.5rem 1rem; text-align: {align}; \
@@ -2804,15 +2801,13 @@ fn data_td<TRow: Clone + PartialEq + 'static>(
                     || e.modifiers().contains(Modifiers::META);
                 let shift = e.modifiers().contains(Modifiers::SHIFT);
                 let mut sig_w = handle.signal();
-                // Plain click (no modifier): explicitly clear any prior
-                // range_selection BEFORE applying the new single-cell range,
-                // as a two-pass write. start_range_selection already replaces
-                // range_selection, but a screen recording (Zach, 2026-06-06,
-                // vid1) showed prior-range highlights persisting on screen
-                // after subsequent plain clicks — symptom of a signal-update
-                // path that didn't trigger re-render of the previously
-                // highlighted cells. The explicit clear forces a clean signal
-                // transition that downstream renders see unambiguously.
+                // Plain click (no modifier): explicitly clear range_selection
+                // FIRST, then apply the new single-cell range as a separate
+                // signal write. start_range_selection already replaces the
+                // range in state, but a single combined write doesn't reliably
+                // re-render the previously-highlighted cells in Dioxus 0.7 —
+                // the two-pass clear + set forces a clean signal transition
+                // that downstream renders see unambiguously.
                 if !ctrl && !shift {
                     let cleared = clear_range_selection(&*sig_w.peek());
                     sig_w.set(cleared);
@@ -2854,12 +2849,12 @@ fn data_td<TRow: Clone + PartialEq + 'static>(
                 }
             }
             {content}
-            // Fill handle removed 2026-06-06: the 6×6 blue square in the
-            // bottom-right of the active cell was unreliable as a drag
-            // target on a 40 px row, and Shift+click already covers the
+            // No fill-handle visual: a 6×6 blue square at the bottom-right
+            // of the active cell is too small to be a reliable drag target
+            // on a 40 px row, and Shift+click already covers the
             // "extend a range to here" use case Excel-style. is_focus_cell
-            // is still computed at the call site for callers that may want
-            // the visual cue back in the future, but the rsx is omitted.
+            // is still computed at the call site so it's available if a
+            // visual cue is added later.
         }
     }
 }
@@ -3608,7 +3603,7 @@ mod tests {
         assert!(view.is_empty());
     }
 
-    // ---- Bug 4 regression: multi-sort 3+ columns --------------------------
+    // ---- multi-sort 3+ columns ---------------------------------------------
 
     #[test]
     fn multi_sort_append_grows_to_three_columns() {
@@ -3654,7 +3649,7 @@ mod tests {
         assert_eq!(s3.sort[2].column, ColumnId("extra"));
     }
 
-    // ---- Bug 11 regression: range selection includes anchor and focus -----
+    // ---- range selection includes anchor and focus -------------------------
 
     #[test]
     fn range_selection_single_cell_covers_one_cell() {

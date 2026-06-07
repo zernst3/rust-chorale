@@ -929,7 +929,7 @@ pub fn set_active_cell<TRow: Clone>(
     }
     Ok(TableState {
         active_cell: Some(ActiveCell::new(row_idx, column_id)),
-        range_selection: vec![], // Bug 5b: plain set_active_cell clears range
+        range_selection: vec![], // plain set_active_cell clears any range
         ..state.clone()
     })
 }

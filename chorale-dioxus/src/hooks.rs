@@ -317,9 +317,9 @@ mod tests {
         assert_copy::<UseTableHandle<String>>();
     }
 
-    // Regression test for Bug A (2026-06-05): dispatch must not create a reactive
-    // subscription to the table signal. Calling set_pagination_mode (or any dispatch)
-    // must not trigger a re-read of the signal through a reactive channel.
+    // dispatch must not create a reactive subscription to the table signal.
+    // Calling set_pagination_mode (or any dispatch) must not trigger a re-read
+    // of the signal through a reactive channel.
     //
     // This is a structural test: dispatch reads via peek() (non-subscribing), then
     // writes via set(). We verify the transition produces the expected state by
