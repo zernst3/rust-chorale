@@ -1,22 +1,31 @@
 # Deploy chorale QA harnesses to GitHub Pages.
 #
-# Live demo: https://zernst3.github.io/rust-chorale/
+# Live site: https://zernst3.github.io/rust-chorale/
 #   /dioxus/  — Dioxus adapter QA harness
 #   /leptos/  — Leptos adapter QA harness
 #
-# ONE-TIME MANUAL STEP (Zach must do after first merge to main):
+# Manual trigger only. Visit Actions → "Deploy to GitHub Pages" → "Run
+# workflow", check the harness(es) you want to deploy, and Run. Each
+# checkbox is independent — deploy one, the other, or both. The job
+# fails fast if neither is selected.
+#
+# ONE-TIME MANUAL STEP (Zach must do once after first merge to main):
 #   GitHub repo → Settings → Pages → Source: "GitHub Actions"
 #   Without this the deploy step will fail with a 404-style error.
-#
-# This workflow only triggers on push to main (and workflow_dispatch).
-# It does NOT run on draft-release/* branches.
 
 name: Deploy to GitHub Pages
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      deploy_dioxus:
+        description: 'Deploy the Dioxus QA harness'
+        type: boolean
+        default: true
+      deploy_leptos:
+        description: 'Deploy the Leptos QA harness (currently under construction)'
+        type: boolean
+        default: false
 
 concurrency:
   group: github-pages
@@ -35,6 +44,14 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
 
     steps:
+      - name: Validate selection
+        run: |
+          if [ "${{ inputs.deploy_dioxus }}" != "true" ] && [ "${{ inputs.deploy_leptos }}" != "true" ]; then
+            echo "::error::Neither checkbox is selected — nothing to deploy. Re-run with at least one harness checked."
+            exit 1
+          fi
+          echo "Dioxus: ${{ inputs.deploy_dioxus }} | Leptos: ${{ inputs.deploy_leptos }}"
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -43,7 +60,7 @@ jobs:
         with:
           toolchain: stable
           targets: wasm32-unknown-unknown
-          # Disable the default rustfmt/clippy installs to keep the runner fast.
+          # Skip the default rustfmt/clippy installs to keep the runner fast.
           components: ""
 
       - name: Cache Cargo registry + build artefacts
@@ -56,45 +73,54 @@ jobs:
           key: pages-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: pages-${{ runner.os }}-
 
+      # ── Dioxus toolchain + build ────────────────────────────────────────
       - name: Install dioxus-cli (dx)
+        if: inputs.deploy_dioxus
         run: cargo install dioxus-cli --locked --version 0.7.0
 
-      - name: Install trunk
-        run: cargo install trunk --locked
-
-      # ── Dioxus build ─────────────────────────────────────────────────────
       - name: Build Dioxus QA harness
+        if: inputs.deploy_dioxus
         working-directory: examples/qa-harness
         run: dx build --release --base-path /rust-chorale/dioxus/
 
-      # ── Leptos build ─────────────────────────────────────────────────────
+      # ── Leptos toolchain + build ────────────────────────────────────────
+      - name: Install trunk
+        if: inputs.deploy_leptos
+        run: cargo install trunk --locked
+
       - name: Build Leptos QA harness
+        if: inputs.deploy_leptos
         working-directory: examples/leptos-qa-harness
         run: trunk build --release --public-url /rust-chorale/leptos/
 
-      # ── Assemble dist/ ───────────────────────────────────────────────────
+      # ── Assemble dist/ ──────────────────────────────────────────────────
       - name: Assemble dist/
         run: |
-          mkdir -p dist/dioxus dist/leptos
+          mkdir -p dist
 
-          # dx build (0.7.x) outputs to dist/ inside the package directory.
-          # Fall back to the workspace-root target path used by some versions.
-          if [ -d "examples/qa-harness/dist" ]; then
-            cp -r examples/qa-harness/dist/. dist/dioxus/
-          elif [ -d "target/dx/qa-harness/release/web/public" ]; then
-            cp -r target/dx/qa-harness/release/web/public/. dist/dioxus/
-          else
-            echo "ERROR: could not locate dx build output" >&2
-            find examples/qa-harness -name "*.wasm" 2>/dev/null | head -5
-            exit 1
+          if [ "${{ inputs.deploy_dioxus }}" = "true" ]; then
+            mkdir -p dist/dioxus
+            # dx build (0.7.x) outputs to dist/ inside the package directory.
+            # Fall back to the workspace-root target path used by some versions.
+            if [ -d "examples/qa-harness/dist" ]; then
+              cp -r examples/qa-harness/dist/. dist/dioxus/
+            elif [ -d "target/dx/qa-harness/release/web/public" ]; then
+              cp -r target/dx/qa-harness/release/web/public/. dist/dioxus/
+            else
+              echo "::error::could not locate dx build output"
+              find examples/qa-harness -name "*.wasm" 2>/dev/null | head -5
+              exit 1
+            fi
           fi
 
-          # trunk outputs to dist/ inside the package directory.
-          if [ -d "examples/leptos-qa-harness/dist" ]; then
-            cp -r examples/leptos-qa-harness/dist/. dist/leptos/
-          else
-            echo "ERROR: could not locate trunk build output" >&2
-            exit 1
+          if [ "${{ inputs.deploy_leptos }}" = "true" ]; then
+            mkdir -p dist/leptos
+            if [ -d "examples/leptos-qa-harness/dist" ]; then
+              cp -r examples/leptos-qa-harness/dist/. dist/leptos/
+            else
+              echo "::error::could not locate trunk build output"
+              exit 1
+            fi
           fi
 
           cp docs/landing-index.html dist/index.html
