@@ -3089,6 +3089,8 @@ fn render_page_btn<TRow: Clone + PartialEq + 'static>(
 #[cfg(test)]
 #[allow(clippy::float_cmp, clippy::unwrap_used)]
 mod tests {
+    use std::sync::Arc;
+
     use chorale_core::{
         visible_row_ids, visible_view, visible_window_for_state, Alignment, CellValue, ColumnDef,
         ColumnId, RenderKind, RenderRow, RowId, SortDirection, SortState, TableState,
@@ -3187,7 +3189,7 @@ mod tests {
     #[test]
     fn compute_window_slice_handles_empty_view() {
         let mut state = make_state(0.0, 40.0, 300.0);
-        state.rows.clear();
+        Arc::make_mut(&mut state.rows).clear();
         let view = visible_view(&state);
         let (win, slice) = compute_window_slice(&state, &view, false);
         assert_eq!(win.start_index, 0);

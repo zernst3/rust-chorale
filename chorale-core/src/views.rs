@@ -819,6 +819,7 @@ fn csv_quote(s: &str) -> String {
 #[allow(clippy::float_cmp, clippy::cast_precision_loss, clippy::unwrap_used)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     use crate::column::ColumnDef;
     use crate::state::TableState;
@@ -874,7 +875,7 @@ mod tests {
             .render_kind(crate::column::RenderKind::Number),
         ];
         TableState {
-            rows,
+            rows: Arc::new(rows),
             columns,
             ..TableState::new(vec![], vec![])
         }
@@ -958,7 +959,7 @@ mod tests {
     fn to_csv_quotes_commas_in_values() {
         let mut s = make_state();
         // Inject a row with a comma in the name
-        s.rows.push((
+        Arc::make_mut(&mut s.rows).push((
             RowId::new(),
             R {
                 name: "Smith, Jr.".into(),

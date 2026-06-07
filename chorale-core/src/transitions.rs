@@ -5,6 +5,7 @@
 //! No `&mut self`. No signals. No async. Unit-testable without a framework.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::error::StateError;
 use crate::range::RangeSelection;
@@ -425,21 +426,19 @@ pub fn update_row<TRow: Clone>(
     row_id: RowId,
     new_row: TRow,
 ) -> TableState<TRow> {
-    let mut rows = state.rows.clone();
-    if let Some(slot) = rows.iter_mut().find(|(id, _)| *id == row_id) {
+    let mut new_state = state.clone(); // rows clone is O(1) via Arc::clone
+    if let Some(slot) = Arc::make_mut(&mut new_state.rows)
+        .iter_mut()
+        .find(|(id, _)| *id == row_id)
+    {
         slot.1 = new_row;
     }
-    TableState {
-        rows,
-        // Bump data_generation so adapter view caches that key on this
-        // counter (e.g., the dioxus view memo) recompute on row-content
-        // changes. Without this, in-cell edits land in state.rows but the
-        // cached visible_view is never recomputed and the cell renders
-        // stale text until an unrelated transition (sort/filter/page/
-        // grouping/expansion) happens to bump a different key field.
-        data_generation: state.data_generation.wrapping_add(1),
-        ..state.clone()
-    }
+    // Bump data_generation so the adapter view memo (which keys on this
+    // counter) recomputes on row-content changes. Without this, in-cell
+    // edits land in state.rows but the cached visible_view stays stale
+    // until an unrelated transition bumps a different key field.
+    new_state.data_generation = state.data_generation.wrapping_add(1);
+    new_state
 }
 
 /// Record the measured height (px) for row at `index` in the current page view.
@@ -1353,7 +1352,7 @@ mod tests {
             ),
         ];
         TableState {
-            rows,
+            rows: Arc::new(rows),
             columns: make_columns(),
             ..TableState::new(vec![], vec![])
         }
@@ -2523,7 +2522,7 @@ mod tests {
             ),
         ];
         TableState {
-            rows,
+            rows: Arc::new(rows),
             columns: make_columns(),
             ..make_state()
         }
