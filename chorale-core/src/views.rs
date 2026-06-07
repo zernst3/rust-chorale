@@ -1852,9 +1852,14 @@ mod tests {
     fn visible_view_injects_detail_panel_after_expanded_row() {
         let s = make_state();
         let id1 = s.rows[1].0;
-        let s2 = TableState { expanded_rows: [id1].into_iter().collect(), ..s.clone() };
+        let s2 = TableState {
+            expanded_rows: [id1].into_iter().collect(),
+            ..s.clone()
+        };
         let view = visible_view(&s2);
         assert_eq!(view.len(), 4);
-        assert!(matches!(view[2], RenderRow::DetailPanel { parent_row_id } if parent_row_id == id1));
+        assert!(
+            matches!(view[2], RenderRow::DetailPanel { parent_row_id } if parent_row_id == id1)
+        );
     }
 }

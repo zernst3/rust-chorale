@@ -80,13 +80,7 @@ struct LineItem {
     unit_price: f64,
 }
 
-static LINE_ITEM_LABELS: &[&str] = &[
-    "Widget A",
-    "Widget B",
-    "Gadget C",
-    "Gizmo D",
-    "Doohickey E",
-];
+static LINE_ITEM_LABELS: &[&str] = &["Widget A", "Widget B", "Gadget C", "Gizmo D", "Doohickey E"];
 
 // Deterministic per-employee line items, seeded from the employee's email
 // so the dataset is stable across re-renders.

@@ -562,7 +562,11 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     let meas_trigger = use_memo(move || {
         let s = sig.read();
         #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-        let row_h = if s.row_height > 0.0 { s.row_height } else { 1.0 };
+        let row_h = if s.row_height > 0.0 {
+            s.row_height
+        } else {
+            1.0
+        };
         #[allow(clippy::cast_possible_truncation)]
         let scroll_bucket = (s.scroll_top / row_h).floor() as i64;
         #[allow(clippy::cast_possible_truncation)]
@@ -783,7 +787,10 @@ dioxus.send(parts.join('\n'));"
     let range_selection = state.range_selection.clone();
     // Snapshot column IDs for the keyboard handler closure (stale-on-reorder is acceptable).
     let visible_col_ids_for_kb: Vec<ColumnId> = visible_cols.iter().map(|c| c.id).collect();
-    let total_rows_for_kb = view_read.iter().filter(|r| matches!(r, RenderRow::Data { .. })).count();
+    let total_rows_for_kb = view_read
+        .iter()
+        .filter(|r| matches!(r, RenderRow::Data { .. }))
+        .count();
     // Pre-compute the set of all (row, col) cells covered by any range rectangle so that
     // per-cell rendering is O(1) lookup rather than O(ranges * cells).
     let range_cells: HashSet<(usize, ColumnId)> = {
@@ -820,13 +827,7 @@ dioxus.send(parts.join('\n'));"
         // virtualization, no spacers. `visible_window(0, MAX, ...)` returns a
         // window that covers all rows with zero pad on either side.
         let full_slice: Vec<RenderRow<TRow>> = view_read.iter().cloned().collect();
-        let win = visible_window(
-            0.0,
-            f64::MAX,
-            state.row_height,
-            full_slice.len(),
-            0,
-        );
+        let win = visible_window(0.0, f64::MAX, state.row_height, full_slice.len(), 0);
         (win, full_slice)
     } else {
         compute_window_slice(&state, &view_read, variable_row_height)
@@ -857,7 +858,13 @@ dioxus.send(parts.join('\n'));"
     let selection_set: HashSet<RowId> = state.selection.iter().copied().collect();
     let page_data_ids: Vec<RowId> = view_read
         .iter()
-        .filter_map(|r| if let RenderRow::Data { id, .. } = r { Some(*id) } else { None })
+        .filter_map(|r| {
+            if let RenderRow::Data { id, .. } = r {
+                Some(*id)
+            } else {
+                None
+            }
+        })
         .collect();
     let all_page_selected =
         !page_data_ids.is_empty() && page_data_ids.iter().all(|id| selection_set.contains(id));
@@ -3140,11 +3147,23 @@ mod tests {
         // this plain state, but the extraction logic must be correct for parity).
         let helper_ids: Vec<RowId> = helper_slice
             .iter()
-            .filter_map(|r| if let RenderRow::Data { id, .. } = r { Some(*id) } else { None })
+            .filter_map(|r| {
+                if let RenderRow::Data { id, .. } = r {
+                    Some(*id)
+                } else {
+                    None
+                }
+            })
             .collect();
         let helper_rows: Vec<R> = helper_slice
             .iter()
-            .filter_map(|r| if let RenderRow::Data { row, .. } = r { Some(row.clone()) } else { None })
+            .filter_map(|r| {
+                if let RenderRow::Data { row, .. } = r {
+                    Some(row.clone())
+                } else {
+                    None
+                }
+            })
             .collect();
 
         // Legacy reference path: two independent calls into chorale-core that

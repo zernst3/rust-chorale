@@ -1701,7 +1701,7 @@ mod tests {
         // Deselect just the current page (page 0: rows[0], rows[1])
         let s2 = deselect_all_visible_page(&s);
         assert_eq!(s2.selection.len(), 1); // 3 - 2 = 1
-        // Verify the remaining selected row is rows[2] (from page 1)
+                                           // Verify the remaining selected row is rows[2] (from page 1)
         assert!(!s2.selection.contains(&s.rows[0].0));
         assert!(!s2.selection.contains(&s.rows[1].0));
         assert!(s2.selection.contains(&s.rows[2].0));
@@ -2577,7 +2577,10 @@ mod tests {
         let s3 = extend_range_to(&s2, 1, col_score());
         assert!(!s3.range_selection.is_empty());
         let s4 = set_active_cell(&s3, 0, col_name()).unwrap();
-        assert!(s4.range_selection.is_empty(), "set_active_cell must clear range_selection");
+        assert!(
+            s4.range_selection.is_empty(),
+            "set_active_cell must clear range_selection"
+        );
         assert_eq!(s4.active_cell.map(|ac| ac.row_idx), Some(0));
     }
 

@@ -1349,7 +1349,8 @@ pub fn Table<TRow>(
     /// rows render as `<tr><td colspan>` containing the returned `AnyView`.
     ///
     /// Per CHANGELOG Item N (master/detail, MD-B).
-    #[prop(optional)] detail_renderer: Option<DetailRenderer<TRow>>,
+    #[prop(optional)]
+    detail_renderer: Option<DetailRenderer<TRow>>,
     #[prop(optional)] labels: Option<Labels>,
     #[prop(default = false)] column_reorder_enabled: bool,
     /// CSS `z-index` applied to frozen column cells.
