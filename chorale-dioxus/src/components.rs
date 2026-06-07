@@ -1184,7 +1184,16 @@ dioxus.send(parts.join('\n'));"
                                 {select_all_th(handle, all_page_selected)}
                             }
                             if has_detail {
-                                th { style: "width: 24px; padding: 0;" }
+                                // Sticky parity with every other column header.
+                                // Without `position: sticky; top: 0; background;
+                                // z-index`, the chevron column has a transparent
+                                // gap at the top of the sticky header, and the
+                                // body's chevron TDs visibly scroll OVER the
+                                // header row through that gap (Zach repro
+                                // 2026-06-06).
+                                th { style: "width: 24px; padding: 0; \
+                                            position: sticky; top: 0; \
+                                            background: #f8f9fa; z-index: 1;" }
                             }
                             for col in &visible_cols {
                                 {header_th(col, widths.get(&col.id).copied(), handle, sort_enabled, current_sort, resize_enabled, drag_state, column_reorder_enabled, drag_col_id, drag_over_col, on_column_order_change, sticky_header_css.get(&col.id).map_or("", String::as_str))}
