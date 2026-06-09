@@ -461,7 +461,7 @@ fn App() -> impl IntoView {
                         prop:checked=move || frozen_columns_on.get()
                         on:change=move |_| frozen_columns_on.update(|v| *v = !*v)
                     />
-                    " Frozen Columns (Name=Left, Salary=Right)"
+                    " Frozen Columns and Rows (Name=Left, Salary=Right)"
                 </label>
                 <label>
                     <input
@@ -609,6 +609,7 @@ fn App() -> impl IntoView {
                         xlsx_export=xlsx
                         resize_enabled=resize
                         column_reorder_enabled=col_reorder
+                        sticky_header=frozen_columns_on.get()
                         labels=labels_val
                         on_commit_edit=commit_cb
                         selection_toolbar=toolbar_fn
