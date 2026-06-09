@@ -714,6 +714,7 @@ fn header_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
     column_reorder_enabled: bool,
     drag_col_id: RwSignal<Option<ColumnId>>,
     sticky_css: &str,
+    sticky_header: bool,
 ) -> AnyView {
     let w = col_width_style(override_width, col.initial_width);
     let align = alignment_css(col.alignment);
@@ -755,14 +756,21 @@ fn header_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
         ""
     };
 
+    // Emit explicit values in both branches so Leptos reactive attr diff
+    // always performs a concrete swap rather than dropping the declaration.
+    let sticky_top_decl = if sticky_header {
+        "position:sticky;top:0;z-index:1;"
+    } else {
+        "position:static;top:auto;z-index:auto;"
+    };
     let sticky_css = sticky_css.to_owned();
     view! {
         <th
             style=format!(
                 "cursor:{drag_cursor};padding:0.5rem 1rem;border-bottom:1px solid #ddd;\
                  text-align:{align};white-space:nowrap;overflow:hidden;\
-                 text-overflow:ellipsis;position:sticky;top:0;\
-                 background:#f8f9fa;z-index:1;{w}{sticky_css}{drag_over_style}"
+                 text-overflow:ellipsis;background:#f8f9fa;\
+                 {sticky_top_decl}{w}{sticky_css}{drag_over_style}"
             )
             draggable=column_reorder_enabled
             on:click=move |ev| {
@@ -1364,6 +1372,10 @@ pub fn Table<TRow>(
     detail_renderer: Option<DetailRenderer<TRow>>,
     #[prop(optional)] labels: Option<Labels>,
     #[prop(default = false)] column_reorder_enabled: bool,
+    /// When `true` (default), the header row sticks to the top of the scroll
+    /// container. Set `false` to let it scroll with the body.
+    #[prop(default = true)]
+    sticky_header: bool,
     /// CSS `z-index` applied to frozen column cells.
     #[prop(default = 2)]
     frozen_column_z_index: i32,
@@ -1882,6 +1894,7 @@ where
                                     sticky_header_css
                                         .get(&col.id)
                                         .map_or("", String::as_str),
+                                    sticky_header,
                                 )
                             })
                             .collect();
@@ -2067,24 +2080,40 @@ where
 
                         // ---- select-all checkbox in thead ----
                         let select_all_th = if selection_enabled {
-                            Some(view! {
-                                <th style="padding:0.5rem;border-bottom:1px solid #ddd;\
-                                           background:#f8f9fa;width:2.5rem;position:sticky;top:0;">
-                                    <input
-                                        type="checkbox"
-                                        checked=all_page_selected
-                                        on:change=move |_| { handle.toggle_select_all(); }
-                                    />
-                                </th>
-                            })
+                            {
+                                let sel_sticky = if sticky_header {
+                                    "position:sticky;top:0;z-index:1;"
+                                } else {
+                                    "position:static;top:auto;z-index:auto;"
+                                };
+                                Some(view! {
+                                    <th style=format!(
+                                        "padding:0.5rem;border-bottom:1px solid #ddd;\
+                                         background:#f8f9fa;width:2.5rem;{sel_sticky}"
+                                    )>
+                                        <input
+                                            type="checkbox"
+                                            checked=all_page_selected
+                                            on:change=move |_| { handle.toggle_select_all(); }
+                                        />
+                                    </th>
+                                })
+                            }
                         } else {
                             None
                         };
 
                         let chevron_th = if has_detail {
+                            let chev_sticky = if sticky_header {
+                                "position:sticky;top:0;z-index:1;"
+                            } else {
+                                "position:static;top:auto;z-index:auto;"
+                            };
                             Some(view! {
-                                <th style="width:24px;padding:0;border-bottom:1px solid #ddd;\
-                                           background:#f8f9fa;" />
+                                <th style=format!(
+                                    "width:24px;padding:0;border-bottom:1px solid #ddd;\
+                                     background:#f8f9fa;{chev_sticky}"
+                                ) />
                             })
                         } else {
                             None
