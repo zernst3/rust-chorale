@@ -2220,7 +2220,13 @@ where
                                         <input
                                             type="checkbox"
                                             checked=all_page_selected
-                                            on:change=move |_| { handle.toggle_select_all(); }
+                                            on:change=move |ev| {
+                                                if event_target_checked(&ev) {
+                                                    handle.select_all_filtered();
+                                                } else {
+                                                    handle.deselect_all();
+                                                }
+                                            }
                                         />
                                     </th>
                                 })
