@@ -1010,7 +1010,7 @@ fn filter_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
 
     view! {
         <th style=format!(
-            "padding:0.25rem;border-bottom:1px solid #eee;position:sticky;top:0;\
+            "padding:0.25rem;border-bottom:1px solid #eee;position:sticky;top:0;z-index:3;\
              background:#fff;{w}{sticky_css}"
         )>
             {inner}
