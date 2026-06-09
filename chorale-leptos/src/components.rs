@@ -1465,7 +1465,11 @@ fn trigger_csv_download(_csv: String) {}
 ///     />
 /// }
 /// ```
-#[allow(clippy::too_many_lines, clippy::fn_params_excessive_bools)]
+#[allow(
+    clippy::too_many_lines,
+    clippy::fn_params_excessive_bools,
+    clippy::needless_pass_by_value
+)]
 #[component]
 pub fn Table<TRow>(
     handle: UseTableHandle<TRow>,
