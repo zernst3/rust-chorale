@@ -351,6 +351,7 @@ fn GotoPageInput<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 value=move || input_val.get()
                 style="width:4rem;padding:0.125rem 0.25rem;border:1px solid #ddd;\
                        border-radius:3px;font-size:0.875rem;"
+                on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
                 on:input=move |ev| {
                     input_val.set(event_target_value(&ev));
                 }
