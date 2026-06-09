@@ -5,8 +5,9 @@ use chorale_core::{
     expand_all_groups, load_more_rows, move_column, remove_sort, reset_column_width,
     select_all_filtered, select_all_visible_page, set_column_visibility, set_column_width,
     set_filter, set_grouping, set_page, set_page_size, set_pagination_mode, set_scroll,
-    set_selection, toggle_group, toggle_row_expansion, toggle_select_all, toggle_sort, update_row,
-    ColumnId, FilterValue, GroupKey, PaginationMode, RowId, SortAction, StateError, TableState,
+    set_selection, start_edit, toggle_group, toggle_row_expansion, toggle_select_all, toggle_sort,
+    update_row, ColumnId, FilterValue, GroupKey, PaginationMode, RowId, SortAction, StateError,
+    TableState,
 };
 use leptos::prelude::*;
 
@@ -83,6 +84,12 @@ impl<TRow: Clone + PartialEq + Send + Sync + 'static> UseTableHandle<TRow> {
     /// Set or clear the selection of a single row.
     pub fn set_selection(&self, row_id: RowId, selected: bool) {
         self.dispatch(|s| set_selection(s, row_id, selected));
+    }
+
+    /// Enter in-cell editing mode for the given row and column.
+    /// No-op if the column has no `EditorKind` configured.
+    pub fn start_edit(&self, row_id: RowId, column_id: ColumnId) {
+        self.try_dispatch(|s| start_edit(s, row_id, column_id)).ok();
     }
 
     /// Select all visible rows, or deselect all if all are already selected.

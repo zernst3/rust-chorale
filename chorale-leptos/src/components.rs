@@ -1013,6 +1013,9 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 handle.signal.set(new_s);
                 ev.stop_propagation();
             }
+            on:dblclick=move |_| {
+                handle.start_edit(row_id, col_id);
+            }
             on:mouseenter=move |_| {
                 if fill_drag_active.get_untracked() {
                     fill_hover.set(Some((row_index, col_id)));
