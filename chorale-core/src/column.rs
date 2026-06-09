@@ -211,6 +211,17 @@ pub enum EditorKind {
     Date,
     /// Boolean toggle `<input type="checkbox">`.
     BoolToggle,
+    /// Dropdown `<select>` constrained to a fixed set of options.
+    ///
+    /// The adapter renders a native `<select>` offering exactly `options` (in
+    /// order); the committed value is the chosen option string. Because the UI
+    /// only offers the listed options, membership is enforced by construction —
+    /// there is no free-text entry, so a closed category/status set cannot be
+    /// mistyped. The option matching the cell's current value renders selected.
+    Select {
+        /// The selectable options, in display order.
+        options: Vec<String>,
+    },
     /// Custom: the host supplies a renderer via the adapter's `cell_renderers` prop.
     /// The adapter falls back to a text input if no custom renderer is provided.
     Custom,

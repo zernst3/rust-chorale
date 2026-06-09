@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Select cell-editor (`EditorKind::Select { options }`).** A native `<select>`
+  dropdown editor constrained to a fixed set of options; the committed value is the
+  chosen option string, so a closed category/status set cannot be mistyped —
+  membership is enforced by construction, no free-text entry. Wired in both
+  adapters' editor paths: `chorale-dioxus` renders the `<select>` and commits on
+  change through `on_commit_edit` (validate → commit, Esc cancels);
+  `chorale-leptos` renders the `<select>` mirroring its text-editor path. Demoed on
+  the **Role** column of both QA harnesses (`qa-harness`, `leptos-qa-harness`) when
+  the editing toggle is on. Columns without `.editor(...)`, and the other
+  `EditorKind` variants, are unaffected. (`EditorKind` is `#[non_exhaustive]`, so
+  the new variant is a non-breaking addition.)
+
+### Fixed
+
+- **CHANGELOG: `detail_renderer` prop type corrected.** The 0.2.0 master/detail
+  entry described the prop as `EventHandler<TRow, Element>`; the actual
+  `chorale-dioxus` `<Table>` prop is `Callback<TRow, Element>`
+  (`chorale-dioxus/src/components.rs`). Corrected in the 0.2.0 entry below.
+
 ## [0.2.0] — 2026-06-05
 
 ### ⚠ Breaking changes
@@ -43,7 +64,7 @@ Affects both the `chorale_core::toggle_sort` free function and the `UseTableHand
   detail panel. `expanded_rows: HashSet<RowId>` on `TableState`;
   `toggle_row_expansion`, `collapse_all_rows` transitions; `RenderRow<TRow>`
   view-stream enum with `DetailPanel { parent_row_id }` injection from
-  `visible_view`. Optional `detail_renderer: EventHandler<TRow, Element>`
+  `visible_view`. Optional `detail_renderer: Callback<TRow, Element>`
   prop on `<Table>` — when set, a 24px chevron column appears at index 0 and
   detail panels render as a full-width `<tr><td colspan>` directly under
   their parent. Consumer mounts a child `<Table>` (or any `Element`) inside

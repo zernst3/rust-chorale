@@ -2187,6 +2187,43 @@ mod tests {
     }
 
     #[test]
+    fn select_editor_column_carries_options_and_is_editable() {
+        use crate::column::EditorKind;
+        // A Select editor carries its options, in order.
+        let col = ColumnDef::new(col_name(), "Category", |r: &TestRow| {
+            CellValue::Text(r.name.clone())
+        })
+        .editor(EditorKind::Select {
+            options: vec!["Groceries".into(), "Dining".into(), "Transport".into()],
+        });
+        match &col.editor {
+            Some(EditorKind::Select { options }) => assert_eq!(
+                options,
+                &vec![
+                    "Groceries".to_string(),
+                    "Dining".to_string(),
+                    "Transport".to_string(),
+                ]
+            ),
+            other => panic!("expected a Select editor, got {other:?}"),
+        }
+
+        // start_edit treats a Select column as editable (core branches on
+        // editor.is_some(), not the variant), unlike a column with no editor.
+        let mut s = make_state();
+        s.columns = vec![col];
+        let row_id = s.rows[0].0;
+        let s2 = start_edit(&s, row_id, col_name()).expect("a Select column must be editable");
+        assert_eq!(
+            s2.editing,
+            Some(EditTarget {
+                row_id,
+                column_id: col_name()
+            })
+        );
+    }
+
+    #[test]
     fn next_editable_cell_advances_within_row() {
         let s = make_editable_state();
         let row_id = s.rows[0].0;

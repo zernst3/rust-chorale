@@ -1123,6 +1123,45 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 .into_any();
             }
         }
+        // Select editor: native <select> constrained to the column's options.
+        // Mirrors the Text editor's structure; on:change updates editing_text and
+        // the commit follows the same external (parent-driven) path as Text.
+        if let Some(EditorKind::Select { options }) = &col.editor {
+            let options = options.clone();
+            return view! {
+                <td style=format!(
+                    "padding:0;border-bottom:1px solid #eee;\
+                     text-align:{align};height:{row_height}px;\
+                     overflow:hidden;{w}{sticky_css}"
+                )>
+                    <div style="display:flex;flex-direction:column;height:100%;">
+                        <select
+                            prop:value=move || editing_text.get()
+                            style="flex:1;width:100%;padding:0.25rem;border:none;\
+                                   outline:2px solid #4a90e2;font-size:0.875rem;"
+                            on:change=move |ev| {
+                                editing_text.set(event_target_value(&ev));
+                                edit_error.set(None);
+                            }
+                        >
+                            {options
+                                .into_iter()
+                                .map(|opt| {
+                                    let label = opt.clone();
+                                    view! { <option value=opt>{label}</option> }
+                                })
+                                .collect_view()}
+                        </select>
+                        {move || edit_error.get().map(|e| view! {
+                            <span style="font-size:0.7rem;color:#dc2626;padding:0 0.25rem;">
+                                {e}
+                            </span>
+                        })}
+                    </div>
+                </td>
+            }
+            .into_any();
+        }
     }
 
     let cell_content = render_cell_value(&val, &render_kind, renderer.as_ref());

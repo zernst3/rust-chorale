@@ -192,9 +192,10 @@ items land via opt-in props or transitions; nothing was removed.
   `TableState::row_heights`; the window math automatically handles mixed heights.
 - **Fixed-row-height virtualization.** Always-on when all rows share the same
   height. O(1) per scroll event regardless of dataset size.
-- **In-cell editing.** `EditorKind::Text` on a column makes it double-click
-  editable. Validation via `validate_edit` callback. Commit/cancel via
-  Enter/Escape/Tab.
+- **In-cell editing.** An `EditorKind` on a column makes it editable —
+  `Text`, `Number`, `Date`, `BoolToggle`, or `Select { options }` (a dropdown
+  constrained to a fixed set). Validation via `validate_edit` callback.
+  Commit/cancel via Enter/Escape/Tab (the `Select` editor commits on change).
 - **CSV export.** Exports the full post-filter, post-sort dataset with RFC 4180
   quoting.
 - **User-overridable labels.** Pass a custom `Labels` struct to override every
