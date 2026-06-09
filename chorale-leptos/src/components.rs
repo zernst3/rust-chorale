@@ -497,68 +497,106 @@ fn boolean_filter_input<TRow: Clone + PartialEq + Send + Sync + 'static>(
     .into_any()
 }
 
+fn numeric_range_to_filter(
+    min: f64,
+    max: f64,
+    bound_min: f64,
+    bound_max: f64,
+) -> Option<FilterValue> {
+    let min_at_bound = (min - bound_min).abs() < f64::EPSILON;
+    let max_at_bound = (max - bound_max).abs() < f64::EPSILON;
+    if min_at_bound && max_at_bound {
+        None
+    } else {
+        Some(FilterValue::NumericRange {
+            min: if min_at_bound { None } else { Some(min) },
+            max: if max_at_bound { None } else { Some(max) },
+        })
+    }
+}
+
+fn commit_numeric_range<TRow: Clone + PartialEq + Send + Sync + 'static>(
+    col_id: ColumnId,
+    min: f64,
+    max: f64,
+    bound_min: f64,
+    bound_max: f64,
+    handle: &UseTableHandle<TRow>,
+) {
+    handle.set_filter(
+        col_id,
+        numeric_range_to_filter(min, max, bound_min, bound_max),
+    );
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn format_compact_number(n: f64) -> String {
+    let abs = n.abs();
+    if abs >= 1_000_000.0 {
+        format!("{:.1}M", n / 1_000_000.0)
+    } else if abs >= 1_000.0 {
+        format!("{:.0}k", n / 1_000.0)
+    } else {
+        format!("{n:.0}")
+    }
+}
+
 fn numeric_range_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
     col_id: ColumnId,
+    bound_min: f64,
+    bound_max: f64,
+    step: f64,
     current: Option<&FilterValue>,
     handle: UseTableHandle<TRow>,
     clear_label: &str,
 ) -> AnyView {
-    let (min_s, max_s) = match current {
-        Some(FilterValue::NumericRange { min, max }) => (
-            min.map(|v| v.to_string()).unwrap_or_default(),
-            max.map(|v| v.to_string()).unwrap_or_default(),
-        ),
-        _ => (String::new(), String::new()),
+    let (cur_min, cur_max) = match current {
+        Some(FilterValue::NumericRange { min, max }) => {
+            (min.unwrap_or(bound_min), max.unwrap_or(bound_max))
+        }
+        _ => (bound_min, bound_max),
     };
+    let min_display = format_compact_number(cur_min);
+    let max_display = format_compact_number(cur_max);
     let has_filter = current.is_some();
     let clear_label = clear_label.to_owned();
+    let bound_min_s = bound_min.to_string();
+    let bound_max_s = bound_max.to_string();
+    let step_s = step.to_string();
 
     view! {
-        <div style="display:flex;align-items:center;gap:2px;">
+        <div style="display:flex;flex-direction:column;gap:2px;font-size:0.75rem;"
+            on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()>
+            <div style="display:flex;justify-content:space-between;color:#555;">
+                <span>{min_display}</span>
+                <span>{max_display}</span>
+            </div>
             <input
-                type="number"
-                value=min_s
-                placeholder="Min"
-                style="flex:1;min-width:0;padding:0.25rem;border:1px solid #ddd;\
-                       border-radius:3px;font-size:0.8rem;"
-                on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
+                type="range"
+                min=bound_min_s.clone()
+                max=bound_max_s.clone()
+                step=step_s.clone()
+                value=cur_min.to_string()
+                style="width:100%;margin:0;"
                 on:input=move |ev| {
-                    let v = event_target_value(&ev);
-                    let new_min: Option<f64> = v.trim().parse().ok();
-                    let cur = handle.signal().with_untracked(|s| s.filters.get(&col_id).cloned());
-                    let cur_max = match cur {
-                        Some(FilterValue::NumericRange { max, .. }) => max,
-                        _ => None,
-                    };
-                    let filter = if new_min.is_none() && cur_max.is_none() {
-                        None
-                    } else {
-                        Some(FilterValue::NumericRange { min: new_min, max: cur_max })
-                    };
-                    handle.set_filter(col_id, filter);
+                    if let Ok(v) = event_target_value(&ev).parse::<f64>() {
+                        let new_min = v.min(cur_max);
+                        commit_numeric_range(col_id, new_min, cur_max, bound_min, bound_max, &handle);
+                    }
                 }
             />
             <input
-                type="number"
-                value=max_s
-                placeholder="Max"
-                style="flex:1;min-width:0;padding:0.25rem;border:1px solid #ddd;\
-                       border-radius:3px;font-size:0.8rem;"
-                on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
+                type="range"
+                min=bound_min_s
+                max=bound_max_s
+                step=step_s
+                value=cur_max.to_string()
+                style="width:100%;margin:0;"
                 on:input=move |ev| {
-                    let v = event_target_value(&ev);
-                    let new_max: Option<f64> = v.trim().parse().ok();
-                    let cur = handle.signal().with_untracked(|s| s.filters.get(&col_id).cloned());
-                    let cur_min = match cur {
-                        Some(FilterValue::NumericRange { min, .. }) => min,
-                        _ => None,
-                    };
-                    let filter = if cur_min.is_none() && new_max.is_none() {
-                        None
-                    } else {
-                        Some(FilterValue::NumericRange { min: cur_min, max: new_max })
-                    };
-                    handle.set_filter(col_id, filter);
+                    if let Ok(v) = event_target_value(&ev).parse::<f64>() {
+                        let new_max = v.max(cur_min);
+                        commit_numeric_range(col_id, cur_min, new_max, bound_min, bound_max, &handle);
+                    }
                 }
             />
             {has_filter.then(|| view! {
@@ -566,7 +604,7 @@ fn numeric_range_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
                     type="button"
                     title=clear_label
                     style="border:0;background:transparent;padding:0 4px;\
-                           cursor:pointer;color:#888;font-size:0.95rem;line-height:1;flex-shrink:0;"
+                           cursor:pointer;color:#888;font-size:0.95rem;line-height:1;align-self:flex-end;"
                     on:click=move |ev| {
                         ev.stop_propagation();
                         handle.set_filter(col_id, None);
@@ -950,9 +988,15 @@ fn filter_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
             &labels.clear_filter_label,
         ),
         FilterKind::Boolean => boolean_filter_input(col_id, current, handle),
-        FilterKind::NumericRange { .. } => {
-            numeric_range_filter(col_id, current, handle, &labels.clear_filter_label)
-        }
+        FilterKind::NumericRange { min, max, step } => numeric_range_filter(
+            col_id,
+            *min,
+            *max,
+            *step,
+            current,
+            handle,
+            &labels.clear_filter_label,
+        ),
         FilterKind::DateRange => {
             date_range_filter(col_id, current, handle, &labels.clear_filter_label)
         }
