@@ -131,7 +131,7 @@ fn build_columns(editing: bool, frozen: bool) -> Vec<ColumnDef<Employee>> {
     .initial_width(180.0)
     .render_kind(RenderKind::Date);
 
-    let role_col = ColumnDef::new(ColumnId("role"), "Role", |r: &Employee| {
+    let mut role_col = ColumnDef::new(ColumnId("role"), "Role", |r: &Employee| {
         CellValue::Text(r.role.clone())
     })
     .sortable()
@@ -139,6 +139,13 @@ fn build_columns(editing: bool, frozen: bool) -> Vec<ColumnDef<Employee>> {
         options: ROLES.iter().map(|s| (*s).to_string()).collect(),
     })
     .initial_width(140.0);
+    // Select editor demo: when editing is on, Role becomes a dropdown
+    // constrained to ROLES (EditorKind::Select).
+    if editing {
+        role_col = role_col.editor(EditorKind::Select {
+            options: ROLES.iter().map(|s| (*s).to_string()).collect(),
+        });
+    }
 
     let status_col = ColumnDef::new(ColumnId("status"), "Status", |r: &Employee| {
         CellValue::Text(r.status.clone())
@@ -518,6 +525,8 @@ fn App() -> impl IntoView {
                         if let Some(mut row) = current_row {
                             if edit.column_id == ColumnId("name") {
                                 row.name.clone_from(&edit.value);
+                            } else if edit.column_id == ColumnId("role") {
+                                row.role.clone_from(&edit.value);
                             }
                             table.update_row(edit.row_id, row);
                         }

@@ -2639,9 +2639,64 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
     let validate_blur = validate.clone();
     let prior_row_blur = row.clone();
 
-    rsx! {
-        td {
-            style: "{style}",
+    let validate_select = validate.clone();
+    let prior_row_select = row.clone();
+    let select_options: Vec<String> = if let EditorKind::Select { options } = &editor_kind {
+        options.clone()
+    } else {
+        Vec::new()
+    };
+    let is_select = matches!(&editor_kind, EditorKind::Select { .. });
+    let selected_val = text_val.clone();
+
+    // Select editor: a native <select> constrained to the column's options.
+    // Commits on change (a pick IS the commit), mirroring the text editor's
+    // validate -> on_commit_edit -> commit_edit/sig.set flow; Esc cancels.
+    let editor_el = if is_select {
+        rsx! {
+            select {
+                value: "{selected_val}",
+                style: "width: 100%; box-sizing: border-box; font: inherit; \
+                        padding: 1px 4px; border: 1px solid #4a90e2; border-radius: 2px;",
+                onchange: move |e| {
+                    let raw = e.value();
+                    let result = validate_select.call(EditValidation {
+                        row_id,
+                        column_id: col_id,
+                        raw_value: raw.clone(),
+                    });
+                    match result {
+                        Ok(()) => {
+                            edit_error.set(None);
+                            if let Some(handler) = &on_commit_edit {
+                                handler.call(CommittedEdit::new(
+                                    row_id,
+                                    col_id,
+                                    raw.clone(),
+                                    prior_row_select.clone(),
+                                ));
+                            }
+                            let mut sig = handle.signal();
+                            let new_state = commit_edit(&*sig.read());
+                            sig.set(new_state);
+                        }
+                        Err(msg) => edit_error.set(Some(msg)),
+                    }
+                },
+                onkeydown: move |e: KeyboardEvent| {
+                    if e.key() == Key::Escape {
+                        let mut sig = handle.signal();
+                        let new_state = cancel_edit(&*sig.read());
+                        sig.set(new_state);
+                    }
+                },
+                for opt in select_options.iter() {
+                    option { value: "{opt}", "{opt}" }
+                }
+            }
+        }
+    } else {
+        rsx! {
             input {
                 r#type: "{input_type}",
                 value: "{text_val}",
@@ -2741,6 +2796,13 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
                     }
                 },
             }
+        }
+    };
+
+    rsx! {
+        td {
+            style: "{style}",
+            {editor_el}
             if let Some(err) = err_val {
                 div {
                     style: "color: #c0392b; font-size: 0.75rem; margin-top: 2px;",
