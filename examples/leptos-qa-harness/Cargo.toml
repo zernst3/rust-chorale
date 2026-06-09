@@ -10,8 +10,8 @@ publish = false
 workspace = true
 
 [dependencies]
-chorale-core = { path = "../../chorale-core", version = "0.2.0" }
-chorale-leptos = { path = "../../chorale-leptos", version = "0.2.0" }
+chorale-core = { path = "../../chorale-core", version = "0.2.0", features = ["xlsx"] }
+chorale-leptos = { path = "../../chorale-leptos", version = "0.2.0", features = ["xlsx"] }
 chorale-derive = { path = "../../chorale-derive", version = "0.2.0" }
 leptos = { version = "0.8", features = ["csr"] }
 # WASM target requires getrandom's `js` feature so the random source

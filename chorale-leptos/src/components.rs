@@ -1337,6 +1337,7 @@ pub fn Table<TRow>(
     #[prop(default = CellRenderers::default())] cell_renderers: CellRenderers,
     #[prop(default = false)] column_toolbar: bool,
     #[prop(default = false)] csv_export: bool,
+    #[prop(default = false)] xlsx_export: bool,
     #[prop(default = false)] resize_enabled: bool,
     #[prop(default = ValidateEditFn::default())] validate_edit: ValidateEditFn,
     on_commit_edit: Option<Callback<CommittedEdit<TRow>>>,
@@ -2349,6 +2350,50 @@ where
                         None
                     };
 
+                    let xlsx_button: Option<AnyView> = if xlsx_export {
+                        #[cfg(feature = "xlsx")]
+                        {
+                            let lbl = labels.export_xlsx_label.clone();
+                            Some(view! {
+                                <button
+                                    style="padding:0.25rem 0.75rem;border:1px solid #4a90e2;\
+                                           border-radius:3px;font-size:0.875rem;cursor:pointer;\
+                                           background:white;color:#4a90e2;"
+                                    on:click=move |_| {
+                                        #[cfg(target_arch = "wasm32")]
+                                        {
+                                            use chorale_core::{XlsxOptions, to_xlsx};
+                                            let state = sig.with_untracked(|s| s.clone());
+                                            let Ok(bytes) = to_xlsx(&state, &XlsxOptions::default()) else { return };
+                                            let b64 = to_base64(&bytes);
+                                            let href = format!(
+                                                "data:application/vnd.openxmlformats-officedocument.\
+                                                 spreadsheetml.sheet;base64,{b64}"
+                                            );
+                                            let Some(window) = web_sys::window() else { return };
+                                            let Some(document) = window.document() else { return };
+                                            let Ok(el) = document.create_element("a") else { return };
+                                            use wasm_bindgen::JsCast as _;
+                                            let Ok(a) = el.dyn_into::<web_sys::HtmlAnchorElement>() else { return };
+                                            a.set_href(&href);
+                                            a.set_download("export.xlsx");
+                                            let _ = document.body().map(|b| b.append_child(&a));
+                                            a.click();
+                                            let _ = document.body().map(|b| b.remove_child(&a));
+                                        }
+                                    }
+                                >
+                                    {lbl}
+                                </button>
+                            }.into_any())
+                        }
+                        #[cfg(not(feature = "xlsx"))]
+                        { None }
+                    } else {
+                        None
+                    };
+
+                    let has_export = csv_button.is_some() || xlsx_button.is_some();
                     view! {
                         <div style="padding:0.5rem 1rem;display:flex;align-items:center;\
                                     flex-wrap:wrap;gap:0.25rem;border-top:1px solid #ddd;\
@@ -2379,9 +2424,10 @@ where
                             {(total_pages > 1).then(|| view! {
                                 <GotoPageInput handle=handle total_pages=total_pages labels=labels.clone() />
                             })}
-                            {csv_button.map(|b| view! {
+                            {has_export.then(|| view! {
                                 <span style="flex:1;" />
-                                {b}
+                                {csv_button}
+                                {xlsx_button}
                             })}
                         </div>
                     }.into_any()

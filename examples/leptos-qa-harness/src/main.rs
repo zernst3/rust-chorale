@@ -249,6 +249,7 @@ fn App() -> impl IntoView {
     let frozen_columns_on = RwSignal::new(false);
     let selection_toolbar_on = RwSignal::new(false);
     let use_derive_on = RwSignal::new(false);
+    let xlsx_export_on = RwSignal::new(false);
 
     // ── Cell renderers (rebuilt when variable_height_on changes) ─────────────
     let cell_renderers = Memo::new(move |_| {
@@ -478,6 +479,14 @@ fn App() -> impl IntoView {
                     />
                     " Use #[derive(TableRow)] columns"
                 </label>
+                <label>
+                    <input
+                        type="checkbox"
+                        prop:checked=move || xlsx_export_on.get()
+                        on:change=move |_| xlsx_export_on.update(|v| *v = !*v)
+                    />
+                    " Excel Export"
+                </label>
             </div>
 
             {move || {
@@ -488,6 +497,7 @@ fn App() -> impl IntoView {
                 let csv = csv_export_on.get();
                 let resize = resize_on.get();
                 let col_reorder = column_reorder_on.get();
+                let xlsx = xlsx_export_on.get();
                 let renderers = cell_renderers.get();
 
                 // Labels: always pass a concrete value (default or French).
@@ -596,6 +606,7 @@ fn App() -> impl IntoView {
                         cell_renderers=renderers
                         column_toolbar=toolbar
                         csv_export=csv
+                        xlsx_export=xlsx
                         resize_enabled=resize
                         column_reorder_enabled=col_reorder
                         labels=labels_val
