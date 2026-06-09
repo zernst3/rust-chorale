@@ -420,28 +420,48 @@ fn text_filter_input<TRow: Clone + PartialEq + Send + Sync + 'static>(
     current: Option<&FilterValue>,
     handle: UseTableHandle<TRow>,
     placeholder: &str,
+    clear_label: &str,
 ) -> AnyView {
     let val = match current {
         Some(FilterValue::Text(s)) => s.clone(),
         _ => String::new(),
     };
+    let has_filter = current.is_some();
     let placeholder = placeholder.to_owned();
+    let clear_label = clear_label.to_owned();
     view! {
-        <input
-            type="text"
-            value=val
-            placeholder=placeholder
-            style="width: 100%; padding: 0.25rem; border: 1px solid #ddd; \
-                   border-radius: 3px; font-size: 0.8rem; box-sizing: border-box;"
-            on:input=move |ev| {
-                let v = event_target_value(&ev);
-                if v.is_empty() {
-                    handle.set_filter(col_id, None);
-                } else {
-                    handle.set_filter(col_id, Some(FilterValue::Text(v)));
+        <div style="display:flex;align-items:center;gap:2px;">
+            <input
+                type="text"
+                value=val
+                placeholder=placeholder
+                style="flex:1;min-width:0;padding:0.25rem;border:1px solid #ddd;\
+                       border-radius:3px;font-size:0.8rem;box-sizing:border-box;"
+                on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
+                on:input=move |ev| {
+                    let v = event_target_value(&ev);
+                    if v.is_empty() {
+                        handle.set_filter(col_id, None);
+                    } else {
+                        handle.set_filter(col_id, Some(FilterValue::Text(v)));
+                    }
                 }
-            }
-        />
+            />
+            {has_filter.then(|| view! {
+                <button
+                    type="button"
+                    title=clear_label
+                    style="border:0;background:transparent;padding:0 4px;\
+                           cursor:pointer;color:#888;font-size:0.95rem;line-height:1;flex-shrink:0;"
+                    on:click=move |ev| {
+                        ev.stop_propagation();
+                        handle.set_filter(col_id, None);
+                    }
+                >
+                    "\u{00d7}"
+                </button>
+            })}
+        </div>
     }
     .into_any()
 }
@@ -481,6 +501,7 @@ fn numeric_range_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
     col_id: ColumnId,
     current: Option<&FilterValue>,
     handle: UseTableHandle<TRow>,
+    clear_label: &str,
 ) -> AnyView {
     let (min_s, max_s) = match current {
         Some(FilterValue::NumericRange { min, max }) => (
@@ -489,15 +510,18 @@ fn numeric_range_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
         ),
         _ => (String::new(), String::new()),
     };
+    let has_filter = current.is_some();
+    let clear_label = clear_label.to_owned();
 
     view! {
-        <div style="display:flex;gap:2px;">
+        <div style="display:flex;align-items:center;gap:2px;">
             <input
                 type="number"
                 value=min_s
                 placeholder="Min"
-                style="width:50%;padding:0.25rem;border:1px solid #ddd;\
+                style="flex:1;min-width:0;padding:0.25rem;border:1px solid #ddd;\
                        border-radius:3px;font-size:0.8rem;"
+                on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
                 on:input=move |ev| {
                     let v = event_target_value(&ev);
                     let new_min: Option<f64> = v.trim().parse().ok();
@@ -518,8 +542,9 @@ fn numeric_range_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 type="number"
                 value=max_s
                 placeholder="Max"
-                style="width:50%;padding:0.25rem;border:1px solid #ddd;\
+                style="flex:1;min-width:0;padding:0.25rem;border:1px solid #ddd;\
                        border-radius:3px;font-size:0.8rem;"
+                on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
                 on:input=move |ev| {
                     let v = event_target_value(&ev);
                     let new_max: Option<f64> = v.trim().parse().ok();
@@ -536,6 +561,20 @@ fn numeric_range_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
                     handle.set_filter(col_id, filter);
                 }
             />
+            {has_filter.then(|| view! {
+                <button
+                    type="button"
+                    title=clear_label
+                    style="border:0;background:transparent;padding:0 4px;\
+                           cursor:pointer;color:#888;font-size:0.95rem;line-height:1;flex-shrink:0;"
+                    on:click=move |ev| {
+                        ev.stop_propagation();
+                        handle.set_filter(col_id, None);
+                    }
+                >
+                    "\u{00d7}"
+                </button>
+            })}
         </div>
     }
     .into_any()
@@ -546,13 +585,16 @@ fn multiselect_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
     options: &[&str],
     current: Option<&FilterValue>,
     handle: UseTableHandle<TRow>,
+    clear_label: &str,
 ) -> AnyView {
     let selected: HashSet<String> = match current {
         Some(FilterValue::MultiSelect(v)) => v.iter().cloned().collect(),
         _ => HashSet::new(),
     };
+    let has_filter = current.is_some();
     let is_open = RwSignal::new(false);
     let options: Vec<String> = options.iter().map(|s| (*s).to_owned()).collect();
+    let clear_label = clear_label.to_owned();
 
     let _ = window_event_listener(leptos::ev::click, move |_| {
         is_open.set(false);
@@ -565,67 +607,83 @@ fn multiselect_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
     };
 
     view! {
-        <div style="position:relative;" on:click=move |ev| { ev.stop_propagation(); }>
-            <button
-                style="width:100%;padding:0.2rem 0.4rem;border:1px solid #ddd;\
-                       border-radius:3px;font-size:0.8rem;text-align:left;cursor:pointer;\
-                       background:white;"
-                on:click=move |ev| {
-                    ev.stop_propagation();
-                    is_open.update(|v| *v = !*v);
-                }
-            >
-                {count_label}
-            </button>
-            <Show when=move || is_open.get()>
-                // z-index must be high enough to win against the table's
-                // sticky-header cells (which create stacking contexts at
-                // z-index: 1) AND against any frozen-column body cells
-                // (which use frozen_column_z_index, default 2). 9999
-                // guarantees the dropdown floats above the entire table.
-                <div style="position:absolute;top:100%;left:0;z-index:9999;\
-                             background:white;border:1px solid #ddd;border-radius:3px;\
-                             padding:0.25rem;min-width:8rem;max-height:200px;\
-                             overflow-y:auto;box-shadow:0 2px 8px rgba(0,0,0,0.15);">
-                    {options.iter().map(|opt| {
-                        let opt_clone = opt.clone();
-                        let sel_clone = selected.clone();
-                        let is_checked = sel_clone.contains(opt);
-                        view! {
-                            <label style="display:flex;align-items:center;gap:0.25rem;\
-                                         padding:0.2rem 0.25rem;cursor:pointer;font-size:0.8rem;">
-                                <input
-                                    type="checkbox"
-                                    checked=is_checked
-                                    on:change=move |ev| {
-                                        let checked = event_target_checked(&ev);
-                                        let cur = handle.signal().with_untracked(|s|
-                                            s.filters.get(&col_id).cloned()
-                                        );
-                                        let mut cur_set: HashSet<String> = match cur {
-                                            Some(FilterValue::MultiSelect(v)) =>
-                                                v.into_iter().collect(),
-                                            _ => HashSet::new(),
-                                        };
-                                        if checked {
-                                            cur_set.insert(opt_clone.clone());
-                                        } else {
-                                            cur_set.remove(&opt_clone);
+        <div style="display:flex;align-items:center;gap:2px;" on:click=move |ev| { ev.stop_propagation(); }>
+            <div style="flex:1;min-width:0;position:relative;">
+                <button
+                    style="width:100%;padding:0.2rem 0.4rem;border:1px solid #ddd;\
+                           border-radius:3px;font-size:0.8rem;text-align:left;cursor:pointer;\
+                           background:white;"
+                    on:click=move |ev| {
+                        ev.stop_propagation();
+                        is_open.update(|v| *v = !*v);
+                    }
+                >
+                    {count_label}
+                </button>
+                <Show when=move || is_open.get()>
+                    // z-index must beat sticky-header cells (z-index:1) and
+                    // frozen-column body cells (z-index:2). See Bug 2 fix for
+                    // why filter_th now carries z-index:3.
+                    <div style="position:absolute;top:100%;left:0;z-index:9999;\
+                                 background:white;border:1px solid #ddd;border-radius:3px;\
+                                 padding:0.25rem;min-width:8rem;max-height:200px;\
+                                 overflow-y:auto;box-shadow:0 2px 8px rgba(0,0,0,0.15);"
+                        on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
+                    >
+                        {options.iter().map(|opt| {
+                            let opt_clone = opt.clone();
+                            let sel_clone = selected.clone();
+                            let is_checked = sel_clone.contains(opt);
+                            view! {
+                                <label style="display:flex;align-items:center;gap:0.25rem;\
+                                             padding:0.2rem 0.25rem;cursor:pointer;font-size:0.8rem;">
+                                    <input
+                                        type="checkbox"
+                                        checked=is_checked
+                                        on:change=move |ev| {
+                                            let checked = event_target_checked(&ev);
+                                            let cur = handle.signal().with_untracked(|s|
+                                                s.filters.get(&col_id).cloned()
+                                            );
+                                            let mut cur_set: HashSet<String> = match cur {
+                                                Some(FilterValue::MultiSelect(v)) =>
+                                                    v.into_iter().collect(),
+                                                _ => HashSet::new(),
+                                            };
+                                            if checked {
+                                                cur_set.insert(opt_clone.clone());
+                                            } else {
+                                                cur_set.remove(&opt_clone);
+                                            }
+                                            let filter = if cur_set.is_empty() {
+                                                None
+                                            } else {
+                                                Some(FilterValue::MultiSelect(cur_set))
+                                            };
+                                            handle.set_filter(col_id, filter);
                                         }
-                                        let filter = if cur_set.is_empty() {
-                                            None
-                                        } else {
-                                            Some(FilterValue::MultiSelect(cur_set))
-                                        };
-                                        handle.set_filter(col_id, filter);
-                                    }
-                                />
-                                {opt.clone()}
-                            </label>
-                        }
-                    }).collect::<Vec<_>>()}
-                </div>
-            </Show>
+                                    />
+                                    {opt.clone()}
+                                </label>
+                            }
+                        }).collect::<Vec<_>>()}
+                    </div>
+                </Show>
+            </div>
+            {has_filter.then(|| view! {
+                <button
+                    type="button"
+                    title=clear_label
+                    style="border:0;background:transparent;padding:0 4px;\
+                           cursor:pointer;color:#888;font-size:0.95rem;line-height:1;flex-shrink:0;"
+                    on:click=move |ev| {
+                        ev.stop_propagation();
+                        handle.set_filter(col_id, None);
+                    }
+                >
+                    "\u{00d7}"
+                </button>
+            })}
         </div>
     }
     .into_any()
@@ -635,6 +693,7 @@ fn date_range_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
     col_id: ColumnId,
     current: Option<&FilterValue>,
     handle: UseTableHandle<TRow>,
+    clear_label: &str,
 ) -> AnyView {
     let (min_s, max_s) = match current {
         Some(FilterValue::DateRange { min, max }) => (
@@ -643,21 +702,21 @@ fn date_range_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
         ),
         _ => (String::new(), String::new()),
     };
+    let has_filter = current.is_some();
+    let clear_label = clear_label.to_owned();
 
     view! {
-        <div style="display:flex;gap:2px;">
+        <div style="display:flex;align-items:center;gap:2px;">
             <input
                 type="date"
                 value=min_s
-                style="width:50%;padding:0.25rem;border:1px solid #ddd;\
+                style="flex:1;min-width:0;padding:0.25rem;border:1px solid #ddd;\
                        border-radius:3px;font-size:0.8rem;"
+                on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
                 on:change=move |ev| {
                     let v = event_target_value(&ev);
-                    let new_min: Option<NaiveDate> =
-                        v.parse().ok();
-                    let cur = handle.signal().with_untracked(|s|
-                        s.filters.get(&col_id).cloned()
-                    );
+                    let new_min: Option<NaiveDate> = v.parse().ok();
+                    let cur = handle.signal().with_untracked(|s| s.filters.get(&col_id).cloned());
                     let cur_max = match cur {
                         Some(FilterValue::DateRange { max, .. }) => max,
                         _ => None,
@@ -673,14 +732,13 @@ fn date_range_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
             <input
                 type="date"
                 value=max_s
-                style="width:50%;padding:0.25rem;border:1px solid #ddd;\
+                style="flex:1;min-width:0;padding:0.25rem;border:1px solid #ddd;\
                        border-radius:3px;font-size:0.8rem;"
+                on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
                 on:change=move |ev| {
                     let v = event_target_value(&ev);
                     let new_max: Option<NaiveDate> = v.parse().ok();
-                    let cur = handle.signal().with_untracked(|s|
-                        s.filters.get(&col_id).cloned()
-                    );
+                    let cur = handle.signal().with_untracked(|s| s.filters.get(&col_id).cloned());
                     let cur_min = match cur {
                         Some(FilterValue::DateRange { min, .. }) => min,
                         _ => None,
@@ -693,6 +751,20 @@ fn date_range_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
                     handle.set_filter(col_id, filter);
                 }
             />
+            {has_filter.then(|| view! {
+                <button
+                    type="button"
+                    title=clear_label
+                    style="border:0;background:transparent;padding:0 4px;\
+                           cursor:pointer;color:#888;font-size:0.95rem;line-height:1;flex-shrink:0;"
+                    on:click=move |ev| {
+                        ev.stop_propagation();
+                        handle.set_filter(col_id, None);
+                    }
+                >
+                    "\u{00d7}"
+                </button>
+            })}
         </div>
     }
     .into_any()
@@ -870,13 +942,23 @@ fn filter_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
 
     let inner = match &col.filter {
         FilterKind::None => view! { <span /> }.into_any(),
-        FilterKind::Text => text_filter_input(col_id, current, handle, &labels.filter_placeholder),
+        FilterKind::Text => text_filter_input(
+            col_id,
+            current,
+            handle,
+            &labels.filter_placeholder,
+            &labels.clear_filter_label,
+        ),
         FilterKind::Boolean => boolean_filter_input(col_id, current, handle),
-        FilterKind::NumericRange { .. } => numeric_range_filter(col_id, current, handle),
-        FilterKind::DateRange => date_range_filter(col_id, current, handle),
+        FilterKind::NumericRange { .. } => {
+            numeric_range_filter(col_id, current, handle, &labels.clear_filter_label)
+        }
+        FilterKind::DateRange => {
+            date_range_filter(col_id, current, handle, &labels.clear_filter_label)
+        }
         FilterKind::MultiSelect { options } => {
             let opts: Vec<&str> = options.iter().map(String::as_str).collect();
-            multiselect_filter(col_id, &opts, current, handle)
+            multiselect_filter(col_id, &opts, current, handle, &labels.clear_filter_label)
         }
         _ => view! { <span /> }.into_any(),
     };
