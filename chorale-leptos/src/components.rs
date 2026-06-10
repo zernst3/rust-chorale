@@ -914,10 +914,12 @@ fn header_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
 
     // Emit explicit values in both branches so Leptos reactive attr diff
     // always performs a concrete swap rather than dropping the declaration.
+    // position:sticky also acts as a containing block for the absolute resize
+    // span; position:relative ensures the same in the non-sticky case.
     let sticky_top_decl = if sticky_header {
         "position:sticky;top:0;z-index:1;"
     } else {
-        "position:static;top:auto;z-index:auto;"
+        "position:relative;top:auto;z-index:auto;"
     };
     let sticky_css = sticky_css.to_owned();
     view! {
@@ -1246,7 +1248,8 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
             {is_focus_cell.then(|| view! {
                 <div
                     style="position: absolute; bottom: 0; right: 0; width: 6px; height: 6px; \
-                           background: #0078d4; cursor: crosshair; z-index: 10;"
+                           background: #0078d4; cursor: crosshair; z-index: 10; \
+                           pointer-events: none;"
                     on:mousedown=move |ev| {
                         ev.stop_propagation();
                         fill_drag_active.set(true);
