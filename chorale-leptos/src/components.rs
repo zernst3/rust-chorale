@@ -1334,7 +1334,7 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
                     <td style="padding:0.5rem;border-bottom:1px solid #eee;width:2.5rem;">
                         <input
                             type="checkbox"
-                            checked=is_selected
+                            prop:checked=is_selected
                             on:click=move |ev| { ev.stop_propagation(); }
                             on:change=move |ev| {
                                 handle.set_selection(row_id, event_target_checked(&ev));
@@ -2309,7 +2309,7 @@ where
                                     )>
                                         <input
                                             type="checkbox"
-                                            checked=all_page_selected
+                                            prop:checked=all_page_selected
                                             on:change=move |ev| {
                                                 if event_target_checked(&ev) {
                                                     handle.select_all_filtered();
