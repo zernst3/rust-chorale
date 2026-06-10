@@ -4,10 +4,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chorale_core::{
-    add_disjoint_range, clear_active_cell, clear_range_selection, extend_range_to,
-    fill_handle_targets, frozen_left_columns, frozen_right_columns, move_active_cell,
-    move_active_cell_end, move_active_cell_first, move_active_cell_home, move_active_cell_last,
-    move_active_cell_page, move_active_cell_to_edge, scrollable_columns,
+    add_disjoint_range, cancel_edit, clear_active_cell, clear_range_selection, commit_edit,
+    extend_range_to, fill_handle_targets, frozen_left_columns, frozen_right_columns,
+    move_active_cell, move_active_cell_end, move_active_cell_first, move_active_cell_home,
+    move_active_cell_last, move_active_cell_page, move_active_cell_to_edge, scrollable_columns,
     select_all as select_all_range, start_range_selection, to_csv, visible_grouped_view,
     visible_view, visible_window, ActiveCell, Alignment, CellValue, ClipboardCopyEvent,
     ClipboardPasteEvent, ColumnDef, ColumnId, CommittedEdit, EditorKind, FilterKind, FilterValue,
@@ -1102,8 +1102,8 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
     let render_kind = col.render_kind.clone();
     let renderer = cell_renderers.get(col_id);
     let validate_fn = validate_fn.clone();
-    let _on_commit_edit = on_commit_edit.copied();
-    let _row_clone = row.clone();
+    let on_commit_edit_cb = on_commit_edit.copied();
+    let row_clone = row.clone();
 
     // Active cell outline and range background (placed after sticky_css to override frozen bg).
     let active_css = if is_active_cell {
@@ -1120,6 +1120,12 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
     if is_editing {
         if let Some(EditorKind::Text) = &col.editor {
             {
+                let input_ref: NodeRef<html::Input> = NodeRef::new();
+                Effect::new(move |_| {
+                    if let Some(el) = input_ref.get() {
+                        let _ = el.focus();
+                    }
+                });
                 return view! {
                     <td style=format!(
                         "padding:0;border-bottom:1px solid #eee;\
@@ -1129,9 +1135,12 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                         <div style="display:flex;flex-direction:column;height:100%;">
                             <input
                                 type="text"
+                                node_ref=input_ref
                                 value=move || editing_text.get()
                                 style="flex:1;width:100%;padding:0.25rem;border:none;\
                                        outline:2px solid #4a90e2;font-size:0.875rem;"
+                                on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
+                                on:mousedown=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
                                 on:input=move |ev| {
                                     editing_text.set(event_target_value(&ev));
                                     edit_error.set(None);
@@ -1139,7 +1148,8 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                                 on:keydown=move |ev| {
                                     let key = ev.key();
                                     if key == "Escape" {
-                                        // cancel handled by parent
+                                        let ns = handle.signal.with_untracked(|s| cancel_edit(s));
+                                        handle.signal.set(ns);
                                     } else if key == "Enter" || key == "Tab" {
                                         let text = editing_text.get_untracked();
                                         let validation = EditValidation {
@@ -1149,8 +1159,17 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                                         };
                                         match validate_fn.call(validation) {
                                             Ok(()) => {
-                                                // Commit is handled via the signal externally
-                                                let _ = text;
+                                                edit_error.set(None);
+                                                if let Some(cb) = on_commit_edit_cb.as_ref() {
+                                                    cb.run(CommittedEdit::new(
+                                                        row_id,
+                                                        col_id,
+                                                        text.clone(),
+                                                        row_clone.clone(),
+                                                    ));
+                                                }
+                                                let ns = handle.signal.with_untracked(|s| commit_edit(s));
+                                                handle.signal.set(ns);
                                             }
                                             Err(msg) => {
                                                 edit_error.set(Some(msg));
@@ -1172,8 +1191,6 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
             }
         }
         // Select editor: native <select> constrained to the column's options.
-        // Mirrors the Text editor's structure; on:change updates editing_text and
-        // the commit follows the same external (parent-driven) path as Text.
         if let Some(EditorKind::Select { options }) = &col.editor {
             let options = options.clone();
             return view! {
@@ -1187,9 +1204,22 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                             prop:value=move || editing_text.get()
                             style="flex:1;width:100%;padding:0.25rem;border:none;\
                                    outline:2px solid #4a90e2;font-size:0.875rem;"
+                            on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
+                            on:mousedown=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
                             on:change=move |ev| {
-                                editing_text.set(event_target_value(&ev));
+                                let text = event_target_value(&ev);
+                                editing_text.set(text.clone());
                                 edit_error.set(None);
+                                if let Some(cb) = on_commit_edit_cb.as_ref() {
+                                    cb.run(CommittedEdit::new(
+                                        row_id,
+                                        col_id,
+                                        text,
+                                        row_clone.clone(),
+                                    ));
+                                }
+                                let ns = handle.signal.with_untracked(|s| commit_edit(s));
+                                handle.signal.set(ns);
                             }
                         >
                             {options
