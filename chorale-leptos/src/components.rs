@@ -156,7 +156,8 @@ pub fn ExportXlsxButton<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 {
                     use chorale_core::{XlsxOptions, to_xlsx};
                     let state = handle.signal.get_untracked();
-                    let opts = XlsxOptions { sheet_name: sheet_name.clone(), ..Default::default() };
+                    let mut opts = XlsxOptions::default();
+                    opts.sheet_name.clone_from(&sheet_name);
                     let Ok(bytes) = to_xlsx(&state, &opts) else { return };
                     let b64 = to_base64(&bytes);
                     let href = format!(
