@@ -730,9 +730,9 @@ dioxus.send(parts.join('\n'));"
                 .unwrap_or(150.0);
             let is_last = k + 1 == left_count;
             let divider = if is_last {
-                " box-shadow: inset 0 -1px 0 var(--chorale-separator-color, #f0f0f0), var(--chorale-frozen-divider-shadow, 3px 0 4px -2px rgba(0,0,0,0.15));"
+                " box-shadow: var(--chorale-frozen-divider-shadow, 3px 0 4px -2px rgba(0,0,0,0.15));"
             } else {
-                " box-shadow: inset 0 -1px 0 var(--chorale-separator-color, #f0f0f0);"
+                ""
             };
             sticky_header_css.insert(
                 col.id,
@@ -757,9 +757,9 @@ dioxus.send(parts.join('\n'));"
                 .unwrap_or(150.0);
             let is_first = j == 0;
             let divider = if is_first {
-                " box-shadow: inset 0 -1px 0 var(--chorale-separator-color, #f0f0f0), var(--chorale-frozen-divider-shadow, -3px 0 4px -2px rgba(0,0,0,0.15));"
+                " box-shadow: var(--chorale-frozen-divider-shadow, -3px 0 4px -2px rgba(0,0,0,0.15));"
             } else {
-                " box-shadow: inset 0 -1px 0 var(--chorale-separator-color, #f0f0f0);"
+                ""
             };
             sticky_header_css.insert(
                 col.id,
