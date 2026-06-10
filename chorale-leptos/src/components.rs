@@ -285,6 +285,23 @@ fn currency_symbol(code: &chorale_core::CurrencyCode) -> &'static str {
     }
 }
 
+fn format_thousands(n: i64) -> String {
+    let abs = n.unsigned_abs();
+    let s = abs.to_string();
+    let with_commas = s
+        .as_bytes()
+        .rchunks(3)
+        .rev()
+        .map(|chunk| std::str::from_utf8(chunk).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join(",");
+    if n < 0 {
+        format!("-{with_commas}")
+    } else {
+        with_commas
+    }
+}
+
 fn cell_text(val: &CellValue) -> String {
     match val {
         CellValue::Boolean(b) => (if *b { "\u{2713}" } else { "\u{2717}" }).to_string(),
@@ -319,7 +336,9 @@ fn render_cell_value(
             let symbol = currency_symbol(code);
             let text = match val {
                 CellValue::Float(f) => format!("{symbol}{f:.2}"),
-                CellValue::Integer(i) => format!("{symbol}{i}"),
+                CellValue::Integer(i) => {
+                    format!("{symbol}{}.00", format_thousands(*i))
+                }
                 _ => format!("{symbol}{}", val.to_csv_string()),
             };
             view! { <span>{text}</span> }.into_any()
