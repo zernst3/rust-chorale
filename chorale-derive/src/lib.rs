@@ -485,7 +485,21 @@ fn build_filter(cfg: &FieldConfig, kind: InferredKind) -> TokenStream2 {
             InferredKind::Date | InferredKind::OptionDate => quote! {
                 ::chorale_core::FilterKind::DateRange
             },
-            // Numeric and Display: no filter by default.
+            InferredKind::Integer | InferredKind::OptionInteger => quote! {
+                ::chorale_core::FilterKind::NumericRange {
+                    min: 0.0,
+                    max: 1_000_000.0,
+                    step: 1_000.0,
+                }
+            },
+            InferredKind::Float | InferredKind::OptionFloat => quote! {
+                ::chorale_core::FilterKind::NumericRange {
+                    min: 0.0,
+                    max: 100.0,
+                    step: 0.1,
+                }
+            },
+            // Display: no filter by default.
             _ => return quote! {},
         }
     };
