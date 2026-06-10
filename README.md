@@ -15,9 +15,11 @@ planned for future releases. Inspired by
 
 ## Status
 
-`chorale-core` v0.2.0, `chorale-dioxus` v0.2.0, `chorale-leptos` v0.2.0,
-and `chorale-derive` v0.2.0 are published. All four share a single
-`draft-release/v0.2.0` branch; see `CHANGELOG.md` for the full feature list.
+The published release is **v0.1.0**: `chorale-core` v0.1.0 and
+`chorale-dioxus` v0.1.0 are live on crates.io. **v0.2.0 is still in
+testing** on the `draft-release/v0.2.0` branch. It adds the Leptos adapter
+and the `chorale-derive` macro, among other features (see `CHANGELOG.md`),
+and has not been published yet.
 
 All six `chorale-*` crate names are reserved on crates.io:
 [chorale](https://crates.io/crates/chorale),
