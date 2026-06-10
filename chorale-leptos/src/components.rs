@@ -19,6 +19,8 @@ use chorale_core::{
 use chorale_core::{paste_tsv_into_range, to_clipboard_tsv};
 use leptos::html;
 use leptos::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsCast;
 
 use crate::hooks::UseTableHandle;
 
@@ -652,12 +654,30 @@ fn multiselect_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
     };
     let has_filter = current.is_some();
     let is_open = RwSignal::new(false);
+    let dropdown_ref: NodeRef<html::Div> = NodeRef::new();
     let options: Vec<String> = options.iter().map(|s| (*s).to_owned()).collect();
     let clear_label = clear_label.to_owned();
 
-    let _ = window_event_listener(leptos::ev::click, move |_| {
-        is_open.set(false);
-    });
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = window_event_listener(leptos::ev::click, move |ev| {
+            let target = ev.target();
+            let should_close = if let Some(node) = dropdown_ref.get() {
+                if let Some(target_elem) =
+                    target.and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                {
+                    !node.contains(Some(&target_elem))
+                } else {
+                    true
+                }
+            } else {
+                true
+            };
+            if should_close {
+                is_open.set(false);
+            }
+        });
+    }
 
     let count_label = if selected.is_empty() {
         "All".to_owned()
@@ -666,7 +686,11 @@ fn multiselect_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
     };
 
     view! {
-        <div style="display:flex;align-items:center;gap:2px;" on:click=move |ev| { ev.stop_propagation(); }>
+        <div
+            node_ref=dropdown_ref
+            style="display:flex;align-items:center;gap:2px;"
+            on:click=move |ev| { ev.stop_propagation(); }
+        >
             <div style="flex:1;min-width:0;position:relative;">
                 <button
                     style="width:100%;padding:0.2rem 0.4rem;border:1px solid #ddd;\
