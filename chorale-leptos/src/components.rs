@@ -1687,6 +1687,27 @@ where
 
     let kb_ref: NodeRef<html::Div> = NodeRef::new();
 
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = window_event_listener(leptos::ev::mousedown, move |ev| {
+            let inside = kb_ref.get().is_some_and(|node| {
+                ev.target()
+                    .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                    .is_some_and(|el| node.contains(Some(&el)))
+            });
+            if !inside {
+                let editing = sig.with_untracked(|s| s.editing.is_some());
+                if !editing {
+                    let new_s = sig.with_untracked(|s| {
+                        let s2 = clear_range_selection(s);
+                        clear_active_cell(&s2)
+                    });
+                    sig.set(new_s);
+                }
+            }
+        });
+    }
+
     view! {
         <div
             node_ref=kb_ref
