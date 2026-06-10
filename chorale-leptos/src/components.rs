@@ -928,7 +928,7 @@ fn header_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
                  text-overflow:ellipsis;background:#f8f9fa;\
                  {sticky_top_decl}{w}{sticky_css}{drag_over_style}"
             )
-            draggable=column_reorder_enabled
+            draggable=if column_reorder_enabled { "true" } else { "false" }
             on:click=move |ev| {
                 if is_sortable {
                     let action = if ev.shift_key() {
@@ -949,7 +949,8 @@ fn header_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
                     ev.prevent_default();
                 }
             }
-            on:drop=move |_| {
+            on:drop=move |ev| {
+                ev.prevent_default();
                 if column_reorder_enabled {
                     if let Some(src_id) = drag_col_id.get_untracked() {
                         if src_id != col_id {
