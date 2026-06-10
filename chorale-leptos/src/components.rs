@@ -681,6 +681,7 @@ fn multiselect_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
                                         type="checkbox"
                                         checked=is_checked
                                         on:change=move |ev| {
+                                            ev.stop_propagation();
                                             let checked = event_target_checked(&ev);
                                             let cur = handle.signal().with_untracked(|s|
                                                 s.filters.get(&col_id).cloned()
