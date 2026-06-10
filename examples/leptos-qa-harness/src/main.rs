@@ -204,6 +204,32 @@ fn make_status_renderer() -> CellRenderer {
     })
 }
 
+fn fmt_thousands(n: i64) -> String {
+    let s = n.abs().to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, c) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            out.insert(0, ',');
+        }
+        out.insert(0, c);
+    }
+    if n < 0 {
+        out.insert(0, '-');
+    }
+    out
+}
+
+fn make_salary_renderer() -> CellRenderer {
+    Arc::new(|val: &CellValue| {
+        let formatted = if let CellValue::Integer(n) = val {
+            format!("${}", fmt_thousands(*n))
+        } else {
+            String::new()
+        };
+        view! { <span>{formatted}</span> }.into_any()
+    })
+}
+
 fn make_variable_height_renderer() -> CellRenderer {
     Arc::new(|val: &CellValue| {
         let name = if let CellValue::Text(s) = val {
@@ -262,6 +288,7 @@ fn App() -> impl IntoView {
     let cell_renderers = Memo::new(move |_| {
         let mut m = HashMap::new();
         m.insert(ColumnId("status"), make_status_renderer());
+        m.insert(ColumnId("salary"), make_salary_renderer());
         if variable_height_on.get() {
             m.insert(ColumnId("name"), make_variable_height_renderer());
         }
