@@ -1101,16 +1101,23 @@ dioxus.send(parts.join('\n'));"
                             };
                             sig_w.set(new_s);
                         }
-                        // Item 7: F2 starts in-cell editing on the active cell.
-                        Key::F2 => {
+                        // Item 7: F2 (or Enter) starts in-cell editing on the
+                        // active cell. The `editing.is_none()` guard matters:
+                        // keydowns from an open editor bubble to this handler
+                        // (e.g. Enter on a <select> picking an option), and
+                        // without the guard they would restart the edit and
+                        // wipe the in-progress editor text.
+                        Key::F2 | Key::Enter => {
                             let mut sig_w = handle.signal();
                             let s = sig_w.peek();
-                            if let Some(ac) = s.active_cell {
-                                let rows = visible_view(&*s);
-                                if let Some(RenderRow::Data { id: row_id, .. }) = rows.get(ac.row_idx) {
-                                    if let Ok(new_s) = chorale_core::start_edit(&*s, *row_id, ac.column_id) {
-                                        drop(s);
-                                        sig_w.set(new_s);
+                            if s.editing.is_none() {
+                                if let Some(ac) = s.active_cell {
+                                    let rows = visible_view(&*s);
+                                    if let Some(RenderRow::Data { id: row_id, .. }) = rows.get(ac.row_idx) {
+                                        if let Ok(new_s) = chorale_core::start_edit(&*s, *row_id, ac.column_id) {
+                                            drop(s);
+                                            sig_w.set(new_s);
+                                        }
                                     }
                                 }
                             }
@@ -2606,6 +2613,7 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
 ) -> Element {
     let col_id = col.id;
     let editor_kind = col.editor.clone().unwrap_or(EditorKind::Text);
+    let align = alignment_css(col.alignment);
     let w = col_width_style(override_width, col.initial_width);
     let style = if variable_row_height {
         format!(
@@ -2650,6 +2658,19 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
     let is_select = matches!(&editor_kind, EditorKind::Select { .. });
     let selected_val = text_val.clone();
 
+    // Editor visual parity with the display cell (data_td): the display td
+    // pads 0.5rem 1rem and aligns text per column alignment. The editor td
+    // pads 0.25rem 0.5rem, so the editor element's own padding tops it up to
+    // the same text inset: 0.25rem(td) + 1px(border) + calc(0.25rem - 1px)
+    // = 0.5rem vertically, 0.5rem + 1px + calc(0.5rem - 1px) = 1rem
+    // horizontally. font: inherit + text-align: {align} keep the glyphs the
+    // same size and justification, so entering edit mode doesn't shift text.
+    let editor_style = format!(
+        "width: 100%; box-sizing: border-box; font: inherit; text-align: {align}; \
+         padding: calc(0.25rem - 1px) calc(0.5rem - 1px); \
+         border: 1px solid #4a90e2; border-radius: 2px;"
+    );
+
     // Select editor: a native <select> constrained to the column's options.
     // Commits on change (a pick IS the commit), mirroring the text editor's
     // validate -> on_commit_edit -> commit_edit/sig.set flow; Esc cancels.
@@ -2657,8 +2678,7 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
         rsx! {
             select {
                 value: "{selected_val}",
-                style: "width: 100%; box-sizing: border-box; font: inherit; \
-                        padding: 1px 4px; border: 1px solid #4a90e2; border-radius: 2px;",
+                style: "{editor_style}",
                 onchange: move |e| {
                     let raw = e.value();
                     let result = validate_select.call(EditValidation {
@@ -2684,6 +2704,25 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
                         Err(msg) => edit_error.set(Some(msg)),
                     }
                 },
+                onblur: move |_| {
+                    // A native <select> fires NO change event when the user
+                    // re-picks the already-selected option, so without a blur
+                    // exit the cell would be stuck in edit mode. Any real pick
+                    // has already committed via onchange (which runs before
+                    // blur), so blur only needs to leave edit mode — mirror
+                    // the text editor's onblur clear (editing + active cell +
+                    // range) without firing a spurious on_commit_edit.
+                    let mut sig = handle.signal();
+                    let new_state = {
+                        let snap = sig.peek();
+                        let mut copy = snap.clone();
+                        copy.editing = None;
+                        copy.active_cell = None;
+                        copy.range_selection.clear();
+                        copy
+                    };
+                    sig.set(new_state);
+                },
                 onkeydown: move |e: KeyboardEvent| {
                     if e.key() == Key::Escape {
                         let mut sig = handle.signal();
@@ -2704,8 +2743,7 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
                 min: if !num_min.is_empty() { "{num_min}" },
                 max: if !num_max.is_empty() { "{num_max}" },
                 step: if !num_step.is_empty() { "{num_step}" },
-                style: "width: 100%; box-sizing: border-box; font: inherit; \
-                        padding: 1px 4px; border: 1px solid #4a90e2; border-radius: 2px;",
+                style: "{editor_style}",
                 oninput: move |e| editing_text.set(e.value()),
                 onblur: move |_| {
                     let raw = editing_text.peek().clone();
@@ -2754,6 +2792,13 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
                 onkeydown: move |e: KeyboardEvent| {
                     match e.key() {
                         Key::Enter => {
+                            // Don't let this Enter bubble to the grid-level
+                            // keydown handler: commit_edit clears `editing`
+                            // but keeps `active_cell`, so the container's
+                            // Enter-opens-editor arm would see a non-editing
+                            // state with an active cell and immediately
+                            // re-open the editor we just committed.
+                            e.stop_propagation();
                             let raw = editing_text.read().clone();
                             let result = validate.call(EditValidation {
                                 row_id,
