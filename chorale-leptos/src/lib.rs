@@ -60,6 +60,15 @@ mod hooks;
 /// ```
 pub use components::Table;
 
+/// Button that exports the current filtered+sorted view as an XLSX file.
+///
+/// Requires the `xlsx` feature plus a `wasm32` target (the click handler
+/// uses browser download APIs). Mirrors the `chorale-dioxus` re-export of
+/// the same component; without this re-export the component was
+/// unreachable by consumers (the `components` module is private).
+#[cfg(all(feature = "xlsx", target_arch = "wasm32"))]
+pub use components::ExportXlsxButton;
+
 /// Type-erased cell renderer: maps a [`CellValue`] to a Leptos [`AnyView`].
 ///
 /// Build with `Arc::new(|val: &CellValue| view! { ... }.into_any())` and pass
