@@ -157,6 +157,7 @@ pub fn ExportXlsxButton<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 #[cfg(target_arch = "wasm32")]
                 {
                     use chorale_core::{XlsxOptions, to_xlsx};
+                    use wasm_bindgen::JsCast as _;
                     let state = handle.signal.get_untracked();
                     let mut opts = XlsxOptions::default();
                     opts.sheet_name.clone_from(&sheet_name);
@@ -168,7 +169,6 @@ pub fn ExportXlsxButton<TRow: Clone + PartialEq + Send + Sync + 'static>(
                     let Some(window) = web_sys::window() else { return };
                     let Some(document) = window.document() else { return };
                     let Ok(el) = document.create_element("a") else { return };
-                    use wasm_bindgen::JsCast as _;
                     let Ok(a) = el.dyn_into::<web_sys::HtmlAnchorElement>() else { return };
                     a.set_href(&href);
                     a.set_download(&filename);
@@ -647,37 +647,22 @@ fn multiselect_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
     current: Option<&FilterValue>,
     handle: UseTableHandle<TRow>,
     clear_label: &str,
+    open_filter_col: RwSignal<Option<ColumnId>>,
 ) -> AnyView {
     let selected: HashSet<String> = match current {
         Some(FilterValue::MultiSelect(v)) => v.iter().cloned().collect(),
         _ => HashSet::new(),
     };
     let has_filter = current.is_some();
-    let is_open = RwSignal::new(false);
-    let dropdown_ref: NodeRef<html::Div> = NodeRef::new();
     let options: Vec<String> = options.iter().map(|s| (*s).to_owned()).collect();
     let clear_label = clear_label.to_owned();
 
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = window_event_listener(leptos::ev::click, move |ev| {
-            let target = ev.target();
-            let should_close = if let Some(node) = dropdown_ref.get() {
-                if let Some(target_elem) =
-                    target.and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-                {
-                    !node.contains(Some(&target_elem))
-                } else {
-                    true
-                }
-            } else {
-                true
-            };
-            if should_close {
-                is_open.set(false);
-            }
-        });
-    }
+    // Open state lives in the Table-scoped `open_filter_col` signal, NOT a
+    // local RwSignal: this function re-runs on every filter change (checking
+    // a box mutates s.filters -> view_key -> header re-render), and a local
+    // signal would reset to closed after each pick. Outside-click closing is
+    // handled by the single window listener in the Table body; clicks inside
+    // this subtree stop propagation so they never reach it.
 
     let count_label = if selected.is_empty() {
         "All".to_owned()
@@ -687,7 +672,6 @@ fn multiselect_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
 
     view! {
         <div
-            node_ref=dropdown_ref
             style="display:flex;align-items:center;gap:2px;"
             on:click=move |ev| { ev.stop_propagation(); }
         >
@@ -698,12 +682,14 @@ fn multiselect_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
                            background:white;"
                     on:click=move |ev| {
                         ev.stop_propagation();
-                        is_open.update(|v| *v = !*v);
+                        open_filter_col.update(|c| {
+                            *c = if *c == Some(col_id) { None } else { Some(col_id) };
+                        });
                     }
                 >
                     {count_label}
                 </button>
-                <Show when=move || is_open.get()>
+                <Show when=move || open_filter_col.get() == Some(col_id)>
                     // z-index must beat sticky-header cells (z-index:1) and
                     // frozen-column body cells (z-index:2). See Bug 2 fix for
                     // why filter_th now carries z-index:3.
@@ -1014,6 +1000,7 @@ fn header_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
 // Filter th
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn filter_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
     col: &ColumnDef<TRow>,
     override_width: Option<f64>,
@@ -1021,6 +1008,7 @@ fn filter_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
     filters: &HashMap<ColumnId, FilterValue>,
     labels: &Labels,
     sticky_css: &str,
+    open_filter_col: RwSignal<Option<ColumnId>>,
 ) -> AnyView {
     let w = col_width_style(override_width, col.initial_width);
     let col_id = col.id;
@@ -1051,16 +1039,30 @@ fn filter_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
         }
         FilterKind::MultiSelect { options } => {
             let opts: Vec<&str> = options.iter().map(String::as_str).collect();
-            multiselect_filter(col_id, &opts, current, handle, &labels.clear_filter_label)
+            multiselect_filter(
+                col_id,
+                &opts,
+                current,
+                handle,
+                &labels.clear_filter_label,
+                open_filter_col,
+            )
         }
         _ => view! { <span /> }.into_any(),
     };
 
     view! {
-        <th style=format!(
-            "padding:0.25rem;border-bottom:1px solid #eee;position:sticky;top:0;z-index:3;\
-             background:#fff;{w}{sticky_css}"
-        )>
+        <th
+            style=format!(
+                "padding:0.25rem;border-bottom:1px solid #eee;position:sticky;top:0;z-index:3;\
+                 background:#fff;{w}{sticky_css}"
+            )
+            // Keystrokes inside any filter widget (text input, range slider,
+            // date input, multi-select) must not bubble to the table-root
+            // keydown handler — Enter would start a cell edit and arrow keys
+            // would move the active cell instead of the caret/slider.
+            on:keydown=|ev: leptos::ev::KeyboardEvent| ev.stop_propagation()
+        >
             {inner}
         </th>
     }
@@ -1126,6 +1128,10 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                         let _ = el.focus();
                     }
                 });
+                // Separate clones for the blur closure; the keydown closure
+                // takes ownership of the originals.
+                let validate_blur = validate_fn.clone();
+                let row_blur = row_clone.clone();
                 return view! {
                     <td style=format!(
                         "padding:0;border-bottom:1px solid #eee;\
@@ -1137,15 +1143,75 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                                 type="text"
                                 node_ref=input_ref
                                 value=move || editing_text.get()
-                                style="flex:1;width:100%;padding:0.25rem;border:none;\
-                                       outline:2px solid #4a90e2;font-size:0.875rem;"
+                                // Inherit the cell font and mirror the display
+                                // td's text-align + horizontal padding
+                                // (0.5rem 1rem) so the text does not shrink,
+                                // shift, or re-justify when entering edit mode.
+                                style=format!(
+                                    "flex:1;width:100%;box-sizing:border-box;\
+                                     padding:0.5rem 1rem;border:none;\
+                                     outline:2px solid #4a90e2;outline-offset:-2px;\
+                                     font-size:inherit;font-family:inherit;\
+                                     line-height:inherit;text-align:{align};\
+                                     background:transparent;"
+                                )
                                 on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
                                 on:mousedown=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
                                 on:input=move |ev| {
                                     editing_text.set(event_target_value(&ev));
                                     edit_error.set(None);
                                 }
+                                // Commit on blur: clicking away or into another
+                                // cell must commit and exit edit mode (same
+                                // validate -> on_commit_edit -> commit_edit
+                                // path as the Enter branch below). Mirrors the
+                                // dioxus editor_td onblur.
+                                on:blur=move |_| {
+                                    // Guard: blur can fire after Escape/Enter
+                                    // already cleared the edit; bail so we
+                                    // don't double-commit a stale value.
+                                    let still_editing = handle
+                                        .signal
+                                        .try_with_untracked(|s| {
+                                            s.editing.as_ref().is_some_and(|t| {
+                                                t.row_id == row_id
+                                                    && t.column_id == col_id
+                                            })
+                                        })
+                                        .unwrap_or(false);
+                                    if !still_editing {
+                                        return;
+                                    }
+                                    let text = editing_text.get_untracked();
+                                    let validation = EditValidation {
+                                        row_id,
+                                        column_id: col_id,
+                                        raw_value: text.clone(),
+                                    };
+                                    if validate_blur.call(validation).is_ok() {
+                                        edit_error.set(None);
+                                        if let Some(cb) = on_commit_edit_cb.as_ref() {
+                                            cb.run(CommittedEdit::new(
+                                                row_id,
+                                                col_id,
+                                                text,
+                                                row_blur.clone(),
+                                            ));
+                                        }
+                                        let ns = handle
+                                            .signal
+                                            .with_untracked(|s| commit_edit(s));
+                                        handle.signal.set(ns);
+                                    }
+                                    // On validation error, leave editing open
+                                    // so the user can fix the value.
+                                }
                                 on:keydown=move |ev| {
+                                    // While editing, no key may leak to the
+                                    // table-level keydown handler (it would
+                                    // re-enter edit mode on Enter or move the
+                                    // active cell on arrows).
+                                    ev.stop_propagation();
                                     let key = ev.key();
                                     if key == "Escape" {
                                         let ns = handle.signal.with_untracked(|s| cancel_edit(s));
@@ -1193,6 +1259,10 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
         // Select editor: native <select> constrained to the column's options.
         if let Some(EditorKind::Select { options }) = &col.editor {
             let options = options.clone();
+            // Separate clones for the blur closure; the change closure takes
+            // ownership of the originals.
+            let validate_blur = validate_fn.clone();
+            let row_blur = row_clone.clone();
             return view! {
                 <td style=format!(
                     "padding:0;border-bottom:1px solid #eee;\
@@ -1202,10 +1272,66 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                     <div style="display:flex;flex-direction:column;height:100%;">
                         <select
                             prop:value=move || editing_text.get()
-                            style="flex:1;width:100%;padding:0.25rem;border:none;\
-                                   outline:2px solid #4a90e2;font-size:0.875rem;"
+                            // Inherit the cell font and mirror the display
+                            // td's text-align + horizontal padding so the
+                            // text does not shrink or shift in edit mode.
+                            style=format!(
+                                "flex:1;width:100%;box-sizing:border-box;\
+                                 padding:0.5rem 1rem;border:none;\
+                                 outline:2px solid #4a90e2;outline-offset:-2px;\
+                                 font-size:inherit;font-family:inherit;\
+                                 line-height:inherit;text-align:{align};\
+                                 background:transparent;"
+                            )
                             on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
                             on:mousedown=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
+                            // While editing, no key may leak to the
+                            // table-level keydown handler. Escape cancels,
+                            // mirroring the dioxus select editor.
+                            on:keydown=move |ev: leptos::ev::KeyboardEvent| {
+                                ev.stop_propagation();
+                                if ev.key() == "Escape" {
+                                    let ns = handle.signal.with_untracked(|s| cancel_edit(s));
+                                    handle.signal.set(ns);
+                                }
+                            }
+                            // A native <select> fires NO change event when the
+                            // user re-picks the already-selected value, so
+                            // without this the cell would stay stuck in edit
+                            // mode. Blur always commits the current value and
+                            // returns to display mode.
+                            on:blur=move |_| {
+                                let still_editing = handle
+                                    .signal
+                                    .try_with_untracked(|s| {
+                                        s.editing.as_ref().is_some_and(|t| {
+                                            t.row_id == row_id && t.column_id == col_id
+                                        })
+                                    })
+                                    .unwrap_or(false);
+                                if !still_editing {
+                                    return;
+                                }
+                                let text = editing_text.get_untracked();
+                                let validation = EditValidation {
+                                    row_id,
+                                    column_id: col_id,
+                                    raw_value: text.clone(),
+                                };
+                                if validate_blur.call(validation).is_ok() {
+                                    edit_error.set(None);
+                                    if let Some(cb) = on_commit_edit_cb.as_ref() {
+                                        cb.run(CommittedEdit::new(
+                                            row_id,
+                                            col_id,
+                                            text,
+                                            row_blur.clone(),
+                                        ));
+                                    }
+                                    let ns = handle.signal.with_untracked(|s| commit_edit(s));
+                                    handle.signal.set(ns);
+                                }
+                            }
                             on:change=move |ev| {
                                 let text = event_target_value(&ev);
                                 editing_text.set(text.clone());
@@ -1653,6 +1779,11 @@ where
     let edit_error: RwSignal<Option<String>> = RwSignal::new(None);
     let fill_drag_active: RwSignal<bool> = RwSignal::new(false);
     let fill_hover: RwSignal<Option<(usize, ColumnId)>> = RwSignal::new(None);
+    // Which column's multi-select filter dropdown is open. Lives in the
+    // Table body (stable scope) rather than inside multiselect_filter so the
+    // open state survives the filter-driven re-render that happens on every
+    // checkbox pick; a per-render RwSignal would reset to closed each time.
+    let open_filter_col: RwSignal<Option<ColumnId>> = RwSignal::new(None);
 
     let sig = handle.signal;
 
@@ -1669,6 +1800,18 @@ where
                 s.grouping.clone(),
                 s.collapsed_groups.clone(),
                 s.expanded_rows.clone(),
+                // data_generation bumps every time update_row mutates row
+                // content. Without this in the tuple, cell edits land in
+                // state.rows but the memo's PartialEq short-circuits and
+                // the cached visible_view is returned forever, so the cell
+                // keeps rendering the pre-edit value until an unrelated
+                // transition happens to bump some other field. Mirrors the
+                // dioxus adapter's view_key.
+                s.data_generation,
+                // column_order changes on drag-and-drop column reorder; the
+                // header/body render path reads it through this memo chain,
+                // so it must invalidate the key too.
+                s.column_order.clone(),
             )
         })
     });
@@ -1719,23 +1862,50 @@ where
 
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = window_event_listener(leptos::ev::mousedown, move |ev| {
-            let inside = kb_ref.get().is_some_and(|node| {
+        // Both window listeners below are registered with on_cleanup and use
+        // try_* accessors so a stale fire after the table subtree is disposed
+        // (e.g. a QA-harness feature toggle rebuilding the component) is a
+        // silent no-op instead of a reactive_graph "unreachable" panic.
+        let mousedown_handle = window_event_listener(leptos::ev::mousedown, move |ev| {
+            // NodeRef wraps a render-scoped signal: try_get returns None once
+            // the owning scope is disposed — bail out, the table is gone.
+            let Some(node_opt) = kb_ref.try_get() else {
+                return;
+            };
+            let inside = node_opt.is_some_and(|node| {
                 ev.target()
                     .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
                     .is_some_and(|el| node.contains(Some(&el)))
             });
             if !inside {
-                let editing = sig.with_untracked(|s| s.editing.is_some());
+                let Some(editing) = sig.try_with_untracked(|s| s.editing.is_some()) else {
+                    return;
+                };
                 if !editing {
-                    let new_s = sig.with_untracked(|s| {
+                    let Some(new_s) = sig.try_with_untracked(|s| {
                         let s2 = clear_range_selection(s);
                         clear_active_cell(&s2)
-                    });
-                    sig.set(new_s);
+                    }) else {
+                        return;
+                    };
+                    sig.try_set(new_s);
                 }
             }
         });
+        on_cleanup(move || mousedown_handle.remove());
+
+        // Single table-scoped outside-click closer for the multi-select
+        // filter dropdowns. Clicks inside a dropdown stop propagation and
+        // never reach this window listener, so an unconditional close here
+        // is exactly "close on outside click". Replaces the per-render
+        // window_event_listener that multiselect_filter used to leak on
+        // every header re-render.
+        let filter_close_handle = window_event_listener(leptos::ev::click, move |_| {
+            if open_filter_col.try_get_untracked().flatten().is_some() {
+                open_filter_col.try_set(None);
+            }
+        });
+        on_cleanup(move || filter_close_handle.remove());
     }
 
     view! {
@@ -1891,6 +2061,41 @@ where
                         });
                         handle.signal.set(new_s);
                     }
+                    // Enter / F2 starts in-cell editing on the active cell
+                    // (mirrors the dioxus Enter|F2 handler). The editor
+                    // input's own on:keydown stops propagation, so
+                    // Enter-to-commit inside the editor never reaches this
+                    // arm; the editing.is_none() guard is defense in depth
+                    // against any keydown that still bubbles while an edit
+                    // is in progress.
+                    "Enter" | "F2" => {
+                        let target = handle.signal.with_untracked(|s| {
+                            if s.editing.is_some() {
+                                return None;
+                            }
+                            s.active_cell.and_then(|ac| {
+                                let editable = s
+                                    .columns
+                                    .iter()
+                                    .any(|c| c.id == ac.column_id && c.editor.is_some());
+                                if !editable {
+                                    return None;
+                                }
+                                // active_cell holds a visible row INDEX;
+                                // resolve it to a RowId through the same
+                                // post-filter post-sort view the body renders.
+                                let rows = visible_view(s);
+                                match rows.get(ac.row_idx) {
+                                    Some(RenderRow::Data { id, .. }) => Some((*id, ac.column_id)),
+                                    _ => None,
+                                }
+                            })
+                        });
+                        if let Some((row_id, col_id)) = target {
+                            ev.prevent_default();
+                            handle.start_edit(row_id, col_id);
+                        }
+                    }
                     "a" | "A" if ctrl => {
                         ev.prevent_default();
                         let new_s = handle.signal.with_untracked(select_all_range);
@@ -1911,7 +2116,7 @@ where
                                         let tsv2 = tsv.clone();
                                         leptos::task::spawn_local(async move {
                                             if let Some(clipboard) = web_sys::window()
-                                                .and_then(|w| Some(w.navigator().clipboard()))
+                                                .map(|w| w.navigator().clipboard())
                                             {
                                                 let _ = wasm_bindgen_futures::JsFuture::from(
                                                     clipboard.write_text(&tsv2),
@@ -1931,8 +2136,7 @@ where
                         ev.prevent_default();
                         #[cfg(target_arch = "wasm32")]
                         leptos::task::spawn_local(async move {
-                            let clipboard = web_sys::window()
-                                .and_then(|w| Some(w.navigator().clipboard()));
+                            let clipboard = web_sys::window().map(|w| w.navigator().clipboard());
                             if let Some(clipboard) = clipboard {
                                 if let Ok(tsv_val) = wasm_bindgen_futures::JsFuture::from(
                                     clipboard.read_text(),
@@ -2183,6 +2387,7 @@ where
                                             sticky_header_css
                                                 .get(&col.id)
                                                 .map_or("", String::as_str),
+                                            open_filter_col,
                                         )
                                     })
                                     .collect(),
@@ -2671,7 +2876,8 @@ where
                                         #[cfg(target_arch = "wasm32")]
                                         {
                                             use chorale_core::{XlsxOptions, to_xlsx};
-                                            let state = sig.with_untracked(|s| s.clone());
+                                            use wasm_bindgen::JsCast as _;
+                                            let state = sig.get_untracked();
                                             let Ok(bytes) = to_xlsx(&state, &XlsxOptions::default()) else { return };
                                             let b64 = to_base64(&bytes);
                                             let href = format!(
@@ -2681,7 +2887,6 @@ where
                                             let Some(window) = web_sys::window() else { return };
                                             let Some(document) = window.document() else { return };
                                             let Ok(el) = document.create_element("a") else { return };
-                                            use wasm_bindgen::JsCast as _;
                                             let Ok(a) = el.dyn_into::<web_sys::HtmlAnchorElement>() else { return };
                                             a.set_href(&href);
                                             a.set_download("export.xlsx");
