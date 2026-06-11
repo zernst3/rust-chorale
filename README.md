@@ -239,6 +239,8 @@ items land via opt-in props or transitions; nothing was removed.
 | **Master/detail** sub-tables via `detail_renderer` | — | ✅ |
 | **In-cell editing** with `EditorKind`, validators, commit/cancel | — | ✅ |
 | **Custom cell renderers** + `RenderKind::Badge` | ✅ | ✅ |
+| **Row-aware cell renderers** (full row + value) | — | ✅ |
+| **Row click callback** (`on_row_click`) | — | ✅ |
 | **CSV export** (RFC 4180) | ✅ | ✅ |
 | **XLSX export** via `ExportXlsxButton` (feature = `"xlsx"`) | — | ✅ |
 | **User-overridable `Labels`** (i18n) | — | ✅ |
@@ -265,6 +267,13 @@ items land via opt-in props or transitions; nothing was removed.
   appear in group header rows.
 - **Custom cells.** `RenderKind::Badge` (declarative pill rendering) or
   `CellRenderers` (per-column arbitrary framework markup).
+- **Row-aware custom cells.** `RowCellRenderers` hands the renderer the full
+  row plus the cell value (`Fn(&TRow, &CellValue)`), for composite cells
+  (avatar + name), action columns, and link cells. Per-column precedence:
+  `row_cell_renderers` > `cell_renderers` > `RenderKind`.
+- **Row click.** `on_row_click: Option<Callback<RowId>>` for whole-row
+  navigation (detail pages, modals). Plain clicks only; modifier clicks
+  stay range-selection. Default `None`.
 - **Column visibility toolbar.** Toggle any column on or off at runtime.
 - **Column resize.** Drag the right edge of any header. Widths persist in
   `TableState::column_widths`.
@@ -338,7 +347,7 @@ Table {
     csv_export: true,
     resize_enabled: true,
     column_reorder_enabled: true,
-    // … labels, cell_renderers, validate_edit, on_commit_edit, selection_toolbar
+    // … labels, cell_renderers, row_cell_renderers, on_row_click, validate_edit, on_commit_edit, selection_toolbar
 }
 ```
 
@@ -449,6 +458,7 @@ reactive primitive and build toolchain:
 | Component syntax | `rsx! { Table { handle: table, … } }` | `view! { <Table handle=table … /> }` |
 | Build tool | `dx serve` (Dioxus CLI) | `trunk serve` |
 | Custom cell type | `Element` | `AnyView` |
+| Row-aware cell type | `Arc<dyn Fn(&TRow, &CellValue) -> Element>` | `Arc<dyn Fn(&TRow, &CellValue) -> AnyView>` |
 
 The table logic (sort, filter, paginate, virtualize, group, edit) is shared via
 `chorale-core` and behaves identically in both adapters.

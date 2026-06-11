@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the editing toggle is on. Columns without `.editor(...)`, and the other
   `EditorKind` variants, are unaffected. (`EditorKind` is `#[non_exhaustive]`, so
   the new variant is a non-breaking addition.)
+- **Row-aware cell renderers.** New `RowCellRenderer<TRow>` type (`Fn(&TRow, &CellValue) -> Element` in Dioxus / `-> AnyView` in Leptos), `RowCellRenderers<TRow>` per-column map, and `row_cell_renderers` prop on `Table`. Per-column precedence: `row_cell_renderers` > `cell_renderers` > the column's `RenderKind`. Enables composite cells (avatar + name), action columns, and link cells that need sibling fields on the row. Fully additive: the value-only `CellRenderer` / `CellRenderers` / `cell_renderers` API is unchanged.
+- **`on_row_click` prop on `Table`** (`Option<Callback<RowId>>`, default `None`). Fires with the row's `RowId` on a plain left-click on any data cell of a data row. Ctrl/Cmd/Shift-clicks remain range-selection operations; clicks on the selection checkbox, the detail-expander chevron, and cells in edit mode do not fire it. `None` preserves prior behavior exactly.
 
 ### Fixed
 

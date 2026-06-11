@@ -12,7 +12,9 @@ use chorale_core::{
     PaginationMode, RenderKind, RowId, TableState,
 };
 use chorale_derive::TableRow;
-use chorale_dioxus::{use_table, CellRenderer, CellRenderers, Table};
+use chorale_dioxus::{
+    use_table, CellRenderer, CellRenderers, RowCellRenderer, RowCellRenderers, Table,
+};
 use chrono::NaiveDate;
 use dioxus::prelude::*;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -367,6 +369,21 @@ fn make_variable_height_renderer() -> CellRenderer {
     })
 }
 
+/// Row-aware composite cell for the "name" column: name with the row's
+/// email underneath. Exercises `RowCellRenderer`'s access to sibling fields.
+fn make_name_email_renderer() -> RowCellRenderer<Employee> {
+    Arc::new(|emp: &Employee, _val: &CellValue| {
+        let name = emp.name.clone();
+        let email = emp.email.clone();
+        rsx! {
+            div { style: "line-height: 1.2;",
+                div { style: "font-weight: 600;", "{name}" }
+                div { style: "font-size: 0.72rem; color: #6b7280;", "{email}" }
+            }
+        }
+    })
+}
+
 #[component]
 fn App() -> Element {
     let table = use_table(|| TableState::new(generate_dataset(), build_columns(false, false)));
@@ -393,6 +410,9 @@ fn App() -> Element {
     let mut selection_toolbar_on = use_signal(|| false);
     let mut master_detail_on = use_signal(|| false);
     let mut use_derive_on = use_signal(|| false);
+    let mut row_renderers_on = use_signal(|| false);
+    let mut row_click_on = use_signal(|| false);
+    let mut last_clicked: Signal<Option<String>> = use_signal(|| None);
 
     // ── Cell renderers (re-built when variable_height_on changes) ────────────
     let cell_renderers = use_memo(move || {
@@ -402,6 +422,14 @@ fn App() -> Element {
             m.insert(ColumnId("name"), make_variable_height_renderer());
         }
         CellRenderers::new(m)
+    });
+
+    let row_cell_renderers = use_memo(move || {
+        let mut m: HashMap<ColumnId, RowCellRenderer<Employee>> = HashMap::new();
+        if *row_renderers_on.read() {
+            m.insert(ColumnId("name"), make_name_email_renderer());
+        }
+        RowCellRenderers::new(m)
     });
 
     // ── French labels (created once) ─────────────────────────────────────────
@@ -477,6 +505,21 @@ fn App() -> Element {
                 }
                 table.update_row(edit.row_id, row);
             }
+        }))
+    } else {
+        None
+    };
+
+    let row_click_handler: Option<Callback<RowId>> = if *row_click_on.read() {
+        Some(Callback::new(move |rid: RowId| {
+            let name = table
+                .signal()
+                .read()
+                .rows
+                .iter()
+                .find(|(id, _)| *id == rid)
+                .map(|(_, r)| r.name.clone());
+            last_clicked.set(Some(name.unwrap_or_else(|| format!("{rid:?}"))));
         }))
     } else {
         None
@@ -761,6 +804,28 @@ fn App() -> Element {
                     }
                     " Excel Export"
                 }
+                label {
+                    input {
+                        r#type: "checkbox",
+                        checked: *row_renderers_on.read(),
+                        onchange: move |_| {
+                            let v = *row_renderers_on.read();
+                            row_renderers_on.set(!v);
+                        },
+                    }
+                    " Row-aware name+email cell"
+                }
+                label {
+                    input {
+                        r#type: "checkbox",
+                        checked: *row_click_on.read(),
+                        onchange: move |_| {
+                            let v = *row_click_on.read();
+                            row_click_on.set(!v);
+                        },
+                    }
+                    " on_row_click (last-clicked readout)"
+                }
             }
 
             if *selection_on.read() {
@@ -771,12 +836,22 @@ fn App() -> Element {
                 }
             }
 
+            if *row_click_on.read() {
+                div {
+                    style: "margin-bottom: 0.25rem; font-size: 0.875rem; color: #374151; \
+                            font-weight: 500;",
+                    "Last clicked row: "
+                    {last_clicked.read().clone().unwrap_or_else(|| String::from("(none yet)"))}
+                }
+            }
+
             Table {
                 handle: table,
                 sort_enabled: *sort_on.read(),
                 filter_enabled: *filter_on.read(),
                 selection_enabled: *selection_on.read(),
                 cell_renderers: cell_renderers.read().clone(),
+                row_cell_renderers: row_cell_renderers.read().clone(),
                 column_toolbar: *col_toolbar_on.read(),
                 csv_export: *csv_export_on.read(),
                 xlsx_export: *xlsx_export_on.read(),
@@ -798,6 +873,7 @@ fn App() -> Element {
                 } else {
                     None
                 },
+                on_row_click: row_click_handler,
             }
         }
     }

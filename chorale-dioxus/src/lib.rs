@@ -107,6 +107,43 @@ pub use components::CellRenderer;
 /// ```
 pub use components::CellRenderers;
 
+/// Type-erased row-aware cell renderer: maps the full row plus a [`CellValue`]
+/// to a Dioxus [`Element`].
+///
+/// `Arc<dyn Fn(&TRow, &CellValue) -> Element + Send + Sync + 'static>`
+///
+/// Use when the cell needs data from other fields on the row: composite cells
+/// (avatar + name), action columns, link cells that build an href from a
+/// sibling field. Register via [`RowCellRenderers::new`] and pass to the
+/// `row_cell_renderers` prop of [`Table`].
+///
+/// [`CellValue`]: chorale_core::CellValue
+/// [`Element`]: dioxus::prelude::Element
+pub use components::RowCellRenderer;
+
+/// Per-column map of row-aware cell renderers.
+///
+/// Build with `RowCellRenderers::new(map)` where
+/// `map: HashMap<ColumnId, RowCellRenderer<TRow>>`. Pass to the
+/// `row_cell_renderers` prop of [`Table`] to override columns with renderers
+/// that receive the full row. Entries take precedence over `cell_renderers`
+/// entries and the column's `RenderKind`. Compared by pointer identity for
+/// prop diffing.
+///
+/// ```rust,ignore
+/// use std::{collections::HashMap, sync::Arc};
+/// use chorale_dioxus::{RowCellRenderer, RowCellRenderers};
+/// use chorale_core::ColumnId;
+/// use dioxus::prelude::*;
+///
+/// let renderers = RowCellRenderers::new(HashMap::from([
+///     (ColumnId("name"), Arc::new(|row: &MyRow, _val| rsx! {
+///         div { span { class: "bold", "{row.name}" } }
+///     }) as RowCellRenderer<MyRow>),
+/// ]));
+/// ```
+pub use components::RowCellRenderers;
+
 /// Create a reactive chorale table handle backed by a Dioxus signal.
 ///
 /// Call inside a component to obtain a [`UseTableHandle<TRow>`]. Pass the
