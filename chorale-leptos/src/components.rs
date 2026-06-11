@@ -661,8 +661,11 @@ fn multiselect_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
     // local RwSignal: this function re-runs on every filter change (checking
     // a box mutates s.filters -> view_key -> header re-render), and a local
     // signal would reset to closed after each pick. Outside-click closing is
-    // handled by the single window listener in the Table body; clicks inside
-    // this subtree stop propagation so they never reach it.
+    // handled by the single CAPTURE-PHASE document listener in the Table
+    // body (capture so inner `stop_propagation()` — e.g. on data cells —
+    // cannot suppress it); that listener exempts clicks inside
+    // `.chorale-filter-dropdown` (keep open) and `.chorale-filter-toggle`
+    // (this button's handler owns toggling).
 
     let count_label = if selected.is_empty() {
         "All".to_owned()
@@ -676,7 +679,12 @@ fn multiselect_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
             on:click=move |ev| { ev.stop_propagation(); }
         >
             <div style="flex:1;min-width:0;position:relative;">
+                // The `chorale-filter-toggle` class is load-bearing: the
+                // capture-phase document listener in the Table body skips
+                // clicks landing here so this handler keeps exclusive
+                // ownership of open/close/switch toggling.
                 <button
+                    class="chorale-filter-toggle"
                     style="width:100%;padding:0.2rem 0.4rem;border:1px solid #ddd;\
                            border-radius:3px;font-size:0.8rem;text-align:left;cursor:pointer;\
                            background:white;"
@@ -693,7 +701,14 @@ fn multiselect_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
                     // z-index must beat sticky-header cells (z-index:1) and
                     // frozen-column body cells (z-index:2). See Bug 2 fix for
                     // why filter_th now carries z-index:3.
-                    <div style="position:absolute;top:100%;left:0;z-index:9999;\
+                    //
+                    // The `chorale-filter-dropdown` class is load-bearing:
+                    // the capture-phase document listener in the Table body
+                    // uses `target.closest(...)` against it to keep clicks
+                    // inside the dropdown (checkboxes, scrollbar) from
+                    // closing it.
+                    <div class="chorale-filter-dropdown"
+                        style="position:absolute;top:100%;left:0;z-index:9999;\
                                  background:white;border:1px solid #ddd;border-radius:3px;\
                                  padding:0.25rem;min-width:8rem;max-height:200px;\
                                  overflow-y:auto;box-shadow:0 2px 8px rgba(0,0,0,0.15);"
@@ -927,8 +942,20 @@ fn header_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
                     handle.toggle_sort(col_id, action);
                 }
             }
-            on:dragstart=move |_| {
+            on:dragstart=move |ev| {
                 if column_reorder_enabled {
+                    // Some browsers (notably Firefox) refuse to initiate an
+                    // HTML5 drag unless dataTransfer.setData() is called in
+                    // dragstart. The payload is benign; the real source
+                    // column travels via the `drag_col_id` signal. web-sys is
+                    // a wasm32-only dependency, so the DataTransfer call is
+                    // gated to that target (matching the rest of this file).
+                    #[cfg(target_arch = "wasm32")]
+                    if let Some(dt) = ev.data_transfer() {
+                        let _ = dt.set_data("text/plain", col_id.0);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let _ = &ev;
                     drag_col_id.set(Some(col_id));
                 }
             }
@@ -942,26 +969,27 @@ fn header_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 if column_reorder_enabled {
                     if let Some(src_id) = drag_col_id.get_untracked() {
                         if src_id != col_id {
-                            let new_order = handle.signal().with_untracked(|s| {
-                                let order: Vec<ColumnId> = s.column_order.clone();
-                                if let Some(to_idx) = order.iter().position(|&id| id == col_id) {
-                                    let mut o = order;
-                                    if let Some(from_idx) = o.iter().position(|&id| id == src_id) {
-                                        o.remove(from_idx);
-                                        let insert_at = if from_idx < to_idx {
-                                            to_idx.saturating_sub(1)
-                                        } else {
-                                            to_idx
-                                        };
-                                        o.insert(insert_at, src_id);
-                                    }
-                                    Some(o)
+                            // `s.column_order` defaults to EMPTY (the
+                            // renderer falls back to definition order when
+                            // empty), so the drop target's index must be
+                            // resolved against the same effective order the
+                            // renderer uses — searching the raw vec found
+                            // nothing and made every drop a no-op.
+                            let to_idx = handle.signal().with_untracked(|s| {
+                                if s.column_order.is_empty() {
+                                    s.columns.iter().position(|c| c.id == col_id)
                                 } else {
-                                    None
+                                    s.column_order.iter().position(|&id| id == col_id)
                                 }
                             });
-                            if let Some(order) = new_order {
-                                handle.signal().update(|s| s.column_order = order);
+                            if let Some(to_idx) = to_idx {
+                                // Core `move_column` initializes an empty
+                                // `column_order` from definition order,
+                                // removes `src_id`, and inserts at `to_idx`
+                                // (clamped) — landing the dragged column at
+                                // the drop target's original visual slot in
+                                // both drag directions.
+                                handle.move_column(src_id, to_idx).ok();
                             }
                         }
                         drag_col_id.set(None);
@@ -1895,17 +1923,78 @@ where
         on_cleanup(move || mousedown_handle.remove());
 
         // Single table-scoped outside-click closer for the multi-select
-        // filter dropdowns. Clicks inside a dropdown stop propagation and
-        // never reach this window listener, so an unconditional close here
-        // is exactly "close on outside click". Replaces the per-render
-        // window_event_listener that multiselect_filter used to leak on
-        // every header re-render.
-        let filter_close_handle = window_event_listener(leptos::ev::click, move |_| {
-            if open_filter_col.try_get_untracked().flatten().is_some() {
-                open_filter_col.try_set(None);
-            }
-        });
-        on_cleanup(move || filter_close_handle.remove());
+        // filter dropdowns, registered in the CAPTURE phase on `document`.
+        //
+        // Capture is load-bearing: data cells (and several other table
+        // regions) call `stop_propagation()` in their bubble-phase click
+        // handlers, so a bubble-phase window listener never hears clicks on
+        // them and the dropdown stays stuck open when you click a cell. A
+        // capture-phase listener runs on the way DOWN (document -> target)
+        // before any bubble-phase `stop_propagation()` can fire, so every
+        // click in the page reaches it. `window_event_listener` does not
+        // expose capture options, hence the raw web_sys registration.
+        //
+        // Two click locations are exempt from the unconditional close:
+        //   - inside `.chorale-filter-dropdown`: picking checkboxes or
+        //     grabbing the dropdown scrollbar must keep it open;
+        //   - inside `.chorale-filter-toggle`: the toggle button's own
+        //     bubble-phase handler owns open/close/switch semantics. If
+        //     capture closed first, the same-column toggle would observe
+        //     `None` and re-open — turning "click toggle to close" into a
+        //     no-op. (Clicking ANOTHER column's toggle still closes this
+        //     dropdown: that handler sets `open_filter_col` to the other
+        //     column, which unmounts this one's `<Show>`.)
+        //
+        // Cleanup mirrors the listener above: the closure is moved into
+        // `on_cleanup` so it outlives the registration, and the handler
+        // body uses `try_*` signal accessors so a stale fire after the
+        // table subtree is disposed is a silent no-op, never a panic.
+        if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+            let filter_close_cb = wasm_bindgen::closure::Closure::<dyn Fn(web_sys::Event)>::new(
+                move |ev: web_sys::Event| {
+                    let Some(is_open) = open_filter_col.try_get_untracked() else {
+                        return;
+                    };
+                    if is_open.is_none() {
+                        return;
+                    }
+                    let exempt = ev
+                        .target()
+                        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                        .is_some_and(|el| {
+                            el.closest(".chorale-filter-dropdown, .chorale-filter-toggle")
+                                .ok()
+                                .flatten()
+                                .is_some()
+                        });
+                    if !exempt {
+                        open_filter_col.try_set(None);
+                    }
+                },
+            );
+            let registered = doc
+                .add_event_listener_with_callback_and_bool(
+                    "click",
+                    filter_close_cb.as_ref().unchecked_ref(),
+                    true, // capture phase
+                )
+                .is_ok();
+            // `on_cleanup` requires Send + Sync, but JS handles (Closure,
+            // Document) are neither. SendWrapper is sound here because wasm
+            // is single-threaded — the same trick leptos uses internally.
+            let cleanup_ctx = send_wrapper::SendWrapper::new((doc, filter_close_cb));
+            on_cleanup(move || {
+                let (doc, filter_close_cb) = &*cleanup_ctx;
+                if registered {
+                    let _ = doc.remove_event_listener_with_callback_and_bool(
+                        "click",
+                        filter_close_cb.as_ref().unchecked_ref(),
+                        true,
+                    );
+                }
+                // `filter_close_cb` is dropped here, releasing the JS shim.
+            });
+        }
     }
 
     view! {
