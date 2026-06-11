@@ -85,6 +85,24 @@ pub use components::CellRenderer;
 /// to override the built-in rendering for specific columns.
 pub use components::CellRenderers;
 
+/// Type-erased row-aware cell renderer: maps the full row plus the cell's
+/// [`CellValue`] to a Leptos [`AnyView`].
+///
+/// Build with `Arc::new(|row: &MyRow, val: &CellValue| view! { ... }.into_any())`
+/// and register via [`RowCellRenderers::new`]. Use this when the cell needs
+/// data from other fields on the row: composite cells, action columns, link cells.
+///
+/// [`CellValue`]: chorale_core::CellValue
+/// [`AnyView`]: leptos::prelude::AnyView
+pub use components::RowCellRenderer;
+
+/// Per-column map of row-aware cell renderers.
+///
+/// Build with `RowCellRenderers::new(HashMap::from([...]))` where values are
+/// [`RowCellRenderer`] closures. Pass to the `row_cell_renderers` prop of
+/// [`Table`]. Entries take precedence over `cell_renderers` and `RenderKind`.
+pub use components::RowCellRenderers;
+
 /// Optional synchronous validation function for in-cell editing.
 ///
 /// Build with `ValidateEditFn::new(|v| { ... })`. Default is no-op (all

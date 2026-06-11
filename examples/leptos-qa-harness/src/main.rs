@@ -9,10 +9,12 @@
 use chorale_core::{
     AggregatorKind, Alignment, BadgeVariant, BadgeVariantMap, CellValue, ColumnDef, ColumnId,
     CommittedEdit, CurrencyCode, EditorKind, FilterKind, FrozenSide, GroupedPaginationMode, Labels,
-    NaiveDate, PaginationMode, RenderKind,
+    NaiveDate, PaginationMode, RenderKind, RowId,
 };
 use chorale_derive::TableRow;
-use chorale_leptos::{use_chorale_table, CellRenderer, CellRenderers, Table};
+use chorale_leptos::{
+    use_chorale_table, CellRenderer, CellRenderers, RowCellRenderer, RowCellRenderers, Table,
+};
 use leptos::prelude::{StoredValue, *};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::collections::HashMap;
@@ -262,6 +264,22 @@ fn make_variable_height_renderer() -> CellRenderer {
     })
 }
 
+/// Row-aware composite cell for the "name" column: name with the row's
+/// email underneath. Exercises `RowCellRenderer`'s access to sibling fields.
+fn make_name_email_renderer() -> RowCellRenderer<Employee> {
+    Arc::new(|emp: &Employee, _val: &CellValue| {
+        let name = emp.name.clone();
+        let email = emp.email.clone();
+        view! {
+            <div style="line-height:1.2;">
+                <div style="font-weight:600;">{name}</div>
+                <div style="font-size:0.72rem;color:#6b7280;">{email}</div>
+            </div>
+        }
+        .into_any()
+    })
+}
+
 #[component]
 fn App() -> impl IntoView {
     // Generate once; keep a copy in a StoredValue so the derive-mode effect
@@ -291,6 +309,9 @@ fn App() -> impl IntoView {
     let selection_toolbar_on = RwSignal::new(false);
     let use_derive_on = RwSignal::new(false);
     let xlsx_export_on = RwSignal::new(false);
+    let row_renderers_on = RwSignal::new(false);
+    let row_click_on = RwSignal::new(false);
+    let last_clicked: RwSignal<Option<String>> = RwSignal::new(None);
 
     // ── Cell renderers (rebuilt when variable_height_on / use_derive_on changes) ─
     // In derive mode, the macro emits RenderKind::Currency on salary, so the
@@ -307,6 +328,14 @@ fn App() -> impl IntoView {
             m.insert(ColumnId("name"), make_variable_height_renderer());
         }
         CellRenderers::new(m)
+    });
+
+    let row_cell_renderers_memo = Memo::new(move |_| {
+        let mut m: HashMap<ColumnId, RowCellRenderer<Employee>> = HashMap::new();
+        if row_renderers_on.get() {
+            m.insert(ColumnId("name"), make_name_email_renderer());
+        }
+        RowCellRenderers::new(m)
     });
 
     // ── French labels ─────────────────────────────────────────────────────────
@@ -538,6 +567,22 @@ fn App() -> impl IntoView {
                     />
                     " Excel Export"
                 </label>
+                <label>
+                    <input
+                        type="checkbox"
+                        prop:checked=move || row_renderers_on.get()
+                        on:change=move |_| row_renderers_on.update(|v| *v = !*v)
+                    />
+                    " Row-aware name+email cell"
+                </label>
+                <label>
+                    <input
+                        type="checkbox"
+                        prop:checked=move || row_click_on.get()
+                        on:change=move |_| row_click_on.update(|v| *v = !*v)
+                    />
+                    " on_row_click (last-clicked readout)"
+                </label>
             </div>
 
             {move || {
@@ -550,6 +595,23 @@ fn App() -> impl IntoView {
                 let col_reorder = column_reorder_on.get();
                 let xlsx = xlsx_export_on.get();
                 let renderers = cell_renderers.get();
+                let row_renderers_val = row_cell_renderers_memo.get();
+                // Always provide a Callback; it checks row_click_on at call
+                // time so disabling the toggle silently no-ops without
+                // requiring a conditional prop (which Leptos's typed-builder
+                // does not support inside view! blocks).
+                let row_click_cb: Callback<RowId> = Callback::new(move |rid: RowId| {
+                    if !row_click_on.get_untracked() {
+                        return;
+                    }
+                    let name = table.signal().with_untracked(|s| {
+                        s.rows
+                            .iter()
+                            .find(|(id, _)| *id == rid)
+                            .map(|(_, r)| r.name.clone())
+                    });
+                    last_clicked.set(Some(name.unwrap_or_else(|| format!("{rid:?}"))));
+                });
 
                 // Labels: always pass a concrete value (default or French).
                 let labels_val: Labels = if labels_french_on.get() {
@@ -651,12 +713,22 @@ fn App() -> impl IntoView {
                             </div>
                         }
                     })}
+                    {move || row_click_on.get().then(|| {
+                        let txt = last_clicked.get().unwrap_or_else(|| String::from("(none yet)"));
+                        view! {
+                            <div style="margin-bottom: 0.25rem; font-size: 0.875rem; \
+                                        color: #374151; font-weight: 500;">
+                                "Last clicked row: "{txt}
+                            </div>
+                        }
+                    })}
                     <Table
                         handle=table
                         sort_enabled=sort
                         filter_enabled=filter
                         selection_enabled=selection
                         cell_renderers=renderers
+                        row_cell_renderers=row_renderers_val
                         column_toolbar=toolbar
                         csv_export=csv
                         xlsx_export=xlsx
@@ -665,6 +737,7 @@ fn App() -> impl IntoView {
                         sticky_header=frozen_columns_on.get()
                         labels=labels_val
                         on_commit_edit=commit_cb
+                        on_row_click=row_click_cb
                         selection_toolbar=toolbar_fn
                     />
                 }

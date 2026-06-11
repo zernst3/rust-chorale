@@ -58,6 +58,54 @@ impl PartialEq for CellRenderers {
     }
 }
 
+/// Type-erased row-aware cell renderer: maps the full row plus the cell's
+/// [`CellValue`] to a Leptos [`AnyView`].
+///
+/// Use this instead of [`CellRenderer`] when the cell needs data from other
+/// fields on the row: composite cells (avatar + name), action columns that
+/// need the row's id, link cells that build an href from a sibling field.
+/// Build with `Arc::new(|row: &MyRow, val: &CellValue| view! { ... }.into_any())`
+/// and register via [`RowCellRenderers::new`].
+pub type RowCellRenderer<TRow> = Arc<dyn Fn(&TRow, &CellValue) -> AnyView + Send + Sync + 'static>;
+
+/// Per-column map of row-aware cell renderers; default is empty.
+///
+/// Entries here take precedence over [`CellRenderers`] entries, which take
+/// precedence over the column's `RenderKind`. Compared by pointer identity.
+pub struct RowCellRenderers<TRow>(Arc<HashMap<ColumnId, RowCellRenderer<TRow>>>);
+
+impl<TRow> RowCellRenderers<TRow> {
+    /// Create a `RowCellRenderers` from a map of column-id to renderer closure.
+    #[must_use]
+    pub fn new(map: HashMap<ColumnId, RowCellRenderer<TRow>>) -> Self {
+        Self(Arc::new(map))
+    }
+
+    fn get(&self, col: ColumnId) -> Option<RowCellRenderer<TRow>> {
+        self.0.get(&col).cloned()
+    }
+}
+
+// Manual impls: `#[derive(...)]` would add unwanted `TRow: Clone / Default`
+// bounds; the Arc makes these free regardless of TRow.
+impl<TRow> Clone for RowCellRenderers<TRow> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl<TRow> Default for RowCellRenderers<TRow> {
+    fn default() -> Self {
+        Self(Arc::new(HashMap::new()))
+    }
+}
+
+impl<TRow> PartialEq for RowCellRenderers<TRow> {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 /// Input passed to the `validate_edit` callback before a cell edit is committed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EditValidation {
@@ -365,6 +413,28 @@ fn render_cell_value(
             view! { <span>{text}</span> }.into_any()
         }
     }
+}
+
+/// Resolve a data cell's content with the renderer precedence chain:
+/// row-aware renderer > value-only renderer > the column's `RenderKind`.
+fn resolve_cell_content<TRow>(
+    row: &TRow,
+    val: &CellValue,
+    render_kind: &RenderKind,
+    row_renderer: Option<&RowCellRenderer<TRow>>,
+    value_renderer: Option<&CellRenderer>,
+) -> AnyView {
+    if let Some(rr) = row_renderer {
+        rr(row, val)
+    } else {
+        render_cell_value(val, render_kind, value_renderer)
+    }
+}
+
+/// A plain left-click on a data cell is a "row click"; Ctrl/Cmd/Shift
+/// clicks are range-selection operations and must not fire `on_row_click`.
+fn should_fire_row_click(ctrl: bool, shift: bool) -> bool {
+    !ctrl && !shift
 }
 
 // ---------------------------------------------------------------------------
@@ -1124,6 +1194,7 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
     override_width: Option<f64>,
     row_height: f64,
     cell_renderers: &CellRenderers,
+    row_cell_renderers: &RowCellRenderers<TRow>,
     editing_col: Option<ColumnId>,
     editing_text: RwSignal<String>,
     edit_error: RwSignal<Option<String>>,
@@ -1137,6 +1208,7 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
     is_focus_cell: bool,
     fill_drag_active: RwSignal<bool>,
     fill_hover: RwSignal<Option<(usize, ColumnId)>>,
+    on_row_click: Option<Callback<RowId>>,
 ) -> AnyView {
     let val = (col.accessor)(row);
     let col_id = col.id;
@@ -1146,6 +1218,7 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
     let is_editing = editing_col == Some(col_id);
     let render_kind = col.render_kind.clone();
     let renderer = cell_renderers.get(col_id);
+    let row_renderer = row_cell_renderers.get(col_id);
     let validate_fn = validate_fn.clone();
     let on_commit_edit_cb = on_commit_edit.copied();
     let row_clone = row.clone();
@@ -1411,7 +1484,13 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
         }
     }
 
-    let cell_content = render_cell_value(&val, &render_kind, renderer.as_ref());
+    let cell_content = resolve_cell_content(
+        row,
+        &val,
+        &render_kind,
+        row_renderer.as_ref(),
+        renderer.as_ref(),
+    );
     view! {
         <td
             style=format!(
@@ -1432,6 +1511,11 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                     handle.signal.with_untracked(|s| start_range_selection(s, row_index, col_id))
                 };
                 handle.signal.set(new_s);
+                if should_fire_row_click(ctrl, shift) {
+                    if let Some(cb) = on_row_click {
+                        cb.run(row_id);
+                    }
+                }
                 ev.stop_propagation();
             }
             on:dblclick=move |_| {
@@ -1472,6 +1556,7 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
     is_selected: bool,
     handle: UseTableHandle<TRow>,
     cell_renderers: &CellRenderers,
+    row_cell_renderers: &RowCellRenderers<TRow>,
     editing_col: Option<ColumnId>,
     editing_text: RwSignal<String>,
     edit_error: RwSignal<Option<String>>,
@@ -1485,6 +1570,7 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
     fill_hover: RwSignal<Option<(usize, ColumnId)>>,
     has_detail: bool,
     is_expanded: bool,
+    on_row_click: Option<Callback<RowId>>,
 ) -> AnyView {
     let bg = if is_selected { "#eff6ff" } else { "white" };
     let cells: Vec<AnyView> = visible_cols
@@ -1501,6 +1587,7 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 widths.get(&col.id).copied(),
                 row_height,
                 cell_renderers,
+                row_cell_renderers,
                 editing_col,
                 editing_text,
                 edit_error,
@@ -1514,6 +1601,7 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 is_focus_cell,
                 fill_drag_active,
                 fill_hover,
+                on_row_click,
             )
         })
         .collect();
@@ -1764,12 +1852,24 @@ pub fn Table<TRow>(
     #[prop(default = false)] filter_enabled: bool,
     #[prop(default = false)] selection_enabled: bool,
     #[prop(default = CellRenderers::default())] cell_renderers: CellRenderers,
+    /// Per-column custom renderers that receive the **full row** plus the
+    /// cell value (`Fn(&TRow, &CellValue) -> AnyView`). Entries here take
+    /// precedence over `cell_renderers` and the column's `RenderKind`.
+    #[prop(default = RowCellRenderers::default())]
+    row_cell_renderers: RowCellRenderers<TRow>,
     #[prop(default = false)] column_toolbar: bool,
     #[prop(default = false)] csv_export: bool,
     #[prop(default = false)] xlsx_export: bool,
     #[prop(default = false)] resize_enabled: bool,
     #[prop(default = ValidateEditFn::default())] validate_edit: ValidateEditFn,
     on_commit_edit: Option<Callback<CommittedEdit<TRow>>>,
+    /// Fired with the row's [`RowId`] when a data row receives a plain
+    /// (unmodified) left-click on one of its data cells. Not fired for the
+    /// selection checkbox, the detail-expander chevron, in-edit cells,
+    /// group headers, or Ctrl/Cmd/Shift-modified clicks (range-selection
+    /// operations). Default `None` = no behavior change.
+    #[prop(optional)]
+    on_row_click: Option<Callback<RowId>>,
     /// Fired when Tab key moves focus to a cell whose column has `EditorKind` configured.
     #[prop(optional)]
     on_tab_to_editable: Option<Callback<ActiveCell>>,
@@ -2311,7 +2411,7 @@ where
             // exactly in the empty-selection state. The wrapper carries
             // only structural styling; the slot's own content provides
             // visual treatment.
-            {selection_toolbar.as_ref().map(|slot| {
+            {selection_toolbar.map(|slot| {
                 view! {
                     <div
                         class="chorale-selection-toolbar"
@@ -2535,6 +2635,7 @@ where
                                         selection_set.contains(&row_id),
                                         handle,
                                         &cell_renderers,
+                                        &row_cell_renderers,
                                         editing_target
                                             .filter(|t| t.row_id == row_id)
                                             .map(|t| t.column_id),
@@ -2550,6 +2651,7 @@ where
                                         fill_hover,
                                         has_detail,
                                         false,
+                                        on_row_click,
                                     ),
                                     _ => view! { <tr /> }.into_any(),
                                 })
@@ -2587,6 +2689,7 @@ where
                                             selection_set.contains(&row_id),
                                             handle,
                                             &cell_renderers,
+                                            &row_cell_renderers,
                                             editing_col,
                                             editing_text,
                                             edit_error,
@@ -2600,6 +2703,7 @@ where
                                             fill_hover,
                                             has_detail,
                                             is_expanded,
+                                            on_row_click,
                                         ));
                                     }
                                     RenderRow::DetailPanel { parent_row_id } => {
@@ -3053,5 +3157,126 @@ where
                 }
             }}
         </div>
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[derive(Clone, PartialEq)]
+    struct RcrRow {
+        name: String,
+        email: String,
+    }
+
+    #[test]
+    fn row_cell_renderer_receives_row() {
+        let captured: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+        let captured2 = Arc::clone(&captured);
+        let renderer: RowCellRenderer<RcrRow> = Arc::new(move |row: &RcrRow, _val: &CellValue| {
+            *captured2.lock().unwrap() = Some(row.email.clone());
+            ().into_any()
+        });
+        let renderers = RowCellRenderers::new(HashMap::from([(ColumnId("name"), renderer)]));
+        let r = renderers.get(ColumnId("name")).unwrap();
+        let row = RcrRow {
+            name: "Ada".into(),
+            email: "ada@example.com".into(),
+        };
+        r(&row, &CellValue::Text("Ada".into()));
+        assert_eq!(captured.lock().unwrap().as_deref(), Some("ada@example.com"));
+    }
+
+    #[test]
+    fn precedence_row_aware_wins_over_value_only() {
+        let row_called = Arc::new(AtomicBool::new(false));
+        let val_called = Arc::new(AtomicBool::new(false));
+        let row_called2 = Arc::clone(&row_called);
+        let val_called2 = Arc::clone(&val_called);
+
+        let row_r: RowCellRenderer<RcrRow> = Arc::new(move |_: &RcrRow, _: &CellValue| {
+            row_called2.store(true, Ordering::SeqCst);
+            ().into_any()
+        });
+        let val_r: CellRenderer = Arc::new(move |_: &CellValue| {
+            val_called2.store(true, Ordering::SeqCst);
+            ().into_any()
+        });
+        let row = RcrRow {
+            name: "x".into(),
+            email: "x@x.com".into(),
+        };
+        resolve_cell_content(
+            &row,
+            &CellValue::Text("x".into()),
+            &RenderKind::Text,
+            Some(&row_r),
+            Some(&val_r),
+        );
+        assert!(row_called.load(Ordering::SeqCst));
+        assert!(!val_called.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn precedence_value_only_wins_over_render_kind() {
+        let val_called = Arc::new(AtomicBool::new(false));
+        let val_called2 = Arc::clone(&val_called);
+        let val_r: CellRenderer = Arc::new(move |_: &CellValue| {
+            val_called2.store(true, Ordering::SeqCst);
+            ().into_any()
+        });
+        let row = RcrRow {
+            name: "x".into(),
+            email: "x@x.com".into(),
+        };
+        resolve_cell_content(
+            &row,
+            &CellValue::Text("x".into()),
+            &RenderKind::Text,
+            None,
+            Some(&val_r),
+        );
+        assert!(val_called.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn precedence_render_kind_fallback() {
+        let row = RcrRow {
+            name: "x".into(),
+            email: "x@x.com".into(),
+        };
+        // Should not panic; RenderKind path executes safely without DOM.
+        let _ = resolve_cell_content(
+            &row,
+            &CellValue::Text("x".into()),
+            &RenderKind::Text,
+            None::<&RowCellRenderer<RcrRow>>,
+            None,
+        );
+    }
+
+    #[test]
+    fn row_cell_renderers_default_is_empty() {
+        assert!(RowCellRenderers::<RcrRow>::default()
+            .get(ColumnId("name"))
+            .is_none());
+    }
+
+    #[test]
+    fn row_cell_renderers_partial_eq_is_pointer_identity() {
+        let a = RowCellRenderers::<RcrRow>::new(HashMap::new());
+        let b = a.clone();
+        assert!(a == b);
+        assert!(a != RowCellRenderers::new(HashMap::new()));
+    }
+
+    #[test]
+    fn should_fire_row_click_only_on_unmodified_click() {
+        assert!(should_fire_row_click(false, false));
+        assert!(!should_fire_row_click(true, false));
+        assert!(!should_fire_row_click(false, true));
     }
 }
