@@ -345,6 +345,21 @@ fn render_cell_value(
             };
             view! { <span>{text}</span> }.into_any()
         }
+        RenderKind::Number => {
+            let text = match val {
+                CellValue::Integer(n) => format_thousands(*n),
+                CellValue::Float(f) => format!("{f:.0}"),
+                _ => val.to_csv_string(),
+            };
+            view! { <span>{text}</span> }.into_any()
+        }
+        RenderKind::DateTime => {
+            let text = match val {
+                CellValue::DateTime(dt) => dt.format("%Y-%m-%d %H:%M").to_string(),
+                _ => val.to_csv_string(),
+            };
+            view! { <span>{text}</span> }.into_any()
+        }
         _ => {
             let text = cell_text(val);
             view! { <span>{text}</span> }.into_any()

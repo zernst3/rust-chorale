@@ -3,9 +3,13 @@
 //! These tests exercise the derive macro end-to-end by compiling real structs
 //! and inspecting the generated `chorale_columns()` output at runtime.
 
-#![allow(clippy::unwrap_used, clippy::useless_vec)]
+// `float_cmp`: the data-aware filter tests assert exact min/max bounds that
+// pass through the macro unmodified; strict equality is the point.
+#![allow(clippy::unwrap_used, clippy::useless_vec, clippy::float_cmp)]
 
-use chorale_core::{Alignment, CellValue, ColumnId, FilterKind, TableState};
+use chorale_core::{
+    Alignment, CellValue, ColumnId, CurrencyCode, FilterKind, RenderKind, TableState,
+};
 use chorale_derive::TableRow;
 
 // ---------------------------------------------------------------------------
@@ -305,4 +309,246 @@ fn all_columns_sortable_by_default() {
     for col in &cols {
         assert!(col.sortable, "column {} should be sortable", col.id.0);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Data-aware columns: chorale_columns_with_rows
+// ---------------------------------------------------------------------------
+
+#[derive(TableRow, Clone, PartialEq)]
+struct Employee {
+    name: String,
+    #[chorale(render = "currency")]
+    salary: f64,
+    age: u32,
+    bonus: Option<i64>,
+    #[chorale(filter = "MultiSelect")]
+    department: String,
+}
+
+fn sample_employees() -> Vec<Employee> {
+    vec![
+        Employee {
+            name: "Alice".into(),
+            salary: 95_000.5,
+            age: 41,
+            bonus: Some(12_000),
+            department: "Engineering".into(),
+        },
+        Employee {
+            name: "Bob".into(),
+            salary: 60_250.0,
+            age: 28,
+            bonus: None,
+            department: "Sales".into(),
+        },
+        Employee {
+            name: "Carol".into(),
+            salary: 120_000.0,
+            age: 35,
+            bonus: Some(3_000),
+            department: "Engineering".into(),
+        },
+    ]
+}
+
+fn find<'a>(
+    cols: &'a [chorale_core::ColumnDef<Employee>],
+    id: &'static str,
+) -> &'a chorale_core::ColumnDef<Employee> {
+    cols.iter().find(|c| c.id == ColumnId(id)).unwrap()
+}
+
+#[test]
+fn with_rows_computes_real_float_min_max() {
+    let rows = sample_employees();
+    let cols = Employee::chorale_columns_with_rows(&rows);
+    let FilterKind::NumericRange { min, max, step } = find(&cols, "salary").filter else {
+        panic!("expected NumericRange on salary");
+    };
+    assert_eq!(min, 60_250.0);
+    assert_eq!(max, 120_000.0);
+    // (120_000 - 60_250) / 100 = 597.5 → snapped down to 100.
+    assert_eq!(step, 100.0);
+}
+
+#[test]
+fn with_rows_computes_real_integer_min_max() {
+    let rows = sample_employees();
+    let cols = Employee::chorale_columns_with_rows(&rows);
+    let FilterKind::NumericRange { min, max, step } = find(&cols, "age").filter else {
+        panic!("expected NumericRange on age");
+    };
+    assert_eq!(min, 28.0);
+    assert_eq!(max, 41.0);
+    // (41 - 28) / 100 = 0.13 → snapped to 0.1 → clamped to 1.0 for integers.
+    assert_eq!(step, 1.0);
+}
+
+#[test]
+fn with_rows_skips_none_values_in_option_numeric() {
+    let rows = sample_employees();
+    let cols = Employee::chorale_columns_with_rows(&rows);
+    let FilterKind::NumericRange { min, max, .. } = find(&cols, "bonus").filter else {
+        panic!("expected NumericRange on bonus");
+    };
+    assert_eq!(min, 3_000.0);
+    assert_eq!(max, 12_000.0);
+}
+
+#[test]
+fn with_rows_empty_falls_back_to_static_defaults() {
+    let cols = Employee::chorale_columns_with_rows(&[]);
+    let FilterKind::NumericRange { min, max, step } = find(&cols, "salary").filter else {
+        panic!("expected NumericRange on salary");
+    };
+    assert_eq!((min, max, step), (0.0, 100.0, 0.1));
+    let FilterKind::NumericRange { min, max, step } = find(&cols, "age").filter else {
+        panic!("expected NumericRange on age");
+    };
+    assert_eq!((min, max, step), (0.0, 1_000_000.0, 1_000.0));
+}
+
+#[test]
+fn with_rows_multi_select_without_options_collects_sorted_distinct() {
+    let rows = sample_employees();
+    let cols = Employee::chorale_columns_with_rows(&rows);
+    let FilterKind::MultiSelect { options } = &find(&cols, "department").filter else {
+        panic!("expected MultiSelect on department");
+    };
+    assert_eq!(options, &["Engineering", "Sales"]);
+}
+
+#[test]
+fn with_rows_multi_select_caps_options_at_50() {
+    let rows: Vec<Employee> = (0..120)
+        .map(|i| Employee {
+            name: format!("emp{i}"),
+            salary: 1.0,
+            age: 30,
+            bonus: None,
+            department: format!("dept{i:03}"),
+        })
+        .collect();
+    let cols = Employee::chorale_columns_with_rows(&rows);
+    let FilterKind::MultiSelect { options } = &find(&cols, "department").filter else {
+        panic!("expected MultiSelect on department");
+    };
+    assert_eq!(options.len(), 50);
+    assert_eq!(options[0], "dept000");
+    assert_eq!(options[49], "dept049");
+}
+
+#[test]
+fn with_rows_explicit_options_are_preserved() {
+    let rows = vec![MultiSelectFieldRow {
+        status: "Other".into(),
+    }];
+    let cols = MultiSelectFieldRow::chorale_columns_with_rows(&rows);
+    let col = cols.iter().find(|c| c.id == ColumnId("status")).unwrap();
+    let FilterKind::MultiSelect { options } = &col.filter else {
+        panic!("expected MultiSelect on status");
+    };
+    // Explicit options win over data-derived values.
+    assert_eq!(options, &["Active", "Inactive"]);
+}
+
+#[derive(TableRow, Clone, PartialEq)]
+struct MultiSelectFieldRow {
+    #[chorale(filter = "MultiSelect", options = ["Active", "Inactive"])]
+    status: String,
+}
+
+#[test]
+fn with_rows_non_numeric_columns_identical_to_static() {
+    let rows = sample_employees();
+    let static_cols = Employee::chorale_columns();
+    let rows_cols = Employee::chorale_columns_with_rows(&rows);
+    assert_eq!(static_cols.len(), rows_cols.len());
+    for (s, r) in static_cols.iter().zip(rows_cols.iter()) {
+        assert_eq!(s.id, r.id);
+        assert_eq!(s.header, r.header);
+        assert_eq!(s.sortable, r.sortable);
+        assert_eq!(s.alignment, r.alignment);
+        assert_eq!(s.initial_width, r.initial_width);
+    }
+    // The name column (Text filter) is byte-for-byte the same configuration.
+    let name = rows_cols.iter().find(|c| c.id == ColumnId("name")).unwrap();
+    assert!(matches!(name.filter, FilterKind::Text));
+}
+
+#[test]
+fn static_chorale_columns_unchanged_by_data_aware_additions() {
+    let cols = Employee::chorale_columns();
+    // Numeric columns keep the static defaults.
+    let FilterKind::NumericRange { min, max, step } = find(&cols, "salary").filter else {
+        panic!("expected NumericRange on salary");
+    };
+    assert_eq!((min, max, step), (0.0, 100.0, 0.1));
+    let FilterKind::NumericRange { min, max, step } = find(&cols, "age").filter else {
+        panic!("expected NumericRange on age");
+    };
+    assert_eq!((min, max, step), (0.0, 1_000_000.0, 1_000.0));
+    // MultiSelect without options stays empty on the static path.
+    let FilterKind::MultiSelect { options } = &find(&cols, "department").filter else {
+        panic!("expected MultiSelect on department");
+    };
+    assert!(options.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// render = "..." attribute
+// ---------------------------------------------------------------------------
+
+#[derive(TableRow, Clone, PartialEq)]
+struct Rendered {
+    #[chorale(render = "currency")]
+    price_usd: f64,
+    #[chorale(render = "currency:EUR")]
+    price_eur: f64,
+    #[chorale(render = "number")]
+    quantity: i64,
+    plain: String,
+}
+
+#[test]
+fn render_currency_defaults_to_usd() {
+    let cols = Rendered::chorale_columns();
+    let col = cols.iter().find(|c| c.id == ColumnId("price_usd")).unwrap();
+    let RenderKind::Currency(code) = &col.render_kind else {
+        panic!("expected Currency render kind");
+    };
+    assert_eq!(*code, CurrencyCode::USD);
+}
+
+#[test]
+fn render_currency_accepts_explicit_code() {
+    let cols = Rendered::chorale_columns();
+    let col = cols.iter().find(|c| c.id == ColumnId("price_eur")).unwrap();
+    let RenderKind::Currency(code) = &col.render_kind else {
+        panic!("expected Currency render kind");
+    };
+    assert_eq!(*code, CurrencyCode::EUR);
+}
+
+#[test]
+fn render_number_emits_number_kind() {
+    let cols = Rendered::chorale_columns();
+    let col = cols.iter().find(|c| c.id == ColumnId("quantity")).unwrap();
+    assert!(matches!(col.render_kind, RenderKind::Number));
+}
+
+#[test]
+fn no_render_attribute_keeps_text_default() {
+    let cols = Rendered::chorale_columns();
+    let col = cols.iter().find(|c| c.id == ColumnId("plain")).unwrap();
+    assert!(matches!(col.render_kind, RenderKind::Text));
+}
+
+#[test]
+fn render_attribute_applies_to_rows_aware_path_too() {
+    let rows: Vec<Rendered> = vec![];
+    let cols = Rendered::chorale_columns_with_rows(&rows);
+    let col = cols.iter().find(|c| c.id == ColumnId("price_usd")).unwrap();
+    assert!(matches!(col.render_kind, RenderKind::Currency(_)));
 }

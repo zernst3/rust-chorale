@@ -96,24 +96,105 @@ Build with: `cargo install trunk && cd examples/leptos-basic && trunk serve --op
 
 ## Using `#[derive(TableRow)]`
 
+`#[derive(TableRow)]` generates `fn chorale_columns() -> Vec<ColumnDef<Self>>`
+from struct fields, plus a new data-aware variant `fn chorale_columns_with_rows(rows: &[Self]) -> Vec<ColumnDef<Self>>`.
+
+### Field attributes
+
+| Attribute | Values | Purpose |
+|---|---|---|
+| `skip` | (flag) | Omit the field from generated columns. |
+| `header = "..."` | string | Custom column label (default: snake_case→Title Case). |
+| `initial_width = N` | integer ≥ 40 | Column width in pixels (default: inferred from content). |
+| `sortable = true/false` | boolean | Enable column sorting (default: `true`). |
+| `filter = "..."` | `none` &#124; `Text` &#124; `Boolean` &#124; `Date` &#124; `MultiSelect` | Filter type (default: `none`). See notes below. |
+| `options = [...]` | `["val1", "val2", ...]` | Hard-coded choices for `filter = "MultiSelect"` (overrides data derivation). |
+| `align = "..."` | `Left` &#124; `Center` &#124; `Right` | Cell alignment (default: `Left` for text, `Right` for numbers). |
+| `render = "..."` | See table below | Cell rendering style (default: `Text` based on field type). |
+
+### Render kinds
+
+| Value | Emits | Notes |
+|---|---|---|
+| `render = "currency"` | `RenderKind::Currency(CurrencyCode("USD"))` | Formats as USD; include code for other currencies. |
+| `render = "currency:EUR"` | `RenderKind::Currency(CurrencyCode("EUR"))` | Specify any 1–8 char alphabetic ISO 4217 code (uppercased). |
+| `render = "number"` | `RenderKind::Number` | Formats as generic number. |
+| `render = "text"` | `RenderKind::Text` | Plain text (default). |
+| `render = "date"` | `RenderKind::Date` | Formats as date only. |
+| `render = "datetime"` | `RenderKind::DateTime` | Formats as date + time. |
+| `render = "boolean"` / `"bool"` | `RenderKind::Boolean` | Renders as checkmark/cross. |
+| `render = "badge"` | **Compile error** | Not supported by the macro (requires a `BadgeVariantMap` runtime). Use hand-written `ColumnDef::new(...).render_kind(RenderKind::Badge(map))` instead. |
+
+### Example: basic usage
+
 ```rust
 use chorale_derive::TableRow;
-use chorale_core::{CellValue, ColumnId, FilterKind};
+use chorale_core::ColumnDef;
 
 #[derive(Clone, PartialEq, TableRow)]
 struct Employee {
-    #[chorale(header = "Full Name", filter = "text", sortable)]
+    #[chorale(header = "Full Name", filter = "Text", sortable)]
     name: String,
-    #[chorale(header = "Salary", sortable)]
-    salary: i64,
+    #[chorale(header = "Salary", render = "currency")]
+    salary: f64,
     #[chorale(skip)]
     internal_id: u64,
 }
 
-// Generates:
-// impl Employee {
-//     pub fn chorale_columns() -> Vec<ColumnDef<Employee>> { … }
-// }
+// At compile time, generates:
+//   Employee::chorale_columns() -> Vec<ColumnDef<Employee>>
+//   Employee::chorale_columns_with_rows(&[Employee]) -> Vec<ColumnDef<Employee>>
+```
+
+### Data-aware column generation: `chorale_columns_with_rows`
+
+`chorale_columns_with_rows(rows)` analyzes the input data to populate numeric bounds
+and multi-select options automatically:
+
+- **Numeric columns** (int/uint/f32/f64, including `Option<T>`) with no explicit
+  `filter = "..."` directive: computes real min/max from `rows`, emitting
+  `FilterKind::NumericRange { min, max, step }`. `None` and non-finite values
+  are skipped. Step size is `(max - min) / 100` snapped down to the nearest
+  power of 10 (e.g., range 59,750 → step 100); for integer columns, step is
+  clamped to ≥ 1.0. If all values are identical or `rows` is empty, falls back
+  to the static defaults (int: 0–1,000,000 step 1,000; float: 0–100 step 0.1).
+
+- **`filter = "MultiSelect"` columns** with no `options = [...]` override:
+  derives options as the sorted distinct stringified field values from `rows`
+  (via `Display`, excluding `None`), capped at the first 50 items in sort order.
+  Explicit `options = [...]` always wins and prevents data derivation.
+
+- **All other columns** behave identically to `chorale_columns()`.
+
+Use `chorale_columns_with_rows(&rows)` when initializing the table if you want
+bounds and options inferred from data; call it again if data changes and you want
+the columns rebuilt. `chorale_columns()` always uses static defaults and never
+analyzes the data.
+
+### Example: data-aware filters
+
+```rust
+#[derive(Clone, PartialEq, TableRow)]
+struct Product {
+    name: String,
+    price: f64,                           // auto-bounds via with_rows
+    #[chorale(filter = "MultiSelect")]
+    category: String,                     // sorted distinct values via with_rows
+    #[chorale(filter = "MultiSelect", options = ["In Stock", "Out of Stock"])]
+    status: String,                       // hard-coded options, no data derivation
+}
+
+let rows = vec![
+    Product { name: "Widget A".into(), price: 9.99, category: "Gadgets".into(), status: "In Stock".into() },
+    Product { name: "Widget B".into(), price: 49.99, category: "Tools".into(), status: "Out of Stock".into() },
+    // … more rows
+];
+
+// With data-aware derivation:
+let cols = Product::chorale_columns_with_rows(&rows);
+// - price column: NumericRange { min: 9.99, max: 49.99, step: 4.0, ... }
+// - category column: MultiSelect with options ["Gadgets", "Tools"]
+// - status column: MultiSelect with options ["In Stock", "Out of Stock"] (hard-coded, always)
 ```
 
 ## What you get in v0.2.0
@@ -212,9 +293,13 @@ items land via opt-in props or transitions; nothing was removed.
 
 ### `chorale-derive`
 
-`#[derive(TableRow)]` generates `fn chorale_columns() -> Vec<ColumnDef<Self>>`
-from struct fields. Attributes: `header`, `sortable`, `filter`, `initial_width`,
-`alignment`, `render_kind`, `skip`.
+`#[derive(TableRow)]` generates two methods:
+- `chorale_columns()` — static defaults from field types.
+- `chorale_columns_with_rows(rows)` — data-aware numeric bounds and multi-select options.
+
+Supported field attributes: `skip`, `header`, `initial_width`, `sortable`, `filter`,
+`options`, `align`, `render`. See the [Using `#[derive(TableRow)]`](#using-derivetablerow)
+section for the complete attribute reference.
 
 ## Architecture
 
