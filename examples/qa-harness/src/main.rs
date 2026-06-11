@@ -59,9 +59,13 @@ static EMAIL_DOMAINS: &[&str] = &["example.com", "corp.io", "company.net", "org.
 struct Employee {
     name: String,
     email: String,
+    #[chorale(header = "Joined")]
     joined_date: NaiveDate,
+    #[chorale(filter = "MultiSelect")]
     role: String,
+    #[chorale(filter = "MultiSelect")]
     status: String,
+    #[chorale(render = "currency")]
     salary: i64,
 }
 
@@ -416,7 +420,12 @@ fn App() -> Element {
     // ── Effect: rebuild columns when editing / frozen / derive toggles change ─
     use_effect(move || {
         let cols = if *use_derive_on.read() {
-            Employee::chorale_columns()
+            // Extract Employee values from the Arc<Vec<(RowId, Employee)>> so
+            // chorale_columns_with_rows can fold real min/max salary bounds and
+            // build distinct MultiSelect options for role and status.
+            let rows_arc = table.signal().read().rows.clone();
+            let employees: Vec<Employee> = rows_arc.iter().map(|(_, e)| e.clone()).collect();
+            Employee::chorale_columns_with_rows(&employees)
         } else {
             build_columns(*editing_on.read(), *frozen_columns_on.read())
         };

@@ -13,7 +13,7 @@ use chorale_core::{
 };
 use chorale_derive::TableRow;
 use chorale_leptos::{use_chorale_table, CellRenderer, CellRenderers, Table};
-use leptos::prelude::*;
+use leptos::prelude::{StoredValue, *};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -58,9 +58,13 @@ static EMAIL_DOMAINS: &[&str] = &["example.com", "corp.io", "company.net", "org.
 struct Employee {
     name: String,
     email: String,
+    #[chorale(header = "Joined")]
     joined_date: NaiveDate,
+    #[chorale(filter = "MultiSelect")]
     role: String,
+    #[chorale(filter = "MultiSelect")]
     status: String,
+    #[chorale(render = "currency")]
     salary: i64,
 }
 
@@ -260,7 +264,11 @@ fn make_variable_height_renderer() -> CellRenderer {
 
 #[component]
 fn App() -> impl IntoView {
-    let table = use_chorale_table(generate_dataset(), build_columns(false, false));
+    // Generate once; keep a copy in a StoredValue so the derive-mode effect
+    // can pass it to chorale_columns_with_rows without re-generating.
+    let dataset = generate_dataset();
+    let stored_dataset = StoredValue::new(dataset.clone());
+    let table = use_chorale_table(dataset, build_columns(false, false));
     let row_count = table.signal().with_untracked(|s| s.rows.len());
 
     // ── v0.1 toggles ────────────────────────────────────────────────────────
@@ -284,11 +292,17 @@ fn App() -> impl IntoView {
     let use_derive_on = RwSignal::new(false);
     let xlsx_export_on = RwSignal::new(false);
 
-    // ── Cell renderers (rebuilt when variable_height_on changes) ─────────────
+    // ── Cell renderers (rebuilt when variable_height_on / use_derive_on changes) ─
+    // In derive mode, the macro emits RenderKind::Currency on salary, so the
+    // adapter's built-in currency renderer handles formatting. Injecting a
+    // custom salary cell_renderer on top would mask it; omit it in derive mode
+    // so both harnesses look identical when the derive toggle is on.
     let cell_renderers = Memo::new(move |_| {
         let mut m = HashMap::new();
         m.insert(ColumnId("status"), make_status_renderer());
-        m.insert(ColumnId("salary"), make_salary_renderer());
+        if !use_derive_on.get() {
+            m.insert(ColumnId("salary"), make_salary_renderer());
+        }
         if variable_height_on.get() {
             m.insert(ColumnId("name"), make_variable_height_renderer());
         }
@@ -311,7 +325,10 @@ fn App() -> impl IntoView {
     // ── Effect: rebuild columns when editing / frozen / derive toggles change ─
     Effect::new(move |_| {
         let cols = if use_derive_on.get() {
-            Employee::chorale_columns()
+            // Pass the stored dataset so numeric bounds and MultiSelect options
+            // are derived from real data (salary: ~40k-200k, role/status distinct
+            // values). stored_dataset.get_value() clones the Vec once per toggle.
+            stored_dataset.with_value(|ds| Employee::chorale_columns_with_rows(ds))
         } else {
             build_columns(editing_on.get(), frozen_columns_on.get())
         };

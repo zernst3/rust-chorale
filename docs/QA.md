@@ -450,6 +450,18 @@ same toggle in `leptos-qa-harness`.
 3. `#[chorale(header = "Custom Header")]` on a field overrides the column label.
 4. `#[chorale(skip)]` omits the field from the generated column list.
 
+**Verification (new in v0.2.0 feature series — field attributes and data-aware method):**
+1. `#[chorale(render = "currency")]` on a numeric field emits `RenderKind::Currency(CurrencyCode("USD"))`.
+2. `#[chorale(render = "currency:EUR")]` uses EUR; unknown currency codes trigger a compile error.
+3. `#[chorale(render = "badge")]` triggers a compile error with a helpful message directing users to hand-written `ColumnDef` or custom renderers.
+4. `#[chorale(filter = "MultiSelect")]` without `options` on the derived call via `chorale_columns()` emits empty options (static path, unchanged).
+5. `Employee::chorale_columns_with_rows(&rows)` (the new method):
+   - Numeric columns with no explicit `filter` directive: scans `rows` for real min/max and emits `FilterKind::NumericRange`.
+   - `filter = "MultiSelect"` columns with no `options`: derives options as sorted distinct stringified values from `rows` (up to 50 items, excluding `None`).
+   - Empty `rows` or all values `None`/non-finite: falls back to static defaults.
+   - Explicit `options = [...]` always wins (data derivation is skipped).
+6. Rebuild the table with `chorale_columns_with_rows(&new_rows)` when data changes; bounds and options reflect the new data on next render.
+
 ---
 
 ## v0.2.0 Leptos Adapter Coverage
