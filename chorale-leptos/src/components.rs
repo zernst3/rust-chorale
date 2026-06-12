@@ -1209,6 +1209,10 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
     fill_drag_active: RwSignal<bool>,
     fill_hover: RwSignal<Option<(usize, ColumnId)>>,
     on_row_click: Option<Callback<RowId>>,
+    // The table's tabindex="0" keyboard container. Editors refocus it after a
+    // keyboard-initiated commit/cancel so arrow-key navigation resumes
+    // immediately (otherwise focus falls to <body> when the editor unmounts).
+    kb_ref: NodeRef<html::Div>,
 ) -> AnyView {
     let val = (col.accessor)(row);
     let col_id = col.id;
@@ -1332,6 +1336,14 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                                     if key == "Escape" {
                                         let ns = handle.signal.with_untracked(|s| cancel_edit(s));
                                         handle.signal.set(ns);
+                                        // Return focus to the table's keyboard
+                                        // container: the <input> is about to
+                                        // unmount, and without this focus falls
+                                        // to <body>, so arrow keys scroll the
+                                        // page instead of navigating cells.
+                                        if let Some(el) = kb_ref.get() {
+                                            let _ = el.focus();
+                                        }
                                     } else if key == "Enter" || key == "Tab" {
                                         let text = editing_text.get_untracked();
                                         let validation = EditValidation {
@@ -1352,6 +1364,17 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                                                 }
                                                 let ns = handle.signal.with_untracked(|s| commit_edit(s));
                                                 handle.signal.set(ns);
+                                                // Successful keyboard commit:
+                                                // refocus the table container
+                                                // so navigation continues from
+                                                // the (still-set) active cell.
+                                                // Deliberately NOT done in
+                                                // on:blur — blur is an
+                                                // intentional click-away and
+                                                // must not steal focus back.
+                                                if let Some(el) = kb_ref.get() {
+                                                    let _ = el.focus();
+                                                }
                                             }
                                             Err(msg) => {
                                                 edit_error.set(Some(msg));
@@ -1375,6 +1398,17 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
         // Select editor: native <select> constrained to the column's options.
         if let Some(EditorKind::Select { options }) = &col.editor {
             let options = options.clone();
+            // Auto-focus the <select> on mount, mirroring the Text editor's
+            // input auto-focus above. This is load-bearing for exit-on-blur:
+            // an unfocused element can never fire on:blur, so without this
+            // clicking away / Tab left the cell stuck in edit mode, and the
+            // keyboard could not drive the select at all.
+            let select_ref: NodeRef<html::Select> = NodeRef::new();
+            Effect::new(move |_| {
+                if let Some(el) = select_ref.get() {
+                    let _ = el.focus();
+                }
+            });
             // Separate clones for the blur closure; the change closure takes
             // ownership of the originals.
             let validate_blur = validate_fn.clone();
@@ -1387,6 +1421,7 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 )>
                     <div style="display:flex;flex-direction:column;height:100%;">
                         <select
+                            node_ref=select_ref
                             prop:value=move || editing_text.get()
                             // Inherit the cell font and mirror the display
                             // td's text-align + horizontal padding so the
@@ -1409,6 +1444,13 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                                 if ev.key() == "Escape" {
                                     let ns = handle.signal.with_untracked(|s| cancel_edit(s));
                                     handle.signal.set(ns);
+                                    // The <select> is about to unmount; return
+                                    // focus to the table container so arrow
+                                    // keys keep navigating cells instead of
+                                    // scrolling the page.
+                                    if let Some(el) = kb_ref.get() {
+                                        let _ = el.focus();
+                                    }
                                 }
                             }
                             // A native <select> fires NO change event when the
@@ -1462,6 +1504,15 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                                 }
                                 let ns = handle.signal.with_untracked(|s| commit_edit(s));
                                 handle.signal.set(ns);
+                                // Commit unmounts the <select>; refocus the
+                                // table container so a keyboard pick (arrows +
+                                // Enter) flows straight back into cell
+                                // navigation. Deliberately NOT done in on:blur
+                                // — blur is an intentional click-away and must
+                                // not steal focus back.
+                                if let Some(el) = kb_ref.get() {
+                                    let _ = el.focus();
+                                }
                             }
                         >
                             {options
@@ -1571,6 +1622,7 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
     has_detail: bool,
     is_expanded: bool,
     on_row_click: Option<Callback<RowId>>,
+    kb_ref: NodeRef<html::Div>,
 ) -> AnyView {
     let bg = if is_selected { "#eff6ff" } else { "white" };
     let cells: Vec<AnyView> = visible_cols
@@ -1602,6 +1654,7 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 fill_drag_active,
                 fill_hover,
                 on_row_click,
+                kb_ref,
             )
         })
         .collect();
@@ -2602,11 +2655,13 @@ where
 
                         // ---- tbody rows ----
                         let tbody_content: Vec<AnyView> = if is_grouped {
-                            grouped_visible
-                                .get()
-                                .into_iter()
-                                .enumerate()
-                                .map(|(i, grouped_row)| match grouped_row {
+                            let grouped_rows = grouped_visible.get();
+                            // Renders one grouped row at its ABSOLUTE index in
+                            // the flat grouped list. The index feeds
+                            // active-cell / range highlighting, so it must be
+                            // the list position, not the window offset.
+                            let render_grouped_row =
+                                |i: usize, grouped_row: GroupedRow<TRow>| match grouped_row {
                                     GroupedRow::Header {
                                         key,
                                         label,
@@ -2652,10 +2707,79 @@ where
                                         has_detail,
                                         false,
                                         on_row_click,
+                                        kb_ref,
                                     ),
                                     _ => view! { <tr /> }.into_any(),
-                                })
-                                .collect()
+                                };
+                            if is_virtualized_grouped {
+                                // GroupedPaginationMode::Virtualized: core's
+                                // visible_grouped_view returns the ENTIRE flat
+                                // grouped list (no pagination), so rendering it
+                                // all would put every row in the DOM and freeze
+                                // the page on large datasets. Window it exactly
+                                // like the non-grouped virtualized path below:
+                                // grouped rows are uniform row_height, so the
+                                // same fixed-height visible_window math applies,
+                                // and top/bottom spacer rows
+                                // (start_index * row_height and
+                                // (total - end_index - 1) * row_height) keep the
+                                // scrollbar geometry of the full list.
+                                let total = grouped_rows.len();
+                                let gwin = visible_window(
+                                    s.scroll_top,
+                                    s.viewport_height,
+                                    row_height,
+                                    total,
+                                    s.buffer_rows,
+                                );
+                                let mut rows: Vec<AnyView> = Vec::new();
+                                if gwin.top_pad_px > 0.0 {
+                                    let p = gwin.top_pad_px;
+                                    let c = effective_col_count;
+                                    rows.push(view! {
+                                        <tr>
+                                            <td
+                                                colspan=c.to_string()
+                                                style=format!("height:{p}px;padding:0;border:0;")
+                                            />
+                                        </tr>
+                                    }.into_any());
+                                }
+                                if total > 0 {
+                                    let gwin_end = gwin.end_index.min(total - 1);
+                                    for (offset, grouped_row) in grouped_rows
+                                        [gwin.start_index..=gwin_end]
+                                        .iter()
+                                        .enumerate()
+                                    {
+                                        rows.push(render_grouped_row(
+                                            gwin.start_index + offset,
+                                            grouped_row.clone(),
+                                        ));
+                                    }
+                                }
+                                if gwin.bottom_pad_px > 0.0 {
+                                    let p = gwin.bottom_pad_px;
+                                    let c = effective_col_count;
+                                    rows.push(view! {
+                                        <tr>
+                                            <td
+                                                colspan=c.to_string()
+                                                style=format!("height:{p}px;padding:0;border:0;")
+                                            />
+                                        </tr>
+                                    }.into_any());
+                                }
+                                rows
+                            } else {
+                                // DataRowsOnly: core already paginates the
+                                // grouped list; render it unchanged.
+                                grouped_rows
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(i, grouped_row)| render_grouped_row(i, grouped_row))
+                                    .collect()
+                            }
                         } else {
                             let mut rows: Vec<AnyView> = Vec::new();
                             if win.top_pad_px > 0.0 {
@@ -2704,6 +2828,7 @@ where
                                             has_detail,
                                             is_expanded,
                                             on_row_click,
+                                            kb_ref,
                                         ));
                                     }
                                     RenderRow::DetailPanel { parent_row_id } => {
