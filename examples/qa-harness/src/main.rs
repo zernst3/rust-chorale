@@ -159,15 +159,15 @@ fn EmployeeDetailPanel(employee: Employee) -> Element {
     });
     rsx! {
         div {
-            style: "padding: 12px 24px; background: #fafafa; \
-                    border-top: 1px solid #e5e7eb;",
+            style: "padding: 12px 24px; background: var(--chorale-toolbar-bg, #fafafa); \
+                    border-top: 1px solid var(--chorale-border, #e5e7eb);",
             div {
-                style: "font-size: 0.75rem; font-weight: 600; color: #6b7280; \
+                style: "font-size: 0.75rem; font-weight: 600; color: var(--chorale-text-muted, #6b7280); \
                         margin-bottom: 8px; display: flex; \
                         justify-content: space-between; align-items: baseline;",
                 span { "ORDER LINE ITEMS — {employee.name}" }
                 span {
-                    style: "font-weight: 500; color: #374151;",
+                    style: "font-weight: 500; color: var(--chorale-text, #374151);",
                     "{item_count} item(s) — Total: ${total:.2}"
                 }
             }

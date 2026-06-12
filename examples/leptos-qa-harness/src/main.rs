@@ -157,12 +157,12 @@ fn EmployeeDetailPanel(employee: Employee) -> impl IntoView {
     let name = employee.name.clone();
     let summary = format!("{item_count} item(s) — Total: ${total:.2}");
     view! {
-        <div style="padding:12px 24px;background:#fafafa;border-top:1px solid #e5e7eb;">
-            <div style="font-size:0.75rem;font-weight:600;color:#6b7280;\
+        <div style="padding:12px 24px;background:var(--chorale-toolbar-bg, #fafafa);border-top:1px solid var(--chorale-border, #e5e7eb);">
+            <div style="font-size:0.75rem;font-weight:600;color:var(--chorale-text-muted, #6b7280);\
                         margin-bottom:8px;display:flex;\
                         justify-content:space-between;align-items:baseline;">
                 <span>"ORDER LINE ITEMS — "{name}</span>
-                <span style="font-weight:500;color:#374151;">{summary}</span>
+                <span style="font-weight:500;color:var(--chorale-text, #374151);">{summary}</span>
             </div>
             // inline=true → no internal scroll container, no virtualization;
             // child renders at natural height so the parent's scroll context
