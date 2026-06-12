@@ -245,6 +245,20 @@ pub use labels::Labels;
 /// own CSS targeting the structural class names (`chorale-row`, `chorale-cell`, etc.).
 pub use theme::Theme;
 
+/// Built-in light + dark `--chorale-*` token stylesheet, injected once per
+/// document by the adapters. Scoped to
+/// `.chorale-root[data-chorale-theme="light"|"dark"]` so a runtime theme
+/// toggle is a single attribute swap.
+pub use theme::theme_stylesheet;
+
+/// Attribute name (`data-chorale-theme`) the adapters set on the table root
+/// to select a theme block; values come from [`Theme::attribute_value`].
+pub use theme::THEME_ATTRIBUTE;
+
+/// Class name (`chorale-root`) the shipped stylesheet scopes its token
+/// blocks under; adapters place it on the table root element.
+pub use theme::THEME_ROOT_CLASS;
+
 /// Row metadata passed to a [`RowClassFn`] to compute per-row CSS classes.
 pub use theme::Row;
 
