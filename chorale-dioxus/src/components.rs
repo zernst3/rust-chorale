@@ -1097,7 +1097,9 @@ dioxus.send(parts.join('\n'));"
                     ));
                 }
             },
-            onkeydown: move |e: KeyboardEvent| {
+            onkeydown: {
+                let scroll_id_kb = scroll_id.clone();
+                move |e: KeyboardEvent| {
                 let shift = e.modifiers().contains(Modifiers::SHIFT);
                 let ctrl = e.modifiers().contains(Modifiers::CONTROL)
                     || e.modifiers().contains(Modifiers::META);
@@ -1142,9 +1144,15 @@ dioxus.send(parts.join('\n'));"
                     } else if ctrl {
                         let new_s = move_active_cell_to_edge(&*sig_w.peek(), dir);
                         sig_w.set(new_s);
+                        ensure_active_row_visible(
+                            handle, &scroll_id_kb, variable_row_height, inline,
+                        );
                     } else {
                         let new_s = move_active_cell(&*sig_w.peek(), dir);
                         sig_w.set(new_s);
+                        ensure_active_row_visible(
+                            handle, &scroll_id_kb, variable_row_height, inline,
+                        );
                     }
                 } else {
                     match e.key() {
@@ -1157,6 +1165,9 @@ dioxus.send(parts.join('\n'));"
                                 move_active_cell_home(&*sig_w.peek())
                             };
                             sig_w.set(new_s);
+                            ensure_active_row_visible(
+                                handle, &scroll_id_kb, variable_row_height, inline,
+                            );
                         }
                         Key::End => {
                             e.prevent_default();
@@ -1167,6 +1178,9 @@ dioxus.send(parts.join('\n'));"
                                 move_active_cell_end(&*sig_w.peek())
                             };
                             sig_w.set(new_s);
+                            ensure_active_row_visible(
+                                handle, &scroll_id_kb, variable_row_height, inline,
+                            );
                         }
                         Key::PageUp => {
                             e.prevent_default();
@@ -1174,6 +1188,9 @@ dioxus.send(parts.join('\n'));"
                             let page_sz = sig_w.peek().page_size;
                             let new_s = move_active_cell_page(&*sig_w.peek(), NavDirection::Up, page_sz);
                             sig_w.set(new_s);
+                            ensure_active_row_visible(
+                                handle, &scroll_id_kb, variable_row_height, inline,
+                            );
                         }
                         Key::PageDown => {
                             e.prevent_default();
@@ -1181,6 +1198,9 @@ dioxus.send(parts.join('\n'));"
                             let page_sz = sig_w.peek().page_size;
                             let new_s = move_active_cell_page(&*sig_w.peek(), NavDirection::Down, page_sz);
                             sig_w.set(new_s);
+                            ensure_active_row_visible(
+                                handle, &scroll_id_kb, variable_row_height, inline,
+                            );
                         }
                         Key::Escape => {
                             let mut sig_w = handle.signal();
@@ -1281,7 +1301,7 @@ dioxus.send(parts.join('\n'));"
                         _ => {}
                     }
                 }
-            },
+            }},
 
             if column_toolbar {
                 {column_visibility_toolbar(&all_col_defs, &col_visibility, handle, &labels)}
@@ -1657,6 +1677,100 @@ fn compute_window_slice<TRow: Clone>(
     (win, slice)
 }
 
+/// Compute the `scroll_top` required to bring the row at `row_idx` fully
+/// into the virtualized viewport, or `None` when the row is already fully
+/// visible (no scroll needed).
+///
+/// Operates in the same coordinate space as the virtualization window math
+/// (`visible_window` / `visible_window_variable`): row N's top edge sits at
+/// `N * row_height` in fixed mode, or at the sum of the measured heights of
+/// rows `0..N` in variable mode, with `row_height` as the fallback for rows
+/// that have not been measured yet.
+///
+/// Rules (mirroring standard grid keyboard-navigation behavior):
+/// - row top above the viewport  → scroll so the row top is at the viewport top
+/// - row bottom below the viewport → scroll so the row bottom is at the
+///   viewport bottom
+/// - otherwise → `None`
+#[must_use]
+fn scroll_top_to_reveal_row<S: std::hash::BuildHasher>(
+    row_idx: usize,
+    scroll_top: f64,
+    viewport_height: f64,
+    row_height: f64,
+    row_heights: &HashMap<usize, f64, S>,
+    variable_row_height: bool,
+) -> Option<f64> {
+    let (row_top, row_h) = if variable_row_height {
+        let mut top = 0.0_f64;
+        for i in 0..row_idx {
+            top += row_heights.get(&i).copied().unwrap_or(row_height);
+        }
+        let h = row_heights.get(&row_idx).copied().unwrap_or(row_height);
+        (top, h)
+    } else {
+        #[allow(clippy::cast_precision_loss)]
+        let top = row_idx as f64 * row_height;
+        (top, row_height)
+    };
+    let row_bottom = row_top + row_h;
+    if row_top < scroll_top {
+        Some(row_top)
+    } else if row_bottom > scroll_top + viewport_height {
+        Some((row_bottom - viewport_height).max(0.0))
+    } else {
+        None
+    }
+}
+
+/// After a keyboard-navigation transition lands a new `active_cell`, scroll
+/// the virtualized container so the active row sits inside the viewport.
+///
+/// Two synchronized writes, in this order:
+/// 1. `handle.set_scroll(..)` updates `TableState.scroll_top` so the next
+///    render (already queued by the nav transition) computes the visible
+///    window from the post-scroll position — without this the rendered
+///    window lags one keypress behind the DOM scroll.
+/// 2. A `document.getElementById(..).scrollTop = ..` eval moves the actual
+///    DOM scroll container. The resulting native `onscroll` event calls
+///    `handle.set_scroll` with the same value, which is a no-op.
+///
+/// Inline mode is a deliberate no-op: there is no internal scroll container
+/// (`overflow: visible; height: auto`), the parent owns scrolling and this
+/// component has no authority over the parent's `scrollTop`.
+fn ensure_active_row_visible<TRow: Clone + PartialEq + 'static>(
+    handle: UseTableHandle<TRow>,
+    scroll_container_id: &str,
+    variable_row_height: bool,
+    inline: bool,
+) {
+    if inline {
+        return;
+    }
+    let sig = handle.signal();
+    let target = {
+        let s = sig.peek();
+        let Some(ac) = s.active_cell else {
+            return;
+        };
+        scroll_top_to_reveal_row(
+            ac.row_idx,
+            s.scroll_top,
+            s.viewport_height,
+            s.row_height,
+            &s.row_heights,
+            variable_row_height,
+        )
+    };
+    if let Some(new_scroll) = target {
+        handle.set_scroll(new_scroll);
+        dioxus::document::eval(&format!(
+            "var el = document.getElementById('{scroll_container_id}'); \
+             if (el) el.scrollTop = {new_scroll};"
+        ));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Row and cell helpers (not components — plain functions returning Element)
 // ---------------------------------------------------------------------------
@@ -1727,15 +1841,22 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
     // Emit explicit position/top/z-index in BOTH branches. Dioxus 0.7's
     // inline-style diff is unreliable when transitioning from a non-empty
     // declaration to nothing — the prior `position: sticky` can persist in
-    // the DOM. Writing `position: static; top: auto; z-index: auto` on the
-    // off branch forces a concrete attribute swap. When a column is ALSO
-    // frozen, `sticky_css` appears later in the style string and its
-    // `position: sticky; left/right; z-index` correctly overrides this
-    // baseline via standard cascade-last-wins.
+    // the DOM. Writing explicit values on the off branch forces a concrete
+    // attribute swap. When a column is ALSO frozen, `sticky_css` appears
+    // later in the style string and its `position: sticky; left/right;
+    // z-index` correctly overrides this baseline via standard
+    // cascade-last-wins.
+    //
+    // position:sticky also acts as the containing block for the absolutely
+    // positioned resize handle below; position:relative (NOT static)
+    // ensures the same in the non-sticky case — with `static` the handle
+    // resolves against some positioned ancestor outside the <th> and the
+    // resize grip never lands on the column edge (mirrors the leptos
+    // adapter's header_th).
     let sticky_top_decl = if sticky_header {
         "position: sticky; top: 0; z-index: 1;"
     } else {
-        "position: static; top: auto; z-index: auto;"
+        "position: relative; top: auto; z-index: auto;"
     };
 
     // Find this column's sort entry (if any) across the whole multi-sort list.
@@ -1886,6 +2007,12 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
                             cursor: col-resize; background: transparent;",
                     onmousedown: move |e| {
                         e.stop_propagation();
+                        // prevent_default keeps the browser from starting a
+                        // native HTML5 drag of the (draggable, when column
+                        // reorder is on) parent <th> or a text selection —
+                        // either of which would swallow the mousemove stream
+                        // the resize drag depends on (mirrors leptos).
+                        e.prevent_default();
                         let current_w = override_width.or(initial_width).unwrap_or(100.0);
                         drag_state.set(Some((col_id, e.client_coordinates().x, current_w)));
                     },
@@ -2345,7 +2472,13 @@ fn DateRangeFilter<TRow: Clone + PartialEq + 'static>(
                 value: "{min_str}",
                 style: "flex: 1; min-width: 0; padding: 1px 2px; border: 1px solid #ccc; \
                         border-radius: 2px; font-size: 0.75rem;",
-                oninput: move |e| {
+                // onchange (NOT oninput): the native date picker fires an
+                // input event for every intermediate value while the user
+                // scrolls the wheel — committing on each one re-filters the
+                // table live mid-gesture. change fires only once a date is
+                // actually selected/committed, matching the leptos adapter's
+                // on:change date-filter semantics.
+                onchange: move |e| {
                     let parsed = chorale_core::NaiveDate::parse_from_str(&e.value(), "%Y-%m-%d").ok();
                     commit_date_range(col_id, parsed, cur_max, &handle);
                 },
@@ -2355,7 +2488,8 @@ fn DateRangeFilter<TRow: Clone + PartialEq + 'static>(
                 value: "{max_str}",
                 style: "flex: 1; min-width: 0; padding: 1px 2px; border: 1px solid #ccc; \
                         border-radius: 2px; font-size: 0.75rem;",
-                oninput: move |e| {
+                // See the min input above — change-only commit, per leptos.
+                onchange: move |e| {
                     let parsed = chorale_core::NaiveDate::parse_from_str(&e.value(), "%Y-%m-%d").ok();
                     commit_date_range(col_id, cur_min, parsed, &handle);
                 },
@@ -2445,7 +2579,21 @@ fn select_all_th<TRow: Clone + PartialEq + 'static>(
             input {
                 r#type: "checkbox",
                 checked: all_page_selected,
-                onchange: move |_| handle.toggle_select_all(),
+                // The header select-all operates on the FULL filtered set,
+                // not just the rendered page: checking it selects every row
+                // that passes the current filters (across all pages),
+                // unchecking clears the entire selection. This mirrors the
+                // leptos adapter's header checkbox, which calls
+                // handle.select_all_filtered() / handle.deselect_all().
+                // Page-scoped selection remains available through the
+                // selection-toolbar affordances (select_all_visible_page).
+                onchange: move |e| {
+                    if e.checked() {
+                        handle.select_all_filtered();
+                    } else {
+                        handle.deselect_all();
+                    }
+                },
             }
         }
     }
@@ -3577,6 +3725,69 @@ mod tests {
         let (win, slice) = compute_window_slice(&state, &view, false);
         assert!(win.end_index < view.len());
         assert!(!slice.is_empty());
+    }
+
+    // ---- scroll_top_to_reveal_row -------------------------------------------
+
+    /// Row fully inside the viewport → no scroll adjustment.
+    #[test]
+    fn reveal_row_returns_none_when_row_already_visible() {
+        let heights: HashMap<usize, f64> = HashMap::new();
+        // viewport [100, 400): row 5 spans [200, 240) — fully visible.
+        let r = super::scroll_top_to_reveal_row(5, 100.0, 300.0, 40.0, &heights, false);
+        assert_eq!(r, None);
+    }
+
+    /// Row top above `scroll_top` → scroll up so the row top hits the viewport top.
+    #[test]
+    fn reveal_row_scrolls_up_to_row_top() {
+        let heights: HashMap<usize, f64> = HashMap::new();
+        // viewport [400, 700): row 3 spans [120, 160) — above.
+        let r = super::scroll_top_to_reveal_row(3, 400.0, 300.0, 40.0, &heights, false);
+        assert_eq!(r, Some(120.0));
+    }
+
+    /// Row bottom below the viewport → scroll down so the row bottom hits
+    /// the viewport bottom.
+    #[test]
+    fn reveal_row_scrolls_down_to_row_bottom_minus_viewport() {
+        let heights: HashMap<usize, f64> = HashMap::new();
+        // viewport [0, 300): row 10 spans [400, 440) — below.
+        // Expected: 440 - 300 = 140.
+        let r = super::scroll_top_to_reveal_row(10, 0.0, 300.0, 40.0, &heights, false);
+        assert_eq!(r, Some(140.0));
+    }
+
+    /// Row partially clipped at the bottom edge also triggers a scroll.
+    #[test]
+    fn reveal_row_scrolls_when_row_straddles_bottom_edge() {
+        let heights: HashMap<usize, f64> = HashMap::new();
+        // viewport [0, 300): row 7 spans [280, 320) — straddles the bottom.
+        let r = super::scroll_top_to_reveal_row(7, 0.0, 300.0, 40.0, &heights, false);
+        assert_eq!(r, Some(20.0));
+    }
+
+    /// Variable mode sums measured heights for rows above, falling back to
+    /// `row_height` for unmeasured rows.
+    #[test]
+    fn reveal_row_variable_mode_sums_measured_heights() {
+        let mut heights: HashMap<usize, f64> = HashMap::new();
+        heights.insert(0, 100.0);
+        heights.insert(1, 60.0);
+        // Row 2 unmeasured (falls back to 40). Row 3 top = 100 + 60 + 40 = 200,
+        // measured height 80 → bottom 280. Viewport [400, 700) → above →
+        // scroll to row top.
+        heights.insert(3, 80.0);
+        let r = super::scroll_top_to_reveal_row(3, 400.0, 300.0, 40.0, &heights, true);
+        assert_eq!(r, Some(200.0));
+    }
+
+    /// Row 0 above the viewport scrolls to exactly 0 (never negative).
+    #[test]
+    fn reveal_row_zero_clamps_at_top() {
+        let heights: HashMap<usize, f64> = HashMap::new();
+        let r = super::scroll_top_to_reveal_row(0, 250.0, 300.0, 40.0, &heights, false);
+        assert_eq!(r, Some(0.0));
     }
 
     // ---- page_button_range -------------------------------------------------
