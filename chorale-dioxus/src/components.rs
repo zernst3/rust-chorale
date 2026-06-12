@@ -1038,7 +1038,8 @@ dioxus.send(parts.join('\n'));"
             "data-chorale-theme": theme.attribute_value(),
             tabindex: "0",
             style: "border: 1px solid var(--chorale-border, #ddd); border-radius: 4px; overflow: hidden; \
-                    user-select: none; outline: none;",
+                    user-select: none; outline: none; \
+                    background: var(--chorale-surface, #fff); color: var(--chorale-text, #333);",
             onmousemove: move |e| {
                 if let Some((col_id, start_x, start_w)) = *drag_state.read() {
                     let delta = e.client_coordinates().x - start_x;
