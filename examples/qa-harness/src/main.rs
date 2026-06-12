@@ -173,6 +173,11 @@ fn EmployeeDetailPanel(employee: Employee) -> Element {
             }
             Table {
                 handle: table,
+                // Theme::Custom sets data-chorale-theme="custom", which matches no
+                // built-in block, so this nested table inherits the parent table's
+                // themed --chorale-* variables via CSS cascade instead of forcing
+                // its own light scope.
+                theme: Theme::Custom,
                 sort_enabled: true,
                 // inline: true → no internal scroll container, no virtualization;
                 // child renders at natural height so the parent's scroll context
@@ -526,43 +531,50 @@ fn App() -> Element {
         None
     };
 
+    // Selection-toolbar colors follow the theme: pale blue in light, a medium
+    // dark blue (not pure black, still some contrast) in dark.
+    let (tb_bg, tb_border, tb_text, tb_btn_bg, tb_btn_border) = if *dark_mode_on.read() {
+        ("#21324d", "#3a5680", "#d6e4ff", "#2e466b", "#3f5d85")
+    } else {
+        ("#eff6ff", "#bfdbfe", "#1e3a8a", "#dbeafe", "#93c5fd")
+    };
     let toolbar_el: Option<Element> = if *selection_toolbar_on.read() {
         let count = table.signal().read().selection.len();
         Some(rsx! {
             div {
                 style: "display: flex; align-items: center; gap: 1rem; \
-                        padding: 0.75rem 1rem; background: #eff6ff; \
-                        border: 1px solid #bfdbfe; \
-                        color: #1e3a8a; font-size: 0.875rem; font-weight: 600; width: 100%; \
+                        padding: 0.75rem 1rem; background: {tb_bg}; \
+                        border: 1px solid {tb_border}; \
+                        color: {tb_text}; font-size: 0.875rem; font-weight: 600; width: 100%; \
                         box-sizing: border-box; flex-wrap: wrap;",
                 span { "{count} row(s) selected" }
                 div { class: "chorale-bulk-actions",
                     style: "display: flex; gap: 8px;",
                     button {
                         onclick: move |_| table.select_all_visible_page(),
-                        style: "padding: 0.25rem 0.75rem; background: #dbeafe; \
-                                color: #1e3a8a; border: 1px solid #93c5fd; \
+                        style: "padding: 0.25rem 0.75rem; background: {tb_btn_bg}; \
+                                color: {tb_text}; border: 1px solid {tb_btn_border}; \
                                 border-radius: 3px; cursor: pointer; font-size: 0.8rem;",
                         "Select page"
                     }
                     button {
                         onclick: move |_| table.select_all_filtered(),
-                        style: "padding: 0.25rem 0.75rem; background: #dbeafe; \
-                                color: #1e3a8a; border: 1px solid #93c5fd; \
+                        style: "padding: 0.25rem 0.75rem; background: {tb_btn_bg}; \
+                                color: {tb_text}; border: 1px solid {tb_btn_border}; \
                                 border-radius: 3px; cursor: pointer; font-size: 0.8rem;",
                         "Select all"
                     }
                     button {
                         onclick: move |_| table.deselect_all_visible_page(),
-                        style: "padding: 0.25rem 0.75rem; background: #dbeafe; \
-                                color: #1e3a8a; border: 1px solid #93c5fd; \
+                        style: "padding: 0.25rem 0.75rem; background: {tb_btn_bg}; \
+                                color: {tb_text}; border: 1px solid {tb_btn_border}; \
                                 border-radius: 3px; cursor: pointer; font-size: 0.8rem;",
                         "Deselect page"
                     }
                     button {
                         onclick: move |_| table.deselect_all(),
-                        style: "padding: 0.25rem 0.75rem; background: #dbeafe; \
-                                color: #1e3a8a; border: 1px solid #93c5fd; \
+                        style: "padding: 0.25rem 0.75rem; background: {tb_btn_bg}; \
+                                color: {tb_text}; border: 1px solid {tb_btn_border}; \
                                 border-radius: 3px; cursor: pointer; font-size: 0.8rem;",
                         "Deselect all"
                     }
@@ -580,6 +592,16 @@ fn App() -> Element {
     };
 
     rsx! {
+        // Page background follows the theme: a faint off-white in light, a very
+        // dark blue/purple in dark, so the page stays a touch off from the table
+        // surface for contrast. Targets <body> so the whole viewport changes.
+        style {
+            dangerous_inner_html: if *dark_mode_on.read() {
+                "body{{background:#14121e;}}"
+            } else {
+                "body{{background:#f5f5f7;}}"
+            }
+        }
         div {
             style: "font-family: sans-serif; padding: 1rem; max-width: 1400px; margin: 0 auto;",
 
