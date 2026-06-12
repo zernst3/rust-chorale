@@ -9,14 +9,14 @@ use chorale_core::{
     move_active_cell, move_active_cell_end, move_active_cell_first, move_active_cell_home,
     move_active_cell_last, move_active_cell_page, move_active_cell_to_edge, scrollable_columns,
     select_all as select_all_range, start_range_selection, to_csv, visible_grouped_view,
-    visible_view, visible_window, ActiveCell, Alignment, CellValue, ClipboardCopyEvent,
-    ClipboardPasteEvent, ColumnDef, ColumnId, CommittedEdit, EditorKind, FilterKind, FilterValue,
-    GroupKey, GroupedPaginationMode, GroupedRow, Labels, NaiveDate, NavDirection, PaginationMode,
-    RangeSelection, RenderKind, RenderRow, RowId, SortAction, SortDirection, SortState, TableState,
-    VirtualWindow,
+    visible_view, visible_window, visible_window_variable, ActiveCell, Alignment, CellValue,
+    ClipboardCopyEvent, ClipboardPasteEvent, ColumnDef, ColumnId, CommittedEdit, EditorKind,
+    FilterKind, FilterValue, GroupKey, GroupedPaginationMode, GroupedRow, Labels, NaiveDate,
+    NavDirection, PaginationMode, RangeSelection, RenderKind, RenderRow, RowId, SortAction,
+    SortDirection, SortState, TableState, VirtualWindow,
 };
 #[cfg(target_arch = "wasm32")]
-use chorale_core::{paste_tsv_into_range, to_clipboard_tsv};
+use chorale_core::{batch_record_row_heights, paste_tsv_into_range, to_clipboard_tsv};
 use leptos::html;
 use leptos::prelude::*;
 #[cfg(target_arch = "wasm32")]
@@ -288,18 +288,39 @@ fn alignment_css(a: Alignment) -> &'static str {
 // Virtualization window slice
 // ---------------------------------------------------------------------------
 
+/// Given the already-computed `visible_view` and the current state, returns
+/// the virtualization window plus the windowed row slice in a single pass.
+///
+/// When `variable` is `true`, dispatches to [`visible_window_variable`]
+/// (VIRT-2): the window and its top/bottom spacer pads are computed from a
+/// prefix sum over `state.row_heights` (measured per-row heights, with
+/// `state.row_height` as the fallback estimate for unmeasured rows).
+/// Otherwise uses the fixed-height [`visible_window`] (VIRT-1). Mirrors the
+/// Dioxus adapter's `compute_window_slice` dispatch exactly.
 fn compute_window_slice<TRow: Clone>(
     state: &TableState<TRow>,
     view: &[RenderRow<TRow>],
+    variable: bool,
 ) -> (VirtualWindow, Vec<RenderRow<TRow>>) {
     let total = view.len();
-    let win = visible_window(
-        state.scroll_top,
-        state.viewport_height,
-        state.row_height,
-        total,
-        state.buffer_rows,
-    );
+    let win = if variable {
+        visible_window_variable(
+            &state.row_heights,
+            state.scroll_top,
+            state.viewport_height,
+            state.row_height,
+            total,
+            state.buffer_rows,
+        )
+    } else {
+        visible_window(
+            state.scroll_top,
+            state.viewport_height,
+            state.row_height,
+            total,
+            state.buffer_rows,
+        )
+    };
     if total == 0 {
         return (win, vec![]);
     }
@@ -1193,6 +1214,7 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
     col: &ColumnDef<TRow>,
     override_width: Option<f64>,
     row_height: f64,
+    variable_row_height: bool,
     cell_renderers: &CellRenderers,
     row_cell_renderers: &RowCellRenderers<TRow>,
     editing_col: Option<ColumnId>,
@@ -1219,6 +1241,16 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
     let align = alignment_css(col.alignment);
     let w = col_width_style(override_width, col.initial_width);
     let sticky_css = sticky_css.to_owned();
+    // VIRT-2: with variable_row_height on, cells drop their fixed height
+    // (and the display td additionally drops nowrap/ellipsis clipping) so
+    // content can wrap and the row can grow to its natural height; the
+    // measurement loop then records the real height in state.row_heights.
+    // Mirrors the dioxus data_td / editor_td style branches.
+    let editor_h_css = if variable_row_height {
+        String::new()
+    } else {
+        format!("height:{row_height}px;")
+    };
     let is_editing = editing_col == Some(col_id);
     let render_kind = col.render_kind.clone();
     let renderer = cell_renderers.get(col_id);
@@ -1255,7 +1287,7 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 return view! {
                     <td style=format!(
                         "padding:0;border-bottom:1px solid #eee;\
-                         text-align:{align};height:{row_height}px;\
+                         text-align:{align};{editor_h_css}\
                          overflow:hidden;{w}{sticky_css}"
                     )>
                         <div style="display:flex;flex-direction:column;height:100%;">
@@ -1416,7 +1448,7 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
             return view! {
                 <td style=format!(
                     "padding:0;border-bottom:1px solid #eee;\
-                     text-align:{align};height:{row_height}px;\
+                     text-align:{align};{editor_h_css}\
                      overflow:hidden;{w}{sticky_css}"
                 )>
                     <div style="display:flex;flex-direction:column;height:100%;">
@@ -1542,12 +1574,22 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
         row_renderer.as_ref(),
         renderer.as_ref(),
     );
+    // Fixed-height display cells clip to one line (nowrap + ellipsis); with
+    // variable_row_height the clamp is dropped entirely so content wraps and
+    // the row grows. Mirrors the dioxus data_td variable/uniform branches.
+    let clamp_css = if variable_row_height {
+        String::new()
+    } else {
+        format!(
+            "height:{row_height}px;overflow:hidden;\
+             white-space:nowrap;text-overflow:ellipsis;"
+        )
+    };
     view! {
         <td
             style=format!(
                 "padding:0.5rem 1rem;border-bottom:1px solid #eee;\
-                 text-align:{align};height:{row_height}px;overflow:hidden;\
-                 white-space:nowrap;text-overflow:ellipsis;cursor:default;\
+                 text-align:{align};{clamp_css}cursor:default;\
                  position:relative;\
                  {w}{sticky_css}{range_css}{active_css}"
             )
@@ -1603,6 +1645,7 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
     visible_cols: &[ColumnDef<TRow>],
     widths: &HashMap<ColumnId, f64>,
     row_height: f64,
+    variable_row_height: bool,
     selection_enabled: bool,
     is_selected: bool,
     handle: UseTableHandle<TRow>,
@@ -1638,6 +1681,7 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 col,
                 widths.get(&col.id).copied(),
                 row_height,
+                variable_row_height,
                 cell_renderers,
                 row_cell_renderers,
                 editing_col,
@@ -1952,6 +1996,18 @@ pub fn Table<TRow>(
     /// container. Set `false` to let it scroll with the body.
     #[prop(default = true)]
     sticky_header: bool,
+    /// Enable variable-row-height virtualization (VIRT-2). When `true`, the
+    /// component measures each rendered data row's real height after render
+    /// via the DOM (web target only) and caches it in `state.row_heights`;
+    /// the non-grouped window and spacer math then run on the measured
+    /// heights via [`visible_window_variable`], with `state.row_height` as
+    /// the fallback estimate for rows not yet measured. Data cells also drop
+    /// their fixed `height`/`nowrap` styling so content can wrap and grow.
+    /// Forced on automatically whenever `detail_renderer` is set — detail
+    /// panels are inherently variable-height. Mirrors the Dioxus adapter's
+    /// prop of the same name.
+    #[prop(default = false)]
+    variable_row_height: bool,
     /// **Inline mode** (default `false`). When `true`, the `<Table>` does NOT
     /// render its own scroll container — the body renders at its natural full
     /// height and any overflow is handled by the parent's scroll context.
@@ -1979,6 +2035,17 @@ where
     TRow: Clone + PartialEq + Send + Sync + 'static,
 {
     let labels = Arc::new(labels.unwrap_or_default());
+
+    // Master/detail rows are inherently variable-height: the parent table
+    // cannot virtualize correctly assuming uniform row_height when one of
+    // its rows is a detail panel that's 5-20× taller. Force variable-height
+    // measurement on whenever detail_renderer is set, so the parent's
+    // row_heights map tracks each row's actual rendered height and scroll
+    // math stays consistent with layout. Mirrors chorale-dioxus.
+    //
+    // This shadow MUST come before the VIRT-2 measurement effect below and
+    // before any downstream consumer of `variable_row_height`.
+    let variable_row_height = variable_row_height || detail_renderer.is_some();
 
     // on_copy is only used inside #[cfg(target_arch = "wasm32")] blocks.
     // on_paste is also used by the fill handle drag (pure Rust, no cfg guard needed).
@@ -2046,6 +2113,152 @@ where
             el.set_scroll_top(0);
         }
     });
+
+    // VIRT-2: variable-row-height measurement loop. The whole block is gated
+    // behind wasm32 — the DOM reads below are web_sys calls and web-sys is a
+    // wasm32-only dependency of this crate, so any un-gated browser call
+    // breaks the host build. On the host, `variable_row_height` still drives
+    // the (pure-Rust) variable window math; row_heights simply stays empty.
+    //
+    // `meas_trigger` is the reactive dependency that drives remeasurement:
+    // scroll bucket (one re-measure per row_height of scrolling), viewport
+    // size, expanded_rows (detail panels mount/unmount), data_generation
+    // (cell edits can change wrap height), row count, page, and page size.
+    // Mirrors the Dioxus adapter's VIRT-2 trigger memo field-for-field.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let meas_trigger = Memo::new(move |_| {
+            sig.with(|s| {
+                let row_h = if s.row_height > 0.0 {
+                    s.row_height
+                } else {
+                    1.0
+                };
+                #[allow(clippy::cast_possible_truncation)]
+                let scroll_bucket = (s.scroll_top / row_h).floor() as i64;
+                #[allow(clippy::cast_possible_truncation)]
+                let viewport_bucket = s.viewport_height.round() as i64;
+                (
+                    scroll_bucket,
+                    viewport_bucket,
+                    s.expanded_rows.clone(),
+                    s.data_generation,
+                    s.rows.len(),
+                    s.page,
+                    s.page_size,
+                )
+            })
+        });
+        Effect::new(move |_| {
+            // Subscribe to the trigger BEFORE the early-return so the
+            // dependency is registered on the very first run either way.
+            let _ = meas_trigger.get();
+            if !variable_row_height {
+                return;
+            }
+            // Leptos runs user effects after the render effects for the same
+            // signal change have applied their DOM updates, so the rows this
+            // trigger change produced are already in the document, and
+            // getBoundingClientRect (which forces layout) returns real
+            // post-layout heights.
+            let Some(container) = scroll_ref.get_untracked() else {
+                return;
+            };
+            // Direct-child chain rather than a descendant selector:
+            // `:scope > table > tbody > tr[data-chorale-index]`. When a
+            // consumer renders a nested Table inside a detail panel, the
+            // descendant form (`[data-chorale-index]` anywhere below) also
+            // matches the child Table's rows, producing duplicate
+            // `data-chorale-index` keys (child 0,1,2... collide with parent
+            // 0,1,2...) that would corrupt the parent's row_heights map. The
+            // direct-child chain stops at the parent's own tbody. `:scope`
+            // anchors the selector at the scroll container itself — the same
+            // role Dioxus's `#{scroll_id}` element id plays.
+            let Ok(node_list) =
+                container.query_selector_all(":scope > table > tbody > tr[data-chorale-index]")
+            else {
+                return;
+            };
+            let mut measurements: HashMap<usize, f64> = HashMap::new();
+            for i in 0..node_list.length() {
+                let Some(node) = node_list.item(i) else {
+                    continue;
+                };
+                let Ok(el) = node.dyn_into::<web_sys::Element>() else {
+                    continue;
+                };
+                let Some(idx) = el
+                    .get_attribute("data-chorale-index")
+                    .and_then(|a| a.parse::<usize>().ok())
+                else {
+                    continue;
+                };
+                measurements.insert(idx, el.get_bounding_client_rect().height());
+            }
+            if measurements.is_empty() {
+                return;
+            }
+            let total = visible.with_untracked(Vec::len);
+            // Compute the diff check, scroll anchoring, and the new state in
+            // one untracked read. try_* accessors make a stale fire after the
+            // table subtree is disposed a silent no-op instead of a panic.
+            let Some(update) = sig.try_with_untracked(|cur| {
+                // 0.5px diff threshold: prevents convergence loops caused by
+                // sub-pixel float rounding (matches chorale-dioxus).
+                let mut any_changed = false;
+                for (k, v) in &measurements {
+                    let old = cur.row_heights.get(k).copied().unwrap_or(cur.row_height);
+                    if (v - old).abs() > 0.5 {
+                        any_changed = true;
+                        break;
+                    }
+                }
+                if !any_changed {
+                    return None;
+                }
+                // Scroll anchoring: when a row's measured height changes
+                // (typically a freshly-rendered detail panel going from
+                // estimate → real), the total height of all rows ABOVE the
+                // current scroll position can change too. Applying the new
+                // measurements without adjusting scroll_top shifts visible
+                // content by the delta — the user sees that as a jump. Sum
+                // the per-row height delta for every row whose top edge sits
+                // above cur.scroll_top, bump scroll_top by that sum, and
+                // write it back to the DOM scroll container so the visible
+                // content stays visually anchored. Math is identical to the
+                // chorale-dioxus VIRT-2 anchoring loop.
+                let cur_scroll = cur.scroll_top;
+                let default_h = cur.row_height;
+                let mut row_top_with_old = 0.0_f64;
+                let mut scroll_delta = 0.0_f64;
+                for idx in 0..total {
+                    let old_h = cur.row_heights.get(&idx).copied().unwrap_or(default_h);
+                    if row_top_with_old >= cur_scroll {
+                        break;
+                    }
+                    if let Some(new_h) = measurements.get(&idx).copied() {
+                        let bounded_old = old_h.max(0.0);
+                        let bounded_new = new_h.max(0.0);
+                        scroll_delta += bounded_new - bounded_old;
+                    }
+                    row_top_with_old += old_h.max(0.0);
+                }
+                let new_scroll = (cur_scroll + scroll_delta).max(0.0);
+                let mut new_state = batch_record_row_heights(cur, &measurements);
+                new_state.scroll_top = new_scroll;
+                Some((new_state, new_scroll, scroll_delta))
+            }) else {
+                return;
+            };
+            if let Some((new_state, new_scroll, scroll_delta)) = update {
+                let _ = sig.try_set(new_state);
+                if scroll_delta.abs() > 0.5 {
+                    #[allow(clippy::cast_possible_truncation)]
+                    container.set_scroll_top(new_scroll.round() as i32);
+                }
+            }
+        });
+    }
 
     // In-cell editing: reset editor text and error when active cell changes.
     let edit_target_memo = Memo::new(move |_| sig.with(|s| s.editing));
@@ -2629,7 +2842,11 @@ where
                             );
                             (iwin, full_slice)
                         } else {
-                            compute_window_slice(&s, &vis)
+                            // VIRT-2: when variable_row_height is on (set
+                            // explicitly or forced by detail_renderer), the
+                            // window + spacer pads come from the measured
+                            // per-row heights instead of uniform row_height.
+                            compute_window_slice(&s, &vis, variable_row_height)
                         };
 
                         // Active cell + range selection for highlighting.
@@ -2734,6 +2951,7 @@ where
                                         &visible_cols,
                                         &widths,
                                         row_height,
+                                        variable_row_height,
                                         selection_enabled,
                                         selection_set.contains(&row_id),
                                         handle,
@@ -2772,6 +2990,17 @@ where
                                 // (start_index * row_height and
                                 // (total - end_index - 1) * row_height) keep the
                                 // scrollbar geometry of the full list.
+                                //
+                                // VIRT-2 note: this path deliberately stays on
+                                // the uniform window even when
+                                // variable_row_height is on. Detail panels
+                                // (the variable-height case) cannot appear
+                                // here — core's GroupedRow has no DetailPanel
+                                // variant, so grouping + master/detail cannot
+                                // combine today. If core ever adds grouped
+                                // detail panels, switch this to
+                                // visible_window_variable like the non-grouped
+                                // path above.
                                 let total = grouped_rows.len();
                                 let gwin = visible_window(
                                     s.scroll_top,
@@ -2861,6 +3090,7 @@ where
                                             &visible_cols,
                                             &widths,
                                             row_height,
+                                            variable_row_height,
                                             selection_enabled,
                                             selection_set.contains(&row_id),
                                             handle,
@@ -2889,11 +3119,27 @@ where
                                             .find(|(rid, _)| *rid == pid)
                                             .map(|(_, r)| r.clone());
                                         let colspan = effective_col_count;
+                                        // data-chorale-index lets the VIRT-2
+                                        // measurement loop record this panel's
+                                        // actual rendered height (e.g. 200px
+                                        // for a 5-item child table) in
+                                        // state.row_heights. Without it,
+                                        // visible_window_variable would fall
+                                        // back to state.row_height for the
+                                        // panel slot — its prefix-sum would
+                                        // underestimate content height by
+                                        // (real - estimate) per expanded row,
+                                        // and scroll math would drift then
+                                        // snap at boundaries (the "jump").
+                                        let abs_index = win.start_index + i;
                                         let view = match (parent, &detail_renderer) {
                                             (Some(prow), Some(renderer)) => {
                                                 let content = renderer(prow);
                                                 view! {
-                                                    <tr class="chorale-row chorale-detail-panel">
+                                                    <tr
+                                                        class="chorale-row chorale-detail-panel"
+                                                        data-chorale-index=abs_index.to_string()
+                                                    >
                                                         <td colspan=colspan.to_string()>
                                                             <div class="chorale-detail-panel-inner">
                                                                 {content}
@@ -2903,7 +3149,10 @@ where
                                                 }.into_any()
                                             }
                                             _ => view! {
-                                                <tr class="chorale-row chorale-detail-panel-empty" />
+                                                <tr
+                                                    class="chorale-row chorale-detail-panel-empty"
+                                                    data-chorale-index=abs_index.to_string()
+                                                />
                                             }.into_any(),
                                         };
                                         rows.push(view);

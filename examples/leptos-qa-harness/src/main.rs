@@ -706,6 +706,11 @@ fn App() -> impl IntoView {
                 let resize = resize_on.get();
                 let col_reorder = column_reorder_on.get();
                 let xlsx = xlsx_export_on.get();
+                // Drives the Table's variable_row_height prop (real VIRT-2
+                // measurement + variable windowing). The toggle also swaps in
+                // the multi-line "name" cell renderer (see cell_renderers
+                // memo) so rows actually vary in height when it's on.
+                let variable_height = variable_height_on.get();
                 let renderers = cell_renderers.get();
                 let row_renderers_val = row_cell_renderers_memo.get();
                 // Always provide a Callback; it checks row_click_on at call
@@ -858,6 +863,7 @@ fn App() -> impl IntoView {
                         xlsx_export=xlsx
                         resize_enabled=resize
                         column_reorder_enabled=col_reorder
+                        variable_row_height=variable_height
                         sticky_header=frozen_columns_on.get()
                         labels=labels_val
                         on_commit_edit=commit_cb
