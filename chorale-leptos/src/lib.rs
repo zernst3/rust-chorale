@@ -85,6 +85,17 @@ pub use components::CellRenderer;
 /// to override the built-in rendering for specific columns.
 pub use components::CellRenderers;
 
+/// Per-row detail renderer: takes ownership of a row and returns a Leptos
+/// [`AnyView`].
+///
+/// Build with `Arc::new(|row: MyRow| view! { ... }.into_any())` and pass via
+/// the `detail_renderer` prop of [`Table`]. Without this re-export the type
+/// was unreachable by consumers (the `components` module is private), making
+/// the `detail_renderer` prop impossible to construct by name.
+///
+/// [`AnyView`]: leptos::prelude::AnyView
+pub use components::DetailRenderer;
+
 /// Type-erased row-aware cell renderer: maps the full row plus the cell's
 /// [`CellValue`] to a Leptos [`AnyView`].
 ///
