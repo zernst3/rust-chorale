@@ -29,6 +29,7 @@ web-sys = { version = "0.3", features = [
   "Clipboard",
   "DataTransfer",
   "Document",
+  "DomRect",
   "DragEvent",
   "Element",
   "Event",
@@ -39,6 +40,7 @@ web-sys = { version = "0.3", features = [
   "KeyboardEvent",
   "MouseEvent",
   "Navigator",
+  "NodeList",
   "Url",
   "Window",
 ] }
