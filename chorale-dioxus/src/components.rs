@@ -1915,6 +1915,12 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
 
     rsx! {
         th {
+            // Key includes column_reorder_enabled so the <th> is RECREATED when
+            // reorder toggles (the cursor in `extra` changes the style string,
+            // and Dioxus 0.7's inline-style diff unreliably drops the background
+            // — leaving a transparent sticky header). Keying by col_id also lets
+            // reorder MOVE the <th> by identity rather than diffing in place.
+            key: "{col_id}-{column_reorder_enabled}",
             style: "{extra}padding: 0.5rem 1rem; border-bottom: 1px solid var(--chorale-border, #ddd); \
                     text-align: {align}; white-space: nowrap; overflow: hidden; \
                     text-overflow: ellipsis; {sticky_top_decl} \
@@ -2103,7 +2109,7 @@ fn filter_th<TRow: Clone + PartialEq + 'static>(
     );
 
     match &col.filter {
-        FilterKind::None => rsx! { th { style: "{empty_th_style}" } },
+        FilterKind::None => rsx! { th { key: "{col_id}", style: "{empty_th_style}" } },
         FilterKind::Text => {
             let text = match &current {
                 Some(FilterValue::Text(s)) => s.clone(),
@@ -2111,7 +2117,7 @@ fn filter_th<TRow: Clone + PartialEq + 'static>(
             };
             let has_filter = current.is_some();
             rsx! {
-                th { style: "{th_style}",
+                th { key: "{col_id}", style: "{th_style}",
                     div {
                         style: "display: flex; align-items: center; gap: 2px;",
                         input {
@@ -2140,7 +2146,7 @@ fn filter_th<TRow: Clone + PartialEq + 'static>(
         FilterKind::MultiSelect { options } => {
             let has_filter = current.is_some();
             rsx! {
-                th { style: "{th_style}",
+                th { key: "{col_id}", style: "{th_style}",
                     div {
                         style: "display: flex; align-items: center; gap: 2px;",
                         div { style: "flex: 1; min-width: 0;",
@@ -2162,7 +2168,7 @@ fn filter_th<TRow: Clone + PartialEq + 'static>(
         FilterKind::NumericRange { min, max, step } => {
             let has_filter = current.is_some();
             rsx! {
-                th { style: "{th_style}",
+                th { key: "{col_id}", style: "{th_style}",
                     div {
                         style: "display: flex; align-items: center; gap: 2px;",
                         div { style: "flex: 1; min-width: 0;",
@@ -2185,7 +2191,7 @@ fn filter_th<TRow: Clone + PartialEq + 'static>(
         FilterKind::DateRange => {
             let has_filter = current.is_some();
             rsx! {
-                th { style: "{th_style}",
+                th { key: "{col_id}", style: "{th_style}",
                     div {
                         style: "display: flex; align-items: center; gap: 2px;",
                         div { style: "flex: 1; min-width: 0;",
@@ -2205,7 +2211,7 @@ fn filter_th<TRow: Clone + PartialEq + 'static>(
         FilterKind::Boolean => {
             let has_filter = current.is_some();
             rsx! {
-                th { style: "{th_style}",
+                th { key: "{col_id}", style: "{th_style}",
                     div {
                         style: "display: flex; align-items: center; gap: 2px;",
                         div { style: "flex: 1; min-width: 0;",
@@ -2222,7 +2228,7 @@ fn filter_th<TRow: Clone + PartialEq + 'static>(
                 }
             }
         }
-        _ => rsx! { th { style: "{empty_th_style}" } },
+        _ => rsx! { th { key: "{col_id}", style: "{empty_th_style}" } },
     }
 }
 
@@ -3239,6 +3245,7 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
 
     rsx! {
         td {
+            key: "{col.id}",
             style: "{style}",
             {editor_el}
             if let Some(err) = err_val {
@@ -3300,6 +3307,9 @@ fn data_td<TRow: Clone + PartialEq + 'static>(
     let col_id = col.id;
     rsx! {
         td {
+            // Stable per-column key so reorder moves cells by identity rather
+            // than diffing styles in place (keeps frozen-cell backgrounds).
+            key: "{col.id}",
             style: "{style}",
             onclick: move |e: MouseEvent| {
                 let ctrl = e.modifiers().contains(Modifiers::CONTROL)
