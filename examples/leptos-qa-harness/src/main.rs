@@ -9,7 +9,7 @@
 use chorale_core::{
     AggregatorKind, Alignment, BadgeVariant, BadgeVariantMap, CellValue, ColumnDef, ColumnId,
     CommittedEdit, CurrencyCode, EditorKind, FilterKind, FrozenSide, GroupedPaginationMode, Labels,
-    NaiveDate, PaginationMode, RenderKind, RowId,
+    NaiveDate, PaginationMode, RenderKind, RowId, Theme,
 };
 use chorale_derive::TableRow;
 use chorale_leptos::{
@@ -415,6 +415,7 @@ fn App() -> impl IntoView {
     let xlsx_export_on = RwSignal::new(false);
     let row_renderers_on = RwSignal::new(false);
     let row_click_on = RwSignal::new(false);
+    let dark_mode_on = RwSignal::new(false);
     let last_clicked: RwSignal<Option<String>> = RwSignal::new(None);
 
     // ── Cell renderers (rebuilt when variable_height_on / use_derive_on changes) ─
@@ -512,6 +513,14 @@ fn App() -> impl IntoView {
                 "v0.2.0 features"
             </p>
             <div style="display:flex; gap:1rem; flex-wrap:wrap; margin-bottom:0.5rem; padding:0.75rem; background:#eff6ff; border-radius:4px; border: 1px solid #bfdbfe;">
+                <label>
+                    <input
+                        type="checkbox"
+                        prop:checked=move || dark_mode_on.get()
+                        on:change=move |_| dark_mode_on.update(|v| *v = !*v)
+                    />
+                    " Dark mode"
+                </label>
                 <label>
                     <input
                         type="checkbox"
@@ -699,6 +708,10 @@ fn App() -> impl IntoView {
 
             {move || {
                 let sort = sort_on.get();
+                // Reading dark_mode_on here makes this block (and the Table it
+                // renders) re-run when the toggle flips, so the plain
+                // `theme: Theme` prop re-applies live.
+                let theme = if dark_mode_on.get() { Theme::Dark } else { Theme::Light };
                 let filter = filter_on.get();
                 let selection = selection_on.get();
                 let toolbar = col_toolbar_on.get();
@@ -854,6 +867,7 @@ fn App() -> impl IntoView {
                     })}
                     <Table
                         handle=table
+                        theme=theme
                         sort_enabled=sort
                         filter_enabled=filter
                         selection_enabled=selection

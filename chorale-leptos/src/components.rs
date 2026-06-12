@@ -3,6 +3,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+#[cfg(target_arch = "wasm32")]
+use chorale_core::theme_stylesheet;
 use chorale_core::{
     add_disjoint_range, cancel_edit, clear_active_cell, clear_range_selection, commit_edit,
     extend_range_to, fill_handle_targets, frozen_left_columns, frozen_right_columns,
@@ -13,7 +15,7 @@ use chorale_core::{
     ClipboardCopyEvent, ClipboardPasteEvent, ColumnDef, ColumnId, CommittedEdit, EditorKind,
     FilterKind, FilterValue, GroupKey, GroupedPaginationMode, GroupedRow, Labels, NaiveDate,
     NavDirection, PaginationMode, RangeSelection, RenderKind, RenderRow, RowId, SortAction,
-    SortDirection, SortState, TableState, VirtualWindow,
+    SortDirection, SortState, TableState, Theme, VirtualWindow, THEME_ROOT_CLASS,
 };
 #[cfg(target_arch = "wasm32")]
 use chorale_core::{batch_record_row_heights, paste_tsv_into_range, to_clipboard_tsv};
@@ -23,6 +25,35 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::hooks::UseTableHandle;
+
+/// Inject the built-in chorale theme stylesheet exactly once per document,
+/// keyed by the element id `chorale-theme-stylesheet`. The stylesheet ships
+/// both the light and dark `--chorale-*` token blocks, so switching themes at
+/// runtime is a pure `data-chorale-theme` attribute swap with no re-injection.
+///
+/// web-sys is a wasm32-only dependency, so this is a no-op on host builds.
+#[cfg(target_arch = "wasm32")]
+fn ensure_theme_stylesheet_injected() {
+    const STYLE_ID: &str = "chorale-theme-stylesheet";
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    if doc.get_element_by_id(STYLE_ID).is_some() {
+        return;
+    }
+    let Ok(style) = doc.create_element("style") else {
+        return;
+    };
+    let _ = style.set_attribute("id", STYLE_ID);
+    style.set_text_content(Some(theme_stylesheet()));
+    if let Some(head) = doc.head() {
+        let _ = head.append_child(&style);
+    }
+}
+
+/// Host-build no-op: see the wasm32 variant above.
+#[cfg(not(target_arch = "wasm32"))]
+fn ensure_theme_stylesheet_injected() {}
 
 /// Type-erased cell renderer: maps a [`CellValue`] to a Leptos [`AnyView`].
 ///
@@ -386,11 +417,26 @@ fn scroll_active_cell_into_view<TRow: Clone + PartialEq + Send + Sync + 'static>
 
 fn badge_style(color: &str) -> String {
     let (bg, fg) = match color {
-        "green" => ("#d1fae5", "#065f46"),
-        "yellow" => ("#fef3c7", "#92400e"),
-        "red" => ("#fee2e2", "#991b1b"),
-        "gray" => ("#f3f4f6", "#374151"),
-        _ => ("#e5e7eb", "#1f2937"),
+        "green" => (
+            "var(--chorale-badge-green-bg, #d1fae5)",
+            "var(--chorale-badge-green-text, #065f46)",
+        ),
+        "yellow" => (
+            "var(--chorale-badge-yellow-bg, #fef3c7)",
+            "var(--chorale-badge-yellow-text, #92400e)",
+        ),
+        "red" => (
+            "var(--chorale-badge-red-bg, #fee2e2)",
+            "var(--chorale-badge-red-text, #991b1b)",
+        ),
+        "gray" => (
+            "var(--chorale-badge-gray-bg, #f3f4f6)",
+            "var(--chorale-badge-gray-text, #374151)",
+        ),
+        _ => (
+            "var(--chorale-badge-default-bg, #e5e7eb)",
+            "var(--chorale-badge-default-text, #1f2937)",
+        ),
     };
     format!(
         "display:inline-block;padding:0.125rem 0.5rem;border-radius:9999px;\
@@ -528,7 +574,7 @@ fn GotoPageInput<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 min="1"
                 max=total_pages.to_string()
                 value=move || input_val.get()
-                style="width:4rem;padding:0.125rem 0.25rem;border:1px solid #ddd;\
+                style="width:4rem;padding:0.125rem 0.25rem;border:1px solid var(--chorale-border, #ddd);\
                        border-radius:3px;font-size:0.875rem;"
                 on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
                 on:input=move |ev| {
@@ -568,9 +614,9 @@ fn column_visibility_toolbar<TRow: Clone + PartialEq + Send + Sync + 'static>(
         .collect();
     let title = labels.column_visibility_label.clone();
     view! {
-        <div style="padding: 0.5rem 1rem; border-bottom: 1px solid #ddd; \
+        <div style="padding: 0.5rem 1rem; border-bottom: 1px solid var(--chorale-border, #ddd); \
                     display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; \
-                    font-size: 0.875rem; background: #fafafa;">
+                    font-size: 0.875rem; background: var(--chorale-toolbar-bg, #fafafa);">
             <span style="font-weight: 600; margin-right: 0.25rem;">{title}</span>
             {items.into_iter().map(|(col_id, header, visible)| {
                 view! {
@@ -615,7 +661,7 @@ fn text_filter_input<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 type="text"
                 value=val
                 placeholder=placeholder
-                style="flex:1;min-width:0;padding:0.25rem;border:1px solid #ddd;\
+                style="flex:1;min-width:0;padding:0.25rem;border:1px solid var(--chorale-border, #ddd);\
                        border-radius:3px;font-size:0.8rem;box-sizing:border-box;"
                 on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
                 on:input=move |ev| {
@@ -632,7 +678,7 @@ fn text_filter_input<TRow: Clone + PartialEq + Send + Sync + 'static>(
                     type="button"
                     title=clear_label
                     style="border:0;background:transparent;padding:0 4px;\
-                           cursor:pointer;color:#888;font-size:0.95rem;line-height:1;flex-shrink:0;"
+                           cursor:pointer;color:var(--chorale-text-subtle, #888);font-size:0.95rem;line-height:1;flex-shrink:0;"
                     on:click=move |ev| {
                         ev.stop_propagation();
                         handle.set_filter(col_id, None);
@@ -657,7 +703,7 @@ fn boolean_filter_input<TRow: Clone + PartialEq + Send + Sync + 'static>(
 
     view! {
         <select
-            style="width:100%;padding:0.25rem;border:1px solid #ddd;\
+            style="width:100%;padding:0.25rem;border:1px solid var(--chorale-border, #ddd);\
                    border-radius:3px;font-size:0.8rem;"
             on:change=move |ev| {
                 let v = event_target_value(&ev);
@@ -747,7 +793,7 @@ fn numeric_range_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
     view! {
         <div style="display:flex;flex-direction:column;gap:2px;font-size:0.75rem;"
             on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()>
-            <div style="display:flex;justify-content:space-between;color:#555;">
+            <div style="display:flex;justify-content:space-between;color:var(--chorale-text-muted, #555);">
                 <span>{min_display}</span>
                 <span>{max_display}</span>
             </div>
@@ -784,7 +830,7 @@ fn numeric_range_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
                     type="button"
                     title=clear_label
                     style="border:0;background:transparent;padding:0 4px;\
-                           cursor:pointer;color:#888;font-size:0.95rem;line-height:1;align-self:flex-end;"
+                           cursor:pointer;color:var(--chorale-text-subtle, #888);font-size:0.95rem;line-height:1;align-self:flex-end;"
                     on:click=move |ev| {
                         ev.stop_propagation();
                         handle.set_filter(col_id, None);
@@ -842,9 +888,9 @@ fn multiselect_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 // ownership of open/close/switch toggling.
                 <button
                     class="chorale-filter-toggle"
-                    style="width:100%;padding:0.2rem 0.4rem;border:1px solid #ddd;\
+                    style="width:100%;padding:0.2rem 0.4rem;border:1px solid var(--chorale-border, #ddd);\
                            border-radius:3px;font-size:0.8rem;text-align:left;cursor:pointer;\
-                           background:white;"
+                           background:var(--chorale-input-bg, white);"
                     on:click=move |ev| {
                         ev.stop_propagation();
                         open_filter_col.update(|c| {
@@ -866,9 +912,9 @@ fn multiselect_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
                     // closing it.
                     <div class="chorale-filter-dropdown"
                         style="position:absolute;top:100%;left:0;z-index:9999;\
-                                 background:white;border:1px solid #ddd;border-radius:3px;\
+                                 background:var(--chorale-popover-bg, white);border:1px solid var(--chorale-border, #ddd);border-radius:3px;\
                                  padding:0.25rem;min-width:8rem;max-height:200px;\
-                                 overflow-y:auto;box-shadow:0 2px 8px rgba(0,0,0,0.15);"
+                                 overflow-y:auto;box-shadow:var(--chorale-popover-shadow, 0 2px 8px rgba(0,0,0,0.15));"
                         on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
                     >
                         {options.iter().map(|opt| {
@@ -917,7 +963,7 @@ fn multiselect_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
                     type="button"
                     title=clear_label
                     style="border:0;background:transparent;padding:0 4px;\
-                           cursor:pointer;color:#888;font-size:0.95rem;line-height:1;flex-shrink:0;"
+                           cursor:pointer;color:var(--chorale-text-subtle, #888);font-size:0.95rem;line-height:1;flex-shrink:0;"
                     on:click=move |ev| {
                         ev.stop_propagation();
                         handle.set_filter(col_id, None);
@@ -952,7 +998,7 @@ fn date_range_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
             <input
                 type="date"
                 value=min_s
-                style="flex:1;min-width:0;padding:0.25rem;border:1px solid #ddd;\
+                style="flex:1;min-width:0;padding:0.25rem;border:1px solid var(--chorale-border, #ddd);\
                        border-radius:3px;font-size:0.8rem;"
                 on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
                 on:change=move |ev| {
@@ -974,7 +1020,7 @@ fn date_range_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
             <input
                 type="date"
                 value=max_s
-                style="flex:1;min-width:0;padding:0.25rem;border:1px solid #ddd;\
+                style="flex:1;min-width:0;padding:0.25rem;border:1px solid var(--chorale-border, #ddd);\
                        border-radius:3px;font-size:0.8rem;"
                 on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
                 on:change=move |ev| {
@@ -998,7 +1044,7 @@ fn date_range_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
                     type="button"
                     title=clear_label
                     style="border:0;background:transparent;padding:0 4px;\
-                           cursor:pointer;color:#888;font-size:0.95rem;line-height:1;flex-shrink:0;"
+                           cursor:pointer;color:var(--chorale-text-subtle, #888);font-size:0.95rem;line-height:1;flex-shrink:0;"
                     on:click=move |ev| {
                         ev.stop_propagation();
                         handle.set_filter(col_id, None);
@@ -1065,7 +1111,7 @@ fn header_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
     let is_drag_over =
         column_reorder_enabled && drag_col_id.get_untracked().is_some_and(|id| id != col_id);
     let drag_over_style = if is_drag_over {
-        "outline: 2px dashed #4a90e2; outline-offset: -2px; "
+        "outline: 2px dashed var(--chorale-accent, #4a90e2); outline-offset: -2px; "
     } else {
         ""
     };
@@ -1083,9 +1129,9 @@ fn header_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
     view! {
         <th
             style=format!(
-                "cursor:{drag_cursor};padding:0.5rem 1rem;border-bottom:1px solid #ddd;\
+                "cursor:{drag_cursor};padding:0.5rem 1rem;border-bottom:1px solid var(--chorale-border, #ddd);\
                  text-align:{align};white-space:nowrap;overflow:hidden;\
-                 text-overflow:ellipsis;background:#f8f9fa;\
+                 text-overflow:ellipsis;background:var(--chorale-header-bg, #f8f9fa);\
                  {sticky_top_decl}{w}{sticky_css}{drag_over_style}"
             )
             draggable=if column_reorder_enabled { "true" } else { "false" }
@@ -1157,7 +1203,7 @@ fn header_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
             {header.clone()}
             {sort_arrow.to_owned()}
             {sort_badge.map(|b| view! {
-                <sup style="font-size:0.65rem;color:#4a90e2;margin-left:0.1rem;">{b}</sup>
+                <sup style="font-size:0.65rem;color:var(--chorale-accent, #4a90e2);margin-left:0.1rem;">{b}</sup>
             })}
             {if resize_enabled {
                 Some(view! {
@@ -1239,8 +1285,8 @@ fn filter_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
     view! {
         <th
             style=format!(
-                "padding:0.25rem;border-bottom:1px solid #eee;position:sticky;top:0;z-index:3;\
-                 background:#fff;{w}{sticky_css}"
+                "padding:0.25rem;border-bottom:1px solid var(--chorale-divider, #eee);position:sticky;top:0;z-index:3;\
+                 background:var(--chorale-surface, #fff);{w}{sticky_css}"
             )
             // Keystrokes inside any filter widget (text input, range slider,
             // date input, multi-select) must not bubble to the table-root
@@ -1313,15 +1359,15 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
     // Active cell outline and range background (placed after sticky_css to override frozen bg).
     // The active cell gets the same light-blue fill as range cells in addition
     // to the outline — mirrors the Dioxus adapter, where the range overlay
-    // (rgba(0,120,212,0.1)) renders under the active-cell outline overlay.
+    // (var(--chorale-range-bg, rgba(0, 120, 212, 0.1))) renders under the active-cell outline overlay.
     let active_css = if is_active_cell {
         "outline:2px solid var(--chorale-active-cell-outline,#0078d4);outline-offset:-2px;\
-         background:rgba(0,120,212,0.1);"
+         background:var(--chorale-range-bg, rgba(0, 120, 212, 0.1));"
     } else {
         ""
     };
     let range_css = if is_in_range && !is_active_cell {
-        "background:rgba(0,120,212,0.1);"
+        "background:var(--chorale-range-bg, rgba(0, 120, 212, 0.1));"
     } else {
         ""
     };
@@ -1341,7 +1387,7 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 let row_blur = row_clone.clone();
                 return view! {
                     <td style=format!(
-                        "padding:0;border-bottom:1px solid #eee;\
+                        "padding:0;border-bottom:1px solid var(--chorale-divider, #eee);\
                          text-align:{align};{editor_h_css}\
                          overflow:hidden;{w}{sticky_css}"
                     )>
@@ -1357,7 +1403,7 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                                 style=format!(
                                     "flex:1;width:100%;box-sizing:border-box;\
                                      padding:0.5rem 1rem;border:none;\
-                                     outline:2px solid #4a90e2;outline-offset:-2px;\
+                                     outline:2px solid var(--chorale-accent, #4a90e2);outline-offset:-2px;\
                                      font-size:inherit;font-family:inherit;\
                                      line-height:inherit;text-align:{align};\
                                      background:transparent;"
@@ -1472,7 +1518,7 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                                 }
                             />
                             {move || edit_error.get().map(|e| view! {
-                                <span style="font-size:0.7rem;color:#dc2626;padding:0 0.25rem;">
+                                <span style="font-size:0.7rem;color:var(--chorale-error, #dc2626);padding:0 0.25rem;">
                                     {e}
                                 </span>
                             })}
@@ -1502,7 +1548,7 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
             let row_blur = row_clone.clone();
             return view! {
                 <td style=format!(
-                    "padding:0;border-bottom:1px solid #eee;\
+                    "padding:0;border-bottom:1px solid var(--chorale-divider, #eee);\
                      text-align:{align};{editor_h_css}\
                      overflow:hidden;{w}{sticky_css}"
                 )>
@@ -1516,7 +1562,7 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                             style=format!(
                                 "flex:1;width:100%;box-sizing:border-box;\
                                  padding:0.5rem 1rem;border:none;\
-                                 outline:2px solid #4a90e2;outline-offset:-2px;\
+                                 outline:2px solid var(--chorale-accent, #4a90e2);outline-offset:-2px;\
                                  font-size:inherit;font-family:inherit;\
                                  line-height:inherit;text-align:{align};\
                                  background:transparent;"
@@ -1611,7 +1657,7 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                                 .collect_view()}
                         </select>
                         {move || edit_error.get().map(|e| view! {
-                            <span style="font-size:0.7rem;color:#dc2626;padding:0 0.25rem;">
+                            <span style="font-size:0.7rem;color:var(--chorale-error, #dc2626);padding:0 0.25rem;">
                                 {e}
                             </span>
                         })}
@@ -1643,7 +1689,7 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
     view! {
         <td
             style=format!(
-                "padding:0.5rem 1rem;border-bottom:1px solid #eee;\
+                "padding:0.5rem 1rem;border-bottom:1px solid var(--chorale-divider, #eee);\
                  text-align:{align};{clamp_css}cursor:default;\
                  position:relative;\
                  {w}{sticky_css}{range_css}{active_css}"
@@ -1679,7 +1725,7 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
             {is_focus_cell.then(|| view! {
                 <div
                     style="position: absolute; bottom: 0; right: 0; width: 6px; height: 6px; \
-                           background: #0078d4; cursor: crosshair; z-index: 10; \
+                           background: var(--chorale-active-cell-outline, #0078d4); cursor: crosshair; z-index: 10; \
                            pointer-events: none;"
                     on:mousedown=move |ev| {
                         ev.stop_propagation();
@@ -1722,7 +1768,11 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
     on_row_click: Option<Callback<RowId>>,
     kb_ref: NodeRef<html::Div>,
 ) -> AnyView {
-    let bg = if is_selected { "#eff6ff" } else { "white" };
+    let bg = if is_selected {
+        "var(--chorale-row-selected-bg, #eff6ff)"
+    } else {
+        "var(--chorale-surface, white)"
+    };
     let cells: Vec<AnyView> = visible_cols
         .iter()
         .map(|col| {
@@ -1763,7 +1813,7 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
             data-chorale-index=row_index.to_string()
             style=format!(
                 "background:{bg};cursor:default;\
-                 box-shadow:inset 0 -1px 0 #eee;"
+                 box-shadow:inset 0 -1px 0 var(--chorale-divider, #eee);"
             )
             on:click=move |_| {
                 if selection_enabled {
@@ -1773,7 +1823,7 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
         >
             {if selection_enabled {
                 Some(view! {
-                    <td style="padding:0.5rem;border-bottom:1px solid #eee;width:2.5rem;">
+                    <td style="padding:0.5rem;border-bottom:1px solid var(--chorale-divider, #eee);width:2.5rem;">
                         <input
                             type="checkbox"
                             prop:checked=is_selected
@@ -1794,7 +1844,7 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
                     <td
                         class="chorale-cell chorale-detail-chevron"
                         style="width:24px;cursor:pointer;user-select:none;text-align:center;\
-                               border-bottom:1px solid #eee;"
+                               border-bottom:1px solid var(--chorale-divider, #eee);"
                         aria-label=aria
                         on:click=move |ev| {
                             ev.stop_propagation();
@@ -1834,21 +1884,21 @@ fn render_group_header<TRow: Clone + PartialEq + Send + Sync + 'static>(
     view! {
         <tr
             class=group_header_class
-            style="background:#f0f4ff;cursor:pointer;"
+            style="background:var(--chorale-group-header-bg, #f0f4ff);cursor:pointer;"
             on:click=move |_| { handle.toggle_group(key.clone()); }
         >
             <td
                 colspan=effective_col_count.to_string()
                 style=format!(
                     "padding:0.4rem 1rem 0.4rem {indent};\
-                     border-bottom:1px solid #d1d5db;\
+                     border-bottom:1px solid var(--chorale-group-header-border, #d1d5db);\
                      font-weight:600;font-size:0.875rem;"
                 )
             >
                 <span style="margin-right:0.5rem;">{icon}</span>
                 {label}
                 <span style="margin-left:0.5rem;font-size:0.75rem;\
-                              font-weight:normal;color:#6b7280;">
+                              font-weight:normal;color:var(--chorale-text-muted, #6b7280);">
                     {format!("({row_count})")}
                 </span>
             </td>
@@ -1897,7 +1947,7 @@ fn build_sticky_css<TRow: Clone>(
             col.id,
             format!(
                 "position:sticky;left:{left_off}px;z-index:{body_z};\
-                 background:#fff;{divider}"
+                 background:var(--chorale-surface, #fff);{divider}"
             ),
         );
         left_off += w;
@@ -1923,7 +1973,7 @@ fn build_sticky_css<TRow: Clone>(
             col.id,
             format!(
                 "position:sticky;right:{right_off}px;z-index:{body_z};\
-                 background:#fff;{divider}"
+                 background:var(--chorale-surface, #fff);{divider}"
             ),
         );
         right_off += w;
@@ -2110,10 +2160,22 @@ pub fn Table<TRow>(
     /// `load_more_rows` in `PaginationMode::InfiniteScroll`. Default is `200`.
     #[prop(default = 200.0)]
     infinite_scroll_threshold_px: f64,
+    /// Visual theme applied to this table. `Theme::Light` (the default) and
+    /// `Theme::Dark` resolve against the built-in injected stylesheet;
+    /// `Theme::Custom` matches no built-in token block, so every
+    /// `var(--chorale-*, <fallback>)` reference resolves to the consumer's own
+    /// CSS-variable definitions or the inline light fallback. Mirrors the
+    /// chorale-dioxus adapter.
+    #[prop(default = Theme::Light)]
+    theme: Theme,
 ) -> impl IntoView
 where
     TRow: Clone + PartialEq + Send + Sync + 'static,
 {
+    // Inject the built-in light+dark token stylesheet once per document
+    // (idempotent by element id). wasm-only: web-sys is a wasm32 dependency.
+    ensure_theme_stylesheet_injected();
+
     let labels = Arc::new(labels.unwrap_or_default());
 
     // Master/detail rows are inherently variable-height: the parent table
@@ -2478,8 +2540,10 @@ where
     view! {
         <div
             node_ref=kb_ref
+            class=THEME_ROOT_CLASS
+            attr:data-chorale-theme=theme.attribute_value()
             tabindex="0"
-            style="border:1px solid #ddd;border-radius:4px;overflow:hidden;user-select:none;outline:none;"
+            style="border:1px solid var(--chorale-border, #ddd);border-radius:4px;overflow:hidden;user-select:none;outline:none;"
             on:mousemove=move |ev| {
                 if let Some((col_id, start_x, start_w)) = drag_state.get_untracked() {
                     let delta = f64::from(ev.client_x()) - start_x;
@@ -2797,7 +2861,7 @@ where
                     <div
                         class="chorale-selection-toolbar"
                         style="width:100%;box-sizing:border-box;\
-                               border-bottom:2px solid #1d4ed8;"
+                               border-bottom:2px solid var(--chorale-accent-strong, #1d4ed8);"
                     >
                         {slot()}
                     </div>
@@ -3277,7 +3341,7 @@ where
                                         <td
                                             colspan=c.to_string()
                                             style="padding:2rem 1rem;text-align:center;\
-                                                   color:#999;font-style:italic;"
+                                                   color:var(--chorale-text-subtle, #999);font-style:italic;"
                                         >{lbl}</td>
                                     </tr>
                                 }.into_any());
@@ -3295,8 +3359,8 @@ where
                                 };
                                 Some(view! {
                                     <th style=format!(
-                                        "padding:0.5rem;border-bottom:1px solid #ddd;\
-                                         background:#f8f9fa;width:2.5rem;{sel_sticky}"
+                                        "padding:0.5rem;border-bottom:1px solid var(--chorale-border, #ddd);\
+                                         background:var(--chorale-header-bg, #f8f9fa);width:2.5rem;{sel_sticky}"
                                     )>
                                         <input
                                             type="checkbox"
@@ -3324,8 +3388,8 @@ where
                             };
                             Some(view! {
                                 <th style=format!(
-                                    "width:24px;padding:0;border-bottom:1px solid #ddd;\
-                                     background:#f8f9fa;{chev_sticky}"
+                                    "width:24px;padding:0;border-bottom:1px solid var(--chorale-border, #ddd);\
+                                     background:var(--chorale-header-bg, #f8f9fa);{chev_sticky}"
                                 ) />
                             })
                         } else {
@@ -3334,8 +3398,8 @@ where
 
                         let filter_empty_th = if selection_enabled && filter_enabled {
                             Some(view! {
-                                <th style="padding:0.25rem;border-bottom:1px solid #eee;\
-                                           background:#fff;width:2.5rem;" />
+                                <th style="padding:0.25rem;border-bottom:1px solid var(--chorale-divider, #eee);\
+                                           background:var(--chorale-surface, #fff);width:2.5rem;" />
                             })
                         } else {
                             None
@@ -3343,7 +3407,7 @@ where
 
                         let filter_chevron_th = if has_detail && filter_enabled {
                             Some(view! {
-                                <th style="width:24px;padding:0;border-bottom:1px solid #eee;background:#fff;" />
+                                <th style="width:24px;padding:0;border-bottom:1px solid var(--chorale-divider, #eee);background:var(--chorale-surface, #fff);" />
                             })
                         } else {
                             None
@@ -3355,8 +3419,8 @@ where
                                 let lbl = labels.load_more_label.clone();
                                 view! {
                                     <div style="padding:0.75rem 1rem;text-align:center;\
-                                                border-top:1px solid #ddd;background:#fafafa;\
-                                                font-size:0.875rem;color:#999;">
+                                                border-top:1px solid var(--chorale-border, #ddd);background:var(--chorale-toolbar-bg, #fafafa);\
+                                                font-size:0.875rem;color:var(--chorale-text-subtle, #999);">
                                         {lbl}
                                     </div>
                                 }.into_any()
@@ -3364,12 +3428,12 @@ where
                                 view! { <div /> }.into_any()
                             }
                         } else if !is_virtualized_grouped {
-                            let nav_btn = "padding:0.25rem 0.6rem;border:1px solid #ddd;\
+                            let nav_btn = "padding:0.25rem 0.6rem;border:1px solid var(--chorale-border, #ddd);\
                                 border-radius:3px;font-size:0.875rem;cursor:pointer;\
-                                background:white;color:#333;";
-                            let nav_btn_dis = "padding:0.25rem 0.6rem;border:1px solid #ddd;\
+                                background:var(--chorale-button-bg, white);color:var(--chorale-text, #333);";
+                            let nav_btn_dis = "padding:0.25rem 0.6rem;border:1px solid var(--chorale-border, #ddd);\
                                 border-radius:3px;font-size:0.875rem;cursor:not-allowed;\
-                                background:#f0f0f0;color:#aaa;";
+                                background:var(--chorale-button-disabled-bg, #f0f0f0);color:var(--chorale-text-disabled, #aaa);";
                             let prev_disabled = page_idx == 0;
                             let next_disabled = page_idx + 1 >= total_pages;
                             let page_buttons = page_button_range(page_idx, total_pages);
@@ -3381,9 +3445,9 @@ where
                                 .map(|item| match item {
                                     PageItem::Page(p) => {
                                         let style = if p == page_idx {
-                                            "padding:0.25rem 0.6rem;border:1px solid #4a90e2;\
+                                            "padding:0.25rem 0.6rem;border:1px solid var(--chorale-accent, #4a90e2);\
                                              border-radius:3px;font-size:0.875rem;\
-                                             background:#4a90e2;color:white;cursor:pointer;"
+                                             background:var(--chorale-accent, #4a90e2);color:var(--chorale-accent-contrast, white);cursor:pointer;"
                                         } else {
                                             nav_btn
                                         };
@@ -3399,7 +3463,7 @@ where
                                     }
                                     PageItem::Ellipsis => {
                                         view! {
-                                            <span style="padding:0.25rem 0.3rem;color:#999;">
+                                            <span style="padding:0.25rem 0.3rem;color:var(--chorale-text-subtle, #999);">
                                                 "…"
                                             </span>
                                         }
@@ -3412,9 +3476,9 @@ where
                                 let lbl_csv = labels.export_csv_label.clone();
                                 Some(view! {
                                     <button
-                                        style="padding:0.25rem 0.75rem;border:1px solid #4a90e2;\
+                                        style="padding:0.25rem 0.75rem;border:1px solid var(--chorale-accent, #4a90e2);\
                                                border-radius:3px;font-size:0.875rem;cursor:pointer;\
-                                               background:white;color:#4a90e2;"
+                                               background:var(--chorale-button-bg, white);color:var(--chorale-accent, #4a90e2);"
                                         on:click=move |_| {
                                             let csv = sig.with_untracked(|s| to_csv(s));
                                             trigger_csv_download(&csv);
@@ -3441,8 +3505,8 @@ where
 
                             view! {
                                 <div style="padding:0.5rem 1rem;display:flex;align-items:center;\
-                                            flex-wrap:wrap;gap:0.25rem;border-top:1px solid #ddd;\
-                                            background:#fafafa;font-size:0.875rem;color:#555;">
+                                            flex-wrap:wrap;gap:0.25rem;border-top:1px solid var(--chorale-border, #ddd);\
+                                            background:var(--chorale-toolbar-bg, #fafafa);font-size:0.875rem;color:var(--chorale-text-muted, #555);">
                                     <button
                                         style=if prev_disabled { nav_btn_dis } else { nav_btn }
                                         disabled=prev_disabled
@@ -3464,7 +3528,7 @@ where
                                     >
                                         {lbl_next}
                                     </button>
-                                    <span style="margin-left:0.5rem;color:#999;">{"\u{00b7}"}</span>
+                                    <span style="margin-left:0.5rem;color:var(--chorale-text-subtle, #999);">{"\u{00b7}"}</span>
                                     <span>{format!("{total_rows} rows")}</span>
                                     {goto}
                                     {csv_button.map(|b| view! {
@@ -3486,7 +3550,7 @@ where
                                     <td
                                         colspan=c.to_string()
                                         style="padding:2rem 1rem;text-align:center;\
-                                               color:#999;font-style:italic;"
+                                               color:var(--chorale-text-subtle, #999);font-style:italic;"
                                     >{lbl}</td>
                                 </tr>
                             })
@@ -3496,13 +3560,13 @@ where
 
                         view! {
                             <thead>
-                                <tr style="background:#f8f9fa;">
+                                <tr style="background:var(--chorale-header-bg, #f8f9fa);">
                                     {select_all_th}
                                     {chevron_th}
                                     {header_row}
                                 </tr>
                                 {filter_row.map(|cells| view! {
-                                    <tr style="background:#fff;">
+                                    <tr style="background:var(--chorale-surface, #fff);">
                                         {filter_empty_th}
                                         {filter_chevron_th}
                                         {cells}
@@ -3532,18 +3596,18 @@ where
                     let lbl = labels.load_more_label.clone();
                     view! {
                         <div style="padding:0.75rem 1rem;text-align:center;\
-                                    border-top:1px solid #ddd;background:#fafafa;\
-                                    font-size:0.875rem;color:#999;">
+                                    border-top:1px solid var(--chorale-border, #ddd);background:var(--chorale-toolbar-bg, #fafafa);\
+                                    font-size:0.875rem;color:var(--chorale-text-subtle, #999);">
                             {lbl}
                         </div>
                     }.into_any()
                 } else if !is_infinite && !is_virt_grouped {
-                    let nav_btn = "padding:0.25rem 0.6rem;border:1px solid #ddd;\
+                    let nav_btn = "padding:0.25rem 0.6rem;border:1px solid var(--chorale-border, #ddd);\
                         border-radius:3px;font-size:0.875rem;cursor:pointer;\
-                        background:white;color:#333;";
-                    let nav_btn_dis = "padding:0.25rem 0.6rem;border:1px solid #ddd;\
+                        background:var(--chorale-button-bg, white);color:var(--chorale-text, #333);";
+                    let nav_btn_dis = "padding:0.25rem 0.6rem;border:1px solid var(--chorale-border, #ddd);\
                         border-radius:3px;font-size:0.875rem;cursor:not-allowed;\
-                        background:#f0f0f0;color:#aaa;";
+                        background:var(--chorale-button-disabled-bg, #f0f0f0);color:var(--chorale-text-disabled, #aaa);";
                     let total_pages = s.total_pages();
                     let page_idx = s.page;
                     let total_rows = s.filtered_row_count();
@@ -3558,9 +3622,9 @@ where
                         .map(|item| match item {
                             PageItem::Page(p) => {
                                 let style = if p == page_idx {
-                                    "padding:0.25rem 0.6rem;border:1px solid #4a90e2;\
+                                    "padding:0.25rem 0.6rem;border:1px solid var(--chorale-accent, #4a90e2);\
                                      border-radius:3px;font-size:0.875rem;\
-                                     background:#4a90e2;color:white;cursor:pointer;"
+                                     background:var(--chorale-accent, #4a90e2);color:var(--chorale-accent-contrast, white);cursor:pointer;"
                                 } else {
                                     nav_btn
                                 };
@@ -3571,7 +3635,7 @@ where
                                 }.into_any()
                             }
                             PageItem::Ellipsis => {
-                                view! { <span style="padding:0.25rem 0.3rem;color:#999;">"…"</span> }.into_any()
+                                view! { <span style="padding:0.25rem 0.3rem;color:var(--chorale-text-subtle, #999);">"…"</span> }.into_any()
                             }
                         })
                         .collect();
@@ -3580,9 +3644,9 @@ where
                         let lbl_csv = labels.export_csv_label.clone();
                         Some(view! {
                             <button
-                                style="padding:0.25rem 0.75rem;border:1px solid #4a90e2;\
+                                style="padding:0.25rem 0.75rem;border:1px solid var(--chorale-accent, #4a90e2);\
                                        border-radius:3px;font-size:0.875rem;cursor:pointer;\
-                                       background:white;color:#4a90e2;"
+                                       background:var(--chorale-button-bg, white);color:var(--chorale-accent, #4a90e2);"
                                 on:click=move |_| {
                                     let csv = sig.with_untracked(|s| to_csv(s));
                                     trigger_csv_download(&csv);
@@ -3601,9 +3665,9 @@ where
                             let lbl = labels.export_xlsx_label.clone();
                             Some(view! {
                                 <button
-                                    style="padding:0.25rem 0.75rem;border:1px solid #4a90e2;\
+                                    style="padding:0.25rem 0.75rem;border:1px solid var(--chorale-accent, #4a90e2);\
                                            border-radius:3px;font-size:0.875rem;cursor:pointer;\
-                                           background:white;color:#4a90e2;"
+                                           background:var(--chorale-button-bg, white);color:var(--chorale-accent, #4a90e2);"
                                     on:click=move |_| {
                                         #[cfg(target_arch = "wasm32")]
                                         {
@@ -3630,8 +3694,8 @@ where
                     let has_export = csv_button.is_some() || xlsx_button.is_some();
                     view! {
                         <div style="padding:0.5rem 1rem;display:flex;align-items:center;\
-                                    flex-wrap:wrap;gap:0.25rem;border-top:1px solid #ddd;\
-                                    background:#fafafa;font-size:0.875rem;color:#555;">
+                                    flex-wrap:wrap;gap:0.25rem;border-top:1px solid var(--chorale-border, #ddd);\
+                                    background:var(--chorale-toolbar-bg, #fafafa);font-size:0.875rem;color:var(--chorale-text-muted, #555);">
                             <button
                                 style=if prev_disabled { nav_btn_dis } else { nav_btn }
                                 disabled=prev_disabled
@@ -3653,7 +3717,7 @@ where
                             >
                                 {lbl_next}
                             </button>
-                            <span style="margin-left:0.5rem;color:#999;">{"\u{00b7}"}</span>
+                            <span style="margin-left:0.5rem;color:var(--chorale-text-subtle, #999);">{"\u{00b7}"}</span>
                             <span>{format!("{total_rows} rows")}</span>
                             {(total_pages > 1).then(|| view! {
                                 <GotoPageInput handle=handle total_pages=total_pages labels=labels.clone() />
