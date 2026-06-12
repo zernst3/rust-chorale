@@ -2511,7 +2511,7 @@ where
         <div
             node_ref=kb_ref
             class=THEME_ROOT_CLASS
-            attr:data-chorale-theme=theme.attribute_value()
+            data-chorale-theme=theme.attribute_value()
             tabindex="0"
             style="border:1px solid var(--chorale-border, #ddd);border-radius:4px;overflow:hidden;user-select:none;outline:none;background:var(--chorale-surface, #fff);color:var(--chorale-text, #333);"
             on:mousemove=move |ev| {

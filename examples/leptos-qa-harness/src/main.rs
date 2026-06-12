@@ -168,7 +168,10 @@ fn EmployeeDetailPanel(employee: Employee) -> impl IntoView {
             // child renders at natural height so the parent's scroll context
             // owns wheel events end-to-end. on_commit_edit is a required
             // Option prop on the Leptos Table; the read-only child passes None.
-            <Table handle=detail_table sort_enabled=true inline=true on_commit_edit=None />
+            // Theme::Custom => data-chorale-theme="custom" matches no built-in
+            // block, so this nested table inherits the parent's themed
+            // --chorale-* variables via CSS cascade instead of forcing light.
+            <Table handle=detail_table sort_enabled=true inline=true theme=Theme::Custom on_commit_edit=None />
         </div>
     }
 }
@@ -498,6 +501,12 @@ fn App() -> impl IntoView {
     });
 
     view! {
+        // Page background follows the theme (faint off-white in light, very dark
+        // blue/purple in dark) so the whole viewport stays a touch off from the
+        // table surface for contrast. Targets <body> via a reactive <style>.
+        <style inner_html=move || {
+            if dark_mode_on.get() { "body{background:#14121e;}" } else { "body{background:#f5f5f7;}" }
+        }></style>
         <div style="font-family: sans-serif; padding: 1rem; max-width: 1400px; margin: 0 auto;">
             <h1>"chorale QA Harness (Leptos)"</h1>
             <p>"Dataset: "{row_count}" rows"</p>
@@ -789,52 +798,60 @@ fn App() -> impl IntoView {
                         {move || {
                             selection_toolbar_on.get().then(|| {
                                 let count = table.signal().with(|s| s.selection.len());
+                                // Toolbar colors follow the theme: pale blue in light,
+                                // a medium dark blue (some contrast, not black) in dark.
+                                let (tb_bg, tb_border, tb_text, tb_btn_bg, tb_btn_border) =
+                                    if dark_mode_on.get() {
+                                        ("#21324d", "#3a5680", "#d6e4ff", "#2e466b", "#3f5d85")
+                                    } else {
+                                        ("#eff6ff", "#bfdbfe", "#1e3a8a", "#dbeafe", "#93c5fd")
+                                    };
                                 view! {
-                                    <div style="display: flex; align-items: center; gap: 1rem; \
-                                                padding: 0.75rem 1rem; background: #eff6ff; \
-                                                border: 1px solid #bfdbfe; \
-                                                color: #1e3a8a; font-size: 0.875rem; font-weight: 600; \
-                                                width: 100%; box-sizing: border-box; flex-wrap: wrap;">
+                                    <div style=format!("display: flex; align-items: center; gap: 1rem; \
+                                                padding: 0.75rem 1rem; background: {tb_bg}; \
+                                                border: 1px solid {tb_border}; \
+                                                color: {tb_text}; font-size: 0.875rem; font-weight: 600; \
+                                                width: 100%; box-sizing: border-box; flex-wrap: wrap;")>
                                         <span>{count}" row(s) selected"</span>
                                         <div class="chorale-bulk-actions" style="display: flex; gap: 8px;">
                                             <button
                                                 on:click=move |_| table.select_all_visible_page()
-                                                style="padding: 0.25rem 0.75rem; \
-                                                       background: #dbeafe; \
-                                                       color: #1e3a8a; \
-                                                       border: 1px solid #93c5fd; \
+                                                style=format!("padding: 0.25rem 0.75rem; \
+                                                       background: {tb_btn_bg}; \
+                                                       color: {tb_text}; \
+                                                       border: 1px solid {tb_btn_border}; \
                                                        border-radius: 3px; cursor: pointer; \
-                                                       font-size: 0.8rem;">
+                                                       font-size: 0.8rem;")>
                                                 "Select page"
                                             </button>
                                             <button
                                                 on:click=move |_| table.select_all_filtered()
-                                                style="padding: 0.25rem 0.75rem; \
-                                                       background: #dbeafe; \
-                                                       color: #1e3a8a; \
-                                                       border: 1px solid #93c5fd; \
+                                                style=format!("padding: 0.25rem 0.75rem; \
+                                                       background: {tb_btn_bg}; \
+                                                       color: {tb_text}; \
+                                                       border: 1px solid {tb_btn_border}; \
                                                        border-radius: 3px; cursor: pointer; \
-                                                       font-size: 0.8rem;">
+                                                       font-size: 0.8rem;")>
                                                 "Select all"
                                             </button>
                                             <button
                                                 on:click=move |_| table.deselect_all_visible_page()
-                                                style="padding: 0.25rem 0.75rem; \
-                                                       background: #dbeafe; \
-                                                       color: #1e3a8a; \
-                                                       border: 1px solid #93c5fd; \
+                                                style=format!("padding: 0.25rem 0.75rem; \
+                                                       background: {tb_btn_bg}; \
+                                                       color: {tb_text}; \
+                                                       border: 1px solid {tb_btn_border}; \
                                                        border-radius: 3px; cursor: pointer; \
-                                                       font-size: 0.8rem;">
+                                                       font-size: 0.8rem;")>
                                                 "Deselect page"
                                             </button>
                                             <button
                                                 on:click=move |_| table.deselect_all()
-                                                style="padding: 0.25rem 0.75rem; \
-                                                       background: #dbeafe; \
-                                                       color: #1e3a8a; \
-                                                       border: 1px solid #93c5fd; \
+                                                style=format!("padding: 0.25rem 0.75rem; \
+                                                       background: {tb_btn_bg}; \
+                                                       color: {tb_text}; \
+                                                       border: 1px solid {tb_btn_border}; \
                                                        border-radius: 3px; cursor: pointer; \
-                                                       font-size: 0.8rem;">
+                                                       font-size: 0.8rem;")>
                                                 "Deselect all"
                                             </button>
                                         </div>
