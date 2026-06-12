@@ -10,12 +10,13 @@ use chorale_core::{
     frozen_right_columns, move_active_cell, move_active_cell_end, move_active_cell_first,
     move_active_cell_home, move_active_cell_last, move_active_cell_page, move_active_cell_to_edge,
     next_editable_cell, paste_tsv_into_range, prev_editable_cell, scrollable_columns,
-    select_all as select_all_range, start_range_selection, to_clipboard_tsv, to_csv,
-    visible_grouped_view, visible_view, visible_window, visible_window_variable, ActiveCell,
-    Alignment, BadgeVariantMap, CellValue, ClipboardCopyEvent, ClipboardPasteEvent, ColumnDef,
-    ColumnId, CommittedEdit, CurrencyCode, EditorKind, FilterKind, FilterValue, GroupKey,
-    GroupedPaginationMode, GroupedRow, Labels, NavDirection, PaginationMode, RenderKind, RenderRow,
-    RowId, SortAction, SortDirection, SortState, TableState, VirtualWindow,
+    select_all as select_all_range, start_range_selection, theme_stylesheet, to_clipboard_tsv,
+    to_csv, visible_grouped_view, visible_view, visible_window, visible_window_variable,
+    ActiveCell, Alignment, BadgeVariantMap, CellValue, ClipboardCopyEvent, ClipboardPasteEvent,
+    ColumnDef, ColumnId, CommittedEdit, CurrencyCode, EditorKind, FilterKind, FilterValue,
+    GroupKey, GroupedPaginationMode, GroupedRow, Labels, NavDirection, PaginationMode, RenderKind,
+    RenderRow, RowId, SortAction, SortDirection, SortState, TableState, Theme, VirtualWindow,
+    THEME_ROOT_CLASS,
 };
 use dioxus::prelude::*;
 
@@ -394,6 +395,13 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     /// `load_more_rows` in `PaginationMode::InfiniteScroll`. Default is `200`.
     #[props(default = 200.0_f64)]
     infinite_scroll_threshold_px: f64,
+    /// Visual theme applied to this table. `Theme::Light` (the default) and
+    /// `Theme::Dark` resolve against the built-in injected stylesheet;
+    /// `Theme::Custom` matches no built-in token block, so every
+    /// `var(--chorale-*, <fallback>)` reference resolves to the consumer's
+    /// own CSS-variable definitions or the inline light fallback.
+    #[props(default = Theme::Light)]
+    theme: Theme,
 ) -> Element {
     let labels = labels.clone().unwrap_or_default();
 
@@ -831,7 +839,7 @@ dioxus.send(parts.join('\n'));"
             sticky_body_css.insert(
                 col.id,
                 format!(
-                    "position: sticky; left: {left_offset}px; z-index: {body_z}; background: #fff;{divider}"
+                    "position: sticky; left: {left_offset}px; z-index: {body_z}; background: var(--chorale-surface, #fff);{divider}"
                 ),
             );
             left_offset += col_w;
@@ -858,7 +866,7 @@ dioxus.send(parts.join('\n'));"
             sticky_body_css.insert(
                 col.id,
                 format!(
-                    "position: sticky; right: {right_offset}px; z-index: {body_z}; background: #fff;{divider}"
+                    "position: sticky; right: {right_offset}px; z-index: {body_z}; background: var(--chorale-surface, #fff);{divider}"
                 ),
             );
             right_offset += col_w;
@@ -962,10 +970,10 @@ dioxus.send(parts.join('\n'));"
     let page_buttons = page_button_range(page_idx, total_pages);
     let prev_disabled = page_idx == 0;
     let next_disabled = page_idx + 1 >= total_pages;
-    let nav_btn = "padding:0.25rem 0.6rem;border:1px solid #ddd;border-radius:3px;\
-                   font-size:0.875rem;cursor:pointer;background:white;color:#333;";
-    let nav_btn_dis = "padding:0.25rem 0.6rem;border:1px solid #ddd;border-radius:3px;\
-                       font-size:0.875rem;cursor:not-allowed;background:#f0f0f0;color:#aaa;";
+    let nav_btn = "padding:0.25rem 0.6rem;border:1px solid var(--chorale-border, #ddd);border-radius:3px;\
+                   font-size:0.875rem;cursor:pointer;background:var(--chorale-button-bg, white);color:var(--chorale-text, #333);";
+    let nav_btn_dis = "padding:0.25rem 0.6rem;border:1px solid var(--chorale-border, #ddd);border-radius:3px;\
+                       font-size:0.875rem;cursor:not-allowed;background:var(--chorale-button-disabled-bg, #f0f0f0);color:var(--chorale-text-disabled, #aaa);";
 
     // Build the XLSX export button as an Option<Element> outside the main
     // rsx so a `#[cfg(feature = "xlsx")]` attribute can gate the whole
@@ -982,9 +990,9 @@ dioxus.send(parts.join('\n'));"
                 Some(rsx! {
                     button {
                         style: "margin-left: 0.5rem; padding:0.25rem 0.75rem;\
-                                border:1px solid #4a90e2; border-radius:3px;\
+                                border:1px solid var(--chorale-accent, #4a90e2); border-radius:3px;\
                                 font-size:0.875rem; cursor:pointer;\
-                                background:white; color:#4a90e2;",
+                                background:var(--chorale-button-bg, white); color:var(--chorale-accent, #4a90e2);",
                         onclick: move |_| {
                             use chorale_core::{to_xlsx, XlsxOptions};
                             let sig = handle.signal();
@@ -1018,10 +1026,18 @@ dioxus.send(parts.join('\n'));"
     };
 
     rsx! {
+        // Inject the built-in light+dark token stylesheet. `dangerous_inner_html`
+        // keeps the CSS verbatim (the [data-chorale-theme="..."] quotes must not
+        // be HTML-escaped). Duplicate identical blocks across multiple tables are
+        // harmless. Theme::Custom still renders this, but its attribute value
+        // ("custom") matches no block, so the inline var() fallbacks win.
+        style { dangerous_inner_html: theme_stylesheet() }
         div {
             id: "{kb_id}",
+            class: "{THEME_ROOT_CLASS}",
+            "data-chorale-theme": theme.attribute_value(),
             tabindex: "0",
-            style: "border: 1px solid #ddd; border-radius: 4px; overflow: hidden; \
+            style: "border: 1px solid var(--chorale-border, #ddd); border-radius: 4px; overflow: hidden; \
                     user-select: none; outline: none;",
             onmousemove: move |e| {
                 if let Some((col_id, start_x, start_w)) = *drag_state.read() {
@@ -1318,7 +1334,7 @@ dioxus.send(parts.join('\n'));"
             if let Some(toolbar) = selection_toolbar {
                 div {
                     class: "chorale-selection-toolbar",
-                    style: "width: 100%; box-sizing: border-box; border-bottom: 2px solid #1d4ed8;",
+                    style: "width: 100%; box-sizing: border-box; border-bottom: 2px solid var(--chorale-accent-strong, #1d4ed8);",
                     {toolbar}
                 }
             }
@@ -1378,7 +1394,7 @@ dioxus.send(parts.join('\n'));"
 
                     thead {
                         tr {
-                            style: "background: #f8f9fa;",
+                            style: "background: var(--chorale-header-bg, #f8f9fa);",
                             if selection_enabled {
                                 {select_all_th(handle, all_page_selected, sticky_header)}
                             }
@@ -1392,15 +1408,15 @@ dioxus.send(parts.join('\n'));"
                                 th {
                                     style: if sticky_header {
                                         "width: 24px; padding: 0; \
-                                         border-bottom: 1px solid #ddd; \
+                                         border-bottom: 1px solid var(--chorale-border, #ddd); \
                                          position: sticky; top: 0; \
-                                         background: #f8f9fa; z-index: 1;"
+                                         background: var(--chorale-header-bg, #f8f9fa); z-index: 1;"
                                     } else {
                                         "width: 24px; padding: 0; \
-                                         border-bottom: 1px solid #ddd; \
+                                         border-bottom: 1px solid var(--chorale-border, #ddd); \
                                          position: static; top: auto; \
                                          z-index: auto; \
-                                         background: #f8f9fa;"
+                                         background: var(--chorale-header-bg, #f8f9fa);"
                                     }
                                 }
                             }
@@ -1410,15 +1426,15 @@ dioxus.send(parts.join('\n'));"
                         }
                         if filter_enabled {
                             tr {
-                                style: "background: #fff;",
+                                style: "background: var(--chorale-surface, #fff);",
                                 if selection_enabled {
                                     th {
-                                        style: "padding: 0.25rem; border-bottom: 1px solid #eee; \
-                                                background: #fff; width: 2.5rem;",
+                                        style: "padding: 0.25rem; border-bottom: 1px solid var(--chorale-divider, #eee); \
+                                                background: var(--chorale-surface, #fff); width: 2.5rem;",
                                     }
                                 }
                                 if has_detail {
-                                    th { style: "width: 24px; padding: 0; border-bottom: 1px solid #eee; background: #fff;" }
+                                    th { style: "width: 24px; padding: 0; border-bottom: 1px solid var(--chorale-divider, #eee); background: var(--chorale-surface, #fff);" }
                                 }
                                 for col in &visible_cols {
                                     {filter_th(col, widths.get(&col.id).copied(), handle, &filters, &labels, sticky_header_css.get(&col.id).map_or("", String::as_str))}
@@ -1483,7 +1499,7 @@ dioxus.send(parts.join('\n'));"
                                     td {
                                         colspan: "{effective_col_count}",
                                         style: "padding: 2rem 1rem; text-align: center; \
-                                                color: #999; font-style: italic;",
+                                                color: var(--chorale-text-subtle, #999); font-style: italic;",
                                         "{labels.no_rows_label}"
                                     }
                                 }
@@ -1531,7 +1547,7 @@ dioxus.send(parts.join('\n'));"
                                     td {
                                         colspan: "{effective_col_count}",
                                         style: "padding: 2rem 1rem; text-align: center; \
-                                                color: #999; font-style: italic;",
+                                                color: var(--chorale-text-subtle, #999); font-style: italic;",
                                         "{labels.no_rows_label}"
                                     }
                                 }
@@ -1545,16 +1561,16 @@ dioxus.send(parts.join('\n'));"
                 if has_more_rows {
                     div {
                         style: "padding: 0.75rem 1rem; text-align: center; \
-                                border-top: 1px solid #ddd; background: #fafafa; \
-                                font-size: 0.875rem; color: #999;",
+                                border-top: 1px solid var(--chorale-border, #ddd); background: var(--chorale-toolbar-bg, #fafafa); \
+                                font-size: 0.875rem; color: var(--chorale-text-subtle, #999);",
                         "{labels.load_more_label}"
                     }
                 }
             } else if !is_virtualized_grouped {
                 div {
                     style: "padding: 0.5rem 1rem; display: flex; align-items: center; \
-                            flex-wrap: wrap; gap: 0.25rem; border-top: 1px solid #ddd; \
-                            background: #fafafa; font-size: 0.875rem; color: #555;",
+                            flex-wrap: wrap; gap: 0.25rem; border-top: 1px solid var(--chorale-border, #ddd); \
+                            background: var(--chorale-toolbar-bg, #fafafa); font-size: 0.875rem; color: var(--chorale-text-muted, #555);",
                     button {
                         style: if prev_disabled { "{nav_btn_dis}" } else { "{nav_btn}" },
                         disabled: prev_disabled,
@@ -1574,10 +1590,10 @@ dioxus.send(parts.join('\n'));"
                         },
                         "{labels.next_page_label}"
                     }
-                    span { style: "margin-left: 0.5rem; color: #999;", "\u{00b7}" }
+                    span { style: "margin-left: 0.5rem; color: var(--chorale-text-subtle, #999);", "\u{00b7}" }
                     span { "{total_rows} rows" }
                     if total_pages > 1 {
-                        span { style: "margin-left: 0.5rem; color: #999;", "\u{00b7}" }
+                        span { style: "margin-left: 0.5rem; color: var(--chorale-text-subtle, #999);", "\u{00b7}" }
                         GotoPageInput::<TRow> { handle, total_pages, labels: labels.clone() }
                     }
                     // `flex: 1` spacer pushes both export buttons to the
@@ -1589,9 +1605,9 @@ dioxus.send(parts.join('\n'));"
                     }
                     if csv_export {
                         button {
-                            style: "padding:0.25rem 0.75rem;border:1px solid #4a90e2;\
+                            style: "padding:0.25rem 0.75rem;border:1px solid var(--chorale-accent, #4a90e2);\
                                     border-radius:3px;font-size:0.875rem;cursor:pointer;\
-                                    background:white;color:#4a90e2;",
+                                    background:var(--chorale-button-bg, white);color:var(--chorale-accent, #4a90e2);",
                             onclick: move |_| {
                                 let sig = handle.signal();
                                 let csv = to_csv(&*sig.read());
@@ -1898,10 +1914,10 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
 
     rsx! {
         th {
-            style: "{extra}padding: 0.5rem 1rem; border-bottom: 1px solid #ddd; \
+            style: "{extra}padding: 0.5rem 1rem; border-bottom: 1px solid var(--chorale-border, #ddd); \
                     text-align: {align}; white-space: nowrap; overflow: hidden; \
                     text-overflow: ellipsis; {sticky_top_decl} \
-                    background: #f8f9fa; {w} {sticky_css}",
+                    background: var(--chorale-header-bg, #f8f9fa); {w} {sticky_css}",
             draggable: column_reorder_enabled,
             onclick: move |e| {
                 if is_sortable {
@@ -1988,7 +2004,7 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
             if is_drag_over {
                 div {
                     style: "position: absolute; inset: 0; \
-                            outline: 2px dashed #4a90e2; outline-offset: -2px; \
+                            outline: 2px dashed var(--chorale-accent, #4a90e2); outline-offset: -2px; \
                             pointer-events: none; z-index: 3;",
                 }
             }
@@ -1996,7 +2012,7 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
             if let Some(badge) = sort_badge {
                 sup {
                     class: "chorale-sort-badge",
-                    style: "font-size: 0.65em; margin-left: 2px; color: #4a90e2; \
+                    style: "font-size: 0.65em; margin-left: 2px; color: var(--chorale-accent, #4a90e2); \
                             font-weight: 700; vertical-align: super;",
                     "{badge}"
                 }
@@ -2032,9 +2048,9 @@ fn column_visibility_toolbar<TRow: Clone + PartialEq + 'static>(
     let col_vis_label = labels.column_visibility_label.clone();
     rsx! {
         div {
-            style: "padding: 0.5rem 1rem; background: #f0f4ff; border-bottom: 1px solid #ddd; \
+            style: "padding: 0.5rem 1rem; background: var(--chorale-group-header-bg, #f0f4ff); border-bottom: 1px solid var(--chorale-border, #ddd); \
                     display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; \
-                    font-size: 0.8rem; color: #444;",
+                    font-size: 0.8rem; color: var(--chorale-text, #444);",
             span { style: "font-weight: 600;", "{col_vis_label}" }
             for (col_id, header) in all_cols {
                 {column_vis_checkbox(*col_id, header, visibility.get(col_id).copied().unwrap_or(true), handle)}
@@ -2079,10 +2095,10 @@ fn filter_th<TRow: Clone + PartialEq + 'static>(
     let all_label = labels.page_size_all_label.clone();
 
     let th_style = format!(
-        "padding: 0.25rem 0.5rem; border-bottom: 1px solid #eee; background: #fff; {w} {sticky_css}"
+        "padding: 0.25rem 0.5rem; border-bottom: 1px solid var(--chorale-divider, #eee); background: var(--chorale-surface, #fff); {w} {sticky_css}"
     );
     let empty_th_style = format!(
-        "padding: 0.25rem; border-bottom: 1px solid #eee; background: #fff; {w} {sticky_css}"
+        "padding: 0.25rem; border-bottom: 1px solid var(--chorale-divider, #eee); background: var(--chorale-surface, #fff); {w} {sticky_css}"
     );
 
     match &col.filter {
@@ -2102,7 +2118,7 @@ fn filter_th<TRow: Clone + PartialEq + 'static>(
                             placeholder: "{filter_placeholder}",
                             value: "{text}",
                             style: "flex: 1; min-width: 0; box-sizing: border-box; \
-                                    padding: 2px 4px; border: 1px solid #ccc; \
+                                    padding: 2px 4px; border: 1px solid var(--chorale-input-border, #ccc); \
                                     border-radius: 2px; font-size: 0.8rem;",
                             oninput: move |e| {
                                 let v = e.value();
@@ -2229,7 +2245,7 @@ fn clear_filter_button<TRow: Clone + PartialEq + 'static>(
             r#type: "button",
             title: "{clear_label}",
             style: "border: 0; background: transparent; padding: 0 4px; \
-                    cursor: pointer; color: #888; font-size: 0.95rem; \
+                    cursor: pointer; color: var(--chorale-text-subtle, #888); font-size: 0.95rem; \
                     line-height: 1; flex-shrink: 0;",
             onclick: move |e| {
                 e.stop_propagation();
@@ -2288,15 +2304,15 @@ fn MultiSelectFilter<TRow: Clone + PartialEq + 'static>(
             "data-chorale-dropdown": "true",
             style: "position: relative; font-size: 0.8rem;",
             summary {
-                style: "cursor: pointer; padding: 2px 4px; border: 1px solid #ccc; \
-                        border-radius: 2px; background: #fff; list-style: none;",
+                style: "cursor: pointer; padding: 2px 4px; border: 1px solid var(--chorale-input-border, #ccc); \
+                        border-radius: 2px; background: var(--chorale-popover-bg, #fff); list-style: none;",
                 "{summary_label} \u{25be}"
             }
             div {
                 style: "position: absolute; left: 0; top: 100%; z-index: 10; \
-                        background: #fff; border: 1px solid #ccc; border-radius: 2px; \
+                        background: var(--chorale-input-bg, #fff); border: 1px solid var(--chorale-input-border, #ccc); border-radius: 2px; \
                         padding: 4px 6px; min-width: 100%; white-space: nowrap; \
-                        box-shadow: 0 2px 6px rgba(0,0,0,0.08); max-height: 240px; \
+                        box-shadow: var(--chorale-popover-shadow, 0 2px 6px rgba(0,0,0,0.08)); max-height: 240px; \
                         overflow-y: auto;",
                 for opt in options.iter() {
                     {multi_select_option(col_id, opt.clone(), selected.clone(), handle)}
@@ -2362,7 +2378,7 @@ fn NumericRangeFilter<TRow: Clone + PartialEq + 'static>(
         div {
             style: "display: flex; flex-direction: column; gap: 2px; font-size: 0.75rem;",
             div {
-                style: "display: flex; justify-content: space-between; color: #555;",
+                style: "display: flex; justify-content: space-between; color: var(--chorale-text-muted, #555);",
                 span { "{min_display}" }
                 span { "{max_display}" }
             }
@@ -2470,7 +2486,7 @@ fn DateRangeFilter<TRow: Clone + PartialEq + 'static>(
             input {
                 r#type: "date",
                 value: "{min_str}",
-                style: "flex: 1; min-width: 0; padding: 1px 2px; border: 1px solid #ccc; \
+                style: "flex: 1; min-width: 0; padding: 1px 2px; border: 1px solid var(--chorale-input-border, #ccc); \
                         border-radius: 2px; font-size: 0.75rem;",
                 // onchange (NOT oninput): the native date picker fires an
                 // input event for every intermediate value while the user
@@ -2486,7 +2502,7 @@ fn DateRangeFilter<TRow: Clone + PartialEq + 'static>(
             input {
                 r#type: "date",
                 value: "{max_str}",
-                style: "flex: 1; min-width: 0; padding: 1px 2px; border: 1px solid #ccc; \
+                style: "flex: 1; min-width: 0; padding: 1px 2px; border: 1px solid var(--chorale-input-border, #ccc); \
                         border-radius: 2px; font-size: 0.75rem;",
                 // See the min input above — change-only commit, per leptos.
                 onchange: move |e| {
@@ -2543,7 +2559,7 @@ fn BooleanFilter<TRow: Clone + PartialEq + 'static>(
         select {
             value: "{selected_value}",
             style: "width: 100%; box-sizing: border-box; padding: 2px 4px; \
-                    border: 1px solid #ccc; border-radius: 2px; font-size: 0.8rem; background: #fff;",
+                    border: 1px solid var(--chorale-input-border, #ccc); border-radius: 2px; font-size: 0.8rem; background: var(--chorale-input-bg, #fff);",
             onchange: move |e| {
                 match e.value().as_str() {
                     "yes" => { handle.set_filter(col_id, Some(FilterValue::Boolean(true))); }
@@ -2567,11 +2583,11 @@ fn select_all_th<TRow: Clone + PartialEq + 'static>(
     // comment about Dioxus 0.7's unreliable inline-style diff when a
     // declaration disappears entirely.
     let style = if sticky_header {
-        "padding: 0.25rem 0.5rem; border-bottom: 1px solid #ddd; position: sticky; \
-         top: 0; background: #f8f9fa; z-index: 1; width: 2.5rem; text-align: center;"
+        "padding: 0.25rem 0.5rem; border-bottom: 1px solid var(--chorale-border, #ddd); position: sticky; \
+         top: 0; background: var(--chorale-header-bg, #f8f9fa); z-index: 1; width: 2.5rem; text-align: center;"
     } else {
-        "padding: 0.25rem 0.5rem; border-bottom: 1px solid #ddd; position: static; \
-         top: auto; z-index: auto; background: #f8f9fa; width: 2.5rem; text-align: center;"
+        "padding: 0.25rem 0.5rem; border-bottom: 1px solid var(--chorale-border, #ddd); position: static; \
+         top: auto; z-index: auto; background: var(--chorale-header-bg, #f8f9fa); width: 2.5rem; text-align: center;"
     };
     rsx! {
         th {
@@ -2644,13 +2660,19 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
     // Note the explicit `background: transparent` on the deselected branch
     // rather than an empty string. Dioxus's attribute diff does not reliably
     // clear a previously-set inline style when the new value is `""`; the
-    // tr keeps its old `background: #eff6ff` and the row stays blue after
+    // tr keeps its old `background: var(--chorale-row-selected-bg, #eff6ff)` and the row stays blue after
     // the checkbox toggles off. Always emitting a concrete background
     // value forces the override.
     let (row_bg, separator_color) = if is_selected && selection_enabled {
-        ("background: #eff6ff;", "#dbeafe")
+        (
+            "background: var(--chorale-row-selected-bg, #eff6ff);",
+            "var(--chorale-row-selected-divider, #dbeafe)",
+        )
     } else {
-        ("background: transparent;", "#f0f0f0")
+        (
+            "background: transparent;",
+            "var(--chorale-button-disabled-bg, #f0f0f0)",
+        )
     };
     let row_style = format!("{row_bg}--chorale-separator-color: {separator_color};");
     rsx! {
@@ -2825,7 +2847,7 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
     rsx! {
         tr {
             class: "{extra_class}",
-            style: "background: #f0f4ff; font-weight: 600; cursor: pointer;",
+            style: "background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;",
             onclick: move |_| { handle.toggle_group(key.clone()); },
             if selection_enabled {
                 td { style: "padding: 0.25rem 0.5rem; width: 2.5rem;" }
@@ -2833,15 +2855,15 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
             td {
                 colspan: "{col_count - usize::from(selection_enabled)}",
                 style: "padding: 0.4rem 1rem 0.4rem {indent}px; \
-                        border-bottom: 1px solid #dce4ff; font-size: 0.875rem;",
+                        border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem;",
                 span {
-                    style: "margin-right: 0.5rem; font-size: 0.75rem; color: #4a90e2;",
+                    style: "margin-right: 0.5rem; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2);",
                     "{toggle_icon}"
                 }
                 "{label}"
                 span {
                     style: "margin-left: 0.5rem; font-size: 0.75rem; font-weight: 400; \
-                            color: #888;",
+                            color: var(--chorale-text-subtle, #888);",
                     "({row_count})"
                 }
             }
@@ -2945,7 +2967,7 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
     let editor_style = format!(
         "width: 100%; box-sizing: border-box; font: inherit; text-align: {align}; \
          padding: calc(0.25rem - 1px) calc(0.5rem - 1px); \
-         border: 1px solid #4a90e2; border-radius: 2px;"
+         border: 1px solid var(--chorale-accent, #4a90e2); border-radius: 2px;"
     );
 
     // Select editor: a native <select> constrained to the column's options.
@@ -3220,7 +3242,7 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
             {editor_el}
             if let Some(err) = err_val {
                 div {
-                    style: "color: #c0392b; font-size: 0.75rem; margin-top: 2px;",
+                    style: "color: var(--chorale-error, #c0392b); font-size: 0.75rem; margin-top: 2px;",
                     "{err}"
                 }
             }
@@ -3321,7 +3343,7 @@ fn data_td<TRow: Clone + PartialEq + 'static>(
             if is_in_range {
                 div {
                     style: "position: absolute; inset: 0; \
-                            background: rgba(0, 120, 212, 0.1); \
+                            background: var(--chorale-range-bg, rgba(0, 120, 212, 0.1)); \
                             pointer-events: none; z-index: 1;",
                 }
             }
@@ -3396,11 +3418,26 @@ fn badge_span(text: &str, map: &BadgeVariantMap) -> Element {
 
 fn badge_style(color: &str) -> String {
     let (bg, fg) = match color {
-        "green" => ("#d1fae5", "#065f46"),
-        "yellow" => ("#fef3c7", "#92400e"),
-        "red" => ("#fee2e2", "#991b1b"),
-        "gray" => ("#f3f4f6", "#374151"),
-        _ => ("#e5e7eb", "#1f2937"),
+        "green" => (
+            "var(--chorale-badge-green-bg, #d1fae5)",
+            "var(--chorale-badge-green-text, #065f46)",
+        ),
+        "yellow" => (
+            "var(--chorale-badge-yellow-bg, #fef3c7)",
+            "var(--chorale-badge-yellow-text, #92400e)",
+        ),
+        "red" => (
+            "var(--chorale-badge-red-bg, #fee2e2)",
+            "var(--chorale-badge-red-text, #991b1b)",
+        ),
+        "gray" => (
+            "var(--chorale-badge-gray-bg, #f3f4f6)",
+            "var(--chorale-badge-gray-text, #374151)",
+        ),
+        _ => (
+            "var(--chorale-badge-default-bg, #e5e7eb)",
+            "var(--chorale-badge-default-text, #1f2937)",
+        ),
     };
     format!(
         "display:inline-block;padding:0.125rem 0.5rem;border-radius:9999px;\
@@ -3531,14 +3568,14 @@ fn GotoPageInput<TRow: Clone + PartialEq + 'static>(
     rsx! {
         span {
             style: "display: inline-flex; align-items: center; gap: 0.25rem; \
-                    color: #555; font-size: 0.875rem;",
+                    color: var(--chorale-text-muted, #555); font-size: 0.875rem;",
             "{labels.go_to_page_label}"
             input {
                 r#type: "number",
                 min: "1",
                 max: "{max_page}",
                 value: "{draft.read()}",
-                style: "width: 4.5em; padding: 2px 4px; border: 1px solid #ccc; \
+                style: "width: 4.5em; padding: 2px 4px; border: 1px solid var(--chorale-input-border, #ccc); \
                         border-radius: 2px; font-size: 0.875rem; text-align: center;",
                 oninput: move |e| draft.set(e.value()),
                 onchange: move |e| {
@@ -3564,18 +3601,18 @@ fn render_page_btn<TRow: Clone + PartialEq + 'static>(
     let Some(p) = item else {
         return rsx! {
             span {
-                style: "padding: 0 0.25rem; color: #aaa; font-size: 0.875rem;",
+                style: "padding: 0 0.25rem; color: var(--chorale-text-disabled, #aaa); font-size: 0.875rem;",
                 "\u{2026}"
             }
         };
     };
     let is_active = p == current_idx;
     let style = if is_active {
-        "padding:0.25rem 0.5rem;border:1px solid #4a90e2;background:#4a90e2;\
-         color:white;border-radius:3px;cursor:default;font-size:0.875rem;"
+        "padding:0.25rem 0.5rem;border:1px solid var(--chorale-accent, #4a90e2);background:var(--chorale-accent, #4a90e2);\
+         color:var(--chorale-accent-contrast, white);border-radius:3px;cursor:default;font-size:0.875rem;"
     } else {
-        "padding:0.25rem 0.5rem;border:1px solid #ddd;background:white;\
-         color:#333;border-radius:3px;cursor:pointer;font-size:0.875rem;"
+        "padding:0.25rem 0.5rem;border:1px solid var(--chorale-border, #ddd);background:var(--chorale-button-bg, white);\
+         color:var(--chorale-text, #333);border-radius:3px;cursor:pointer;font-size:0.875rem;"
     };
     rsx! {
         button {
@@ -4172,11 +4209,11 @@ mod tests {
     fn badge_style_unknown_color_falls_back_to_default() {
         let s = super::badge_style("hotpink");
         assert!(
-            s.contains("#e5e7eb"),
+            s.contains("var(--chorale-badge-default-bg, #e5e7eb)"),
             "unknown color should use fallback bg"
         );
         assert!(
-            s.contains("#1f2937"),
+            s.contains("var(--chorale-badge-default-text, #1f2937)"),
             "unknown color should use fallback fg"
         );
     }

@@ -9,7 +9,7 @@
 use chorale_core::{
     AggregatorKind, Alignment, BadgeVariant, BadgeVariantMap, CellValue, ColumnDef, ColumnId,
     CommittedEdit, CurrencyCode, EditorKind, FilterKind, FrozenSide, GroupedPaginationMode, Labels,
-    PaginationMode, RenderKind, RowId, TableState,
+    PaginationMode, RenderKind, RowId, TableState, Theme,
 };
 use chorale_derive::TableRow;
 use chorale_dioxus::{
@@ -412,6 +412,7 @@ fn App() -> Element {
     let mut use_derive_on = use_signal(|| false);
     let mut row_renderers_on = use_signal(|| false);
     let mut row_click_on = use_signal(|| false);
+    let mut dark_mode_on = use_signal(|| false);
     let mut last_clicked: Signal<Option<String>> = use_signal(|| None);
 
     // ── Cell renderers (re-built when variable_height_on changes) ────────────
@@ -595,6 +596,14 @@ fn App() -> Element {
                 style: "display:flex; gap:1rem; flex-wrap:wrap; margin-bottom:0.5rem; \
                         padding:0.75rem; background:#f5f5f5; border-radius:4px;",
 
+                label {
+                    input {
+                        r#type: "checkbox",
+                        checked: *dark_mode_on.read(),
+                        onchange: move |_| { let v = *dark_mode_on.read(); dark_mode_on.set(!v); },
+                    }
+                    " Dark mode"
+                }
                 label {
                     input {
                         r#type: "checkbox",
@@ -848,6 +857,7 @@ fn App() -> Element {
 
             Table {
                 handle: table,
+                theme: if *dark_mode_on.read() { Theme::Dark } else { Theme::Light },
                 sort_enabled: *sort_on.read(),
                 filter_enabled: *filter_on.read(),
                 selection_enabled: *selection_on.read(),
