@@ -152,32 +152,6 @@ impl PartialEq for ValidateEditFn {
 // ExportXlsxButton
 // ---------------------------------------------------------------------------
 
-/// Base64-encode raw bytes using the standard alphabet (A-Za-z0-9+/).
-#[cfg(all(feature = "xlsx", target_arch = "wasm32"))]
-fn to_base64(bytes: &[u8]) -> String {
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b0 = u32::from(chunk[0]);
-        let b1 = chunk.get(1).copied().map_or(0, u32::from);
-        let b2 = chunk.get(2).copied().map_or(0, u32::from);
-        let n = (b0 << 16) | (b1 << 8) | b2;
-        out.push(char::from(CHARS[((n >> 18) & 0x3F) as usize]));
-        out.push(char::from(CHARS[((n >> 12) & 0x3F) as usize]));
-        out.push(if chunk.len() > 1 {
-            char::from(CHARS[((n >> 6) & 0x3F) as usize])
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            char::from(CHARS[(n & 0x3F) as usize])
-        } else {
-            '='
-        });
-    }
-    out
-}
-
 /// Button that exports the current filtered+sorted view as an XLSX file.
 ///
 /// Requires the `xlsx` feature on both `chorale-leptos` and `chorale-core`,
@@ -205,24 +179,13 @@ pub fn ExportXlsxButton<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 #[cfg(target_arch = "wasm32")]
                 {
                     use chorale_core::{XlsxOptions, to_xlsx};
-                    use wasm_bindgen::JsCast as _;
                     let state = handle.signal.get_untracked();
                     let mut opts = XlsxOptions::default();
                     opts.sheet_name.clone_from(&sheet_name);
                     let Ok(bytes) = to_xlsx(&state, &opts) else { return };
-                    let b64 = to_base64(&bytes);
-                    let href = format!(
-                        "data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}"
-                    );
-                    let Some(window) = web_sys::window() else { return };
-                    let Some(document) = window.document() else { return };
-                    let Ok(el) = document.create_element("a") else { return };
-                    let Ok(a) = el.dyn_into::<web_sys::HtmlAnchorElement>() else { return };
-                    a.set_href(&href);
-                    a.set_download(&filename);
-                    let _ = document.body().map(|b| b.append_child(&a));
-                    a.click();
-                    let _ = document.body().map(|b| b.remove_child(&a));
+                    // Blob + object URL (NOT a data: URL) so repeated exports
+                    // auto-increment the filename like the Dioxus adapter.
+                    trigger_xlsx_download(&bytes, &filename);
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 let _ = (&handle, &sheet_name, &filename);
@@ -327,6 +290,94 @@ fn compute_window_slice<TRow: Clone>(
     let win_end = win.end_index.min(total.saturating_sub(1));
     let slice = view[win.start_index..=win_end].to_vec();
     (win, slice)
+}
+
+/// After a keyboard move changes the active cell, scroll the virtualized
+/// container so the active row stays inside the viewport (arrow keys,
+/// `PageUp`/`PageDown`, `Home`/`End` would otherwise walk the active cell
+/// off-screen).
+///
+/// Row geometry comes from state, not the DOM — the target row may not be
+/// rendered yet under virtualization (e.g. a `PageDown` jump past the
+/// rendered window). Uniform mode uses `index * row_height`; variable mode (VIRT-2)
+/// prefix-sums `state.row_heights` with `state.row_height` as the fallback
+/// for unmeasured rows — the same math as `visible_window_variable`.
+///
+/// Writes the clamped offset to BOTH `TableState::scroll_top` (via
+/// `handle.set_scroll`, so the virtualization window recomputes immediately)
+/// and the DOM container's `scrollTop` (so the browser viewport follows).
+#[cfg(target_arch = "wasm32")]
+fn scroll_active_cell_into_view<TRow: Clone + PartialEq + Send + Sync + 'static>(
+    handle: &UseTableHandle<TRow>,
+    scroll_ref: NodeRef<html::Div>,
+    variable_row_height: bool,
+) {
+    let Some(container) = scroll_ref.get_untracked() else {
+        return;
+    };
+    let Some((row_top, row_h, cur_scroll, viewport_h)) = handle.signal.with_untracked(|s| {
+        let ac = s.active_cell?;
+        let idx = ac.row_idx;
+        let default_h = s.row_height;
+        let (top, h) = if variable_row_height {
+            let top: f64 = (0..idx)
+                .map(|i| s.row_heights.get(&i).copied().unwrap_or(default_h))
+                .sum();
+            let h = s.row_heights.get(&idx).copied().unwrap_or(default_h);
+            (top, h)
+        } else {
+            #[allow(clippy::cast_precision_loss)]
+            let top = idx as f64 * default_h;
+            (top, default_h)
+        };
+        Some((top, h, s.scroll_top, s.viewport_height))
+    }) else {
+        return;
+    };
+    if viewport_h <= 0.0 || row_h <= 0.0 {
+        return;
+    }
+    // The sticky <thead> scrolls inside the container and permanently covers
+    // its top band, so the usable row viewport is `viewport_h - header_h`.
+    // Row content offsets are shifted down by the same `header_h`, which
+    // cancels out in the scroll-up branch (row_top alignment lands the row
+    // exactly below the sticky header) but adds to the scroll-down branch
+    // (the row bottom must clear both the container bottom edge and the
+    // header-shifted content origin).
+    let header_h = container
+        .query_selector(":scope > table > thead")
+        .ok()
+        .flatten()
+        .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+        .map_or(0.0, |el| f64::from(el.offset_height()));
+    let mut new_scroll = cur_scroll;
+    if row_top < cur_scroll {
+        // Active row is above the viewport: align its top to the top of the
+        // visible row band (just below the sticky header).
+        new_scroll = row_top;
+    } else if row_top + row_h + header_h > cur_scroll + viewport_h {
+        // Active row is below the viewport: align its bottom to the
+        // container's bottom edge.
+        new_scroll = row_top + row_h + header_h - viewport_h;
+    }
+    new_scroll = new_scroll.max(0.0);
+    if (new_scroll - cur_scroll).abs() < f64::EPSILON {
+        return;
+    }
+    handle.set_scroll(new_scroll);
+    #[allow(clippy::cast_possible_truncation)]
+    container.set_scroll_top(new_scroll.round() as i32);
+}
+
+/// Host (non-wasm) no-op: there is no DOM scroll container to adjust. Keeps
+/// the keydown handler's call sites un-cfg'd so the host build type-checks
+/// the same code path.
+#[cfg(not(target_arch = "wasm32"))]
+fn scroll_active_cell_into_view<TRow: Clone + PartialEq + Send + Sync + 'static>(
+    _handle: &UseTableHandle<TRow>,
+    _scroll_ref: NodeRef<html::Div>,
+    _variable_row_height: bool,
+) {
 }
 
 // ---------------------------------------------------------------------------
@@ -1260,8 +1311,12 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
     let row_clone = row.clone();
 
     // Active cell outline and range background (placed after sticky_css to override frozen bg).
+    // The active cell gets the same light-blue fill as range cells in addition
+    // to the outline — mirrors the Dioxus adapter, where the range overlay
+    // (rgba(0,120,212,0.1)) renders under the active-cell outline overlay.
     let active_css = if is_active_cell {
-        "outline:2px solid var(--chorale-active-cell-outline,#0078d4);outline-offset:-2px;"
+        "outline:2px solid var(--chorale-active-cell-outline,#0078d4);outline-offset:-2px;\
+         background:rgba(0,120,212,0.1);"
     } else {
         ""
     };
@@ -1881,41 +1936,66 @@ fn build_sticky_css<TRow: Clone>(
 // CSV download helper (WASM only)
 // ---------------------------------------------------------------------------
 
+/// Object-URL + anchor-click download, shared by the CSV and XLSX export
+/// paths. Mirrors the Dioxus adapter's eval script exactly:
+/// `URL.createObjectURL` → `<a download>` appended to `<body>` → `click()` →
+/// remove → `URL.revokeObjectURL`.
+///
+/// Runs SYNCHRONOUSLY inside the click handler — the transient user
+/// activation from the click must still be live when `a.click()` fires, or
+/// the browser downgrades the download (e.g. forces a save-as / overwrite
+/// prompt instead of silently auto-incrementing the filename). This is why
+/// the old `spawn_local`-wrapped CSV path produced overwrite prompts while
+/// the Dioxus adapter auto-incremented ("export (4).csv").
 #[cfg(target_arch = "wasm32")]
-fn trigger_csv_download(csv: String) {
-    use js_sys;
-    use wasm_bindgen::JsCast;
-    leptos::task::spawn_local(async move {
-        let array = js_sys::Array::new();
-        array.push(&wasm_bindgen::JsValue::from_str(&csv));
-        let options = web_sys::BlobPropertyBag::new();
-        options.set_type("text/csv;charset=utf-8;");
-        let blob = web_sys::Blob::new_with_str_sequence_and_options(&array, &options);
-        if let Ok(blob) = blob {
-            if let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) {
-                if let Some(window) = web_sys::window() {
-                    if let Some(doc) = window.document() {
-                        let anchor = doc.create_element("a");
-                        if let Ok(anchor) = anchor {
-                            let anchor: web_sys::HtmlAnchorElement = anchor.unchecked_into();
-                            anchor.set_href(&url);
-                            anchor.set_download("chorale-export.csv");
-                            if let Some(body) = doc.body() {
-                                body.append_child(&anchor).ok();
-                                anchor.click();
-                                body.remove_child(&anchor).ok();
-                            }
-                            web_sys::Url::revoke_object_url(&url).ok();
-                        }
-                    }
-                }
-            }
+fn trigger_blob_download(blob: &web_sys::Blob, filename: &str) {
+    let Ok(url) = web_sys::Url::create_object_url_with_blob(blob) else {
+        return;
+    };
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    if let Ok(anchor) = doc.create_element("a") {
+        let anchor: web_sys::HtmlAnchorElement = anchor.unchecked_into();
+        anchor.set_href(&url);
+        anchor.set_download(filename);
+        if let Some(body) = doc.body() {
+            body.append_child(&anchor).ok();
+            anchor.click();
+            body.remove_child(&anchor).ok();
         }
-    });
+    }
+    web_sys::Url::revoke_object_url(&url).ok();
+}
+
+#[cfg(target_arch = "wasm32")]
+fn trigger_csv_download(csv: &str) {
+    let array = js_sys::Array::new();
+    array.push(&wasm_bindgen::JsValue::from_str(csv));
+    let options = web_sys::BlobPropertyBag::new();
+    options.set_type("text/csv;charset=utf-8;");
+    if let Ok(blob) = web_sys::Blob::new_with_str_sequence_and_options(&array, &options) {
+        trigger_blob_download(&blob, "chorale-export.csv");
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn trigger_csv_download(_csv: String) {}
+fn trigger_csv_download(_csv: &str) {}
+
+/// Build a Blob from raw bytes and trigger a download. Used by the XLSX
+/// export paths; matches the Dioxus adapter's `Uint8Array` → Blob →
+/// object-URL mechanism (a `data:` URL here previously caused the browser to
+/// reuse the filename with an overwrite prompt instead of auto-incrementing).
+#[cfg(all(feature = "xlsx", target_arch = "wasm32"))]
+fn trigger_xlsx_download(bytes: &[u8], filename: &str) {
+    let parts = js_sys::Array::new();
+    parts.push(&js_sys::Uint8Array::from(bytes));
+    let options = web_sys::BlobPropertyBag::new();
+    options.set_type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    if let Ok(blob) = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &options) {
+        trigger_blob_download(&blob, filename);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // The main Table component
@@ -2506,9 +2586,15 @@ where
                         } else if ctrl {
                             let new_s = handle.signal.with_untracked(|s| move_active_cell_to_edge(s, dir));
                             handle.signal.set(new_s);
+                            if !inline {
+                                scroll_active_cell_into_view(&handle, scroll_ref, variable_row_height);
+                            }
                         } else {
                             let new_s = handle.signal.with_untracked(|s| move_active_cell(s, dir));
                             handle.signal.set(new_s);
+                            if !inline {
+                                scroll_active_cell_into_view(&handle, scroll_ref, variable_row_height);
+                            }
                         }
                     }
                     "Home" => {
@@ -2519,6 +2605,9 @@ where
                             handle.signal.with_untracked(move_active_cell_home)
                         };
                         handle.signal.set(new_s);
+                        if !inline {
+                            scroll_active_cell_into_view(&handle, scroll_ref, variable_row_height);
+                        }
                     }
                     "End" => {
                         ev.prevent_default();
@@ -2528,18 +2617,27 @@ where
                             handle.signal.with_untracked(move_active_cell_end)
                         };
                         handle.signal.set(new_s);
+                        if !inline {
+                            scroll_active_cell_into_view(&handle, scroll_ref, variable_row_height);
+                        }
                     }
                     "PageUp" => {
                         ev.prevent_default();
                         let page_sz = handle.signal.with_untracked(|s| s.page_size);
                         let new_s = handle.signal.with_untracked(|s| move_active_cell_page(s, NavDirection::Up, page_sz));
                         handle.signal.set(new_s);
+                        if !inline {
+                            scroll_active_cell_into_view(&handle, scroll_ref, variable_row_height);
+                        }
                     }
                     "PageDown" => {
                         ev.prevent_default();
                         let page_sz = handle.signal.with_untracked(|s| s.page_size);
                         let new_s = handle.signal.with_untracked(|s| move_active_cell_page(s, NavDirection::Down, page_sz));
                         handle.signal.set(new_s);
+                        if !inline {
+                            scroll_active_cell_into_view(&handle, scroll_ref, variable_row_height);
+                        }
                     }
                     "Escape" => {
                         let new_s = handle.signal.with_untracked(|s| {
@@ -3319,7 +3417,7 @@ where
                                                background:white;color:#4a90e2;"
                                         on:click=move |_| {
                                             let csv = sig.with_untracked(|s| to_csv(s));
-                                            trigger_csv_download(csv);
+                                            trigger_csv_download(&csv);
                                         }
                                     >
                                         {lbl_csv}
@@ -3487,7 +3585,7 @@ where
                                        background:white;color:#4a90e2;"
                                 on:click=move |_| {
                                     let csv = sig.with_untracked(|s| to_csv(s));
-                                    trigger_csv_download(csv);
+                                    trigger_csv_download(&csv);
                                 }
                             >
                                 {lbl_csv}
@@ -3510,23 +3608,12 @@ where
                                         #[cfg(target_arch = "wasm32")]
                                         {
                                             use chorale_core::{XlsxOptions, to_xlsx};
-                                            use wasm_bindgen::JsCast as _;
                                             let state = sig.get_untracked();
                                             let Ok(bytes) = to_xlsx(&state, &XlsxOptions::default()) else { return };
-                                            let b64 = to_base64(&bytes);
-                                            let href = format!(
-                                                "data:application/vnd.openxmlformats-officedocument.\
-                                                 spreadsheetml.sheet;base64,{b64}"
-                                            );
-                                            let Some(window) = web_sys::window() else { return };
-                                            let Some(document) = window.document() else { return };
-                                            let Ok(el) = document.create_element("a") else { return };
-                                            let Ok(a) = el.dyn_into::<web_sys::HtmlAnchorElement>() else { return };
-                                            a.set_href(&href);
-                                            a.set_download("export.xlsx");
-                                            let _ = document.body().map(|b| b.append_child(&a));
-                                            a.click();
-                                            let _ = document.body().map(|b| b.remove_child(&a));
+                                            // Blob + object URL (NOT a data: URL) so
+                                            // repeated exports auto-increment the
+                                            // filename like the Dioxus adapter.
+                                            trigger_xlsx_download(&bytes, "export.xlsx");
                                         }
                                     }
                                 >

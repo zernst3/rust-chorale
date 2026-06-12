@@ -451,7 +451,7 @@ fn App() -> Element {
             // Extract Employee values from the Arc<Vec<(RowId, Employee)>> so
             // chorale_columns_with_rows can fold real min/max salary bounds and
             // build distinct MultiSelect options for role and status.
-            let rows_arc = table.signal().read().rows.clone();
+            let rows_arc = table.signal().peek().rows.clone();
             let employees: Vec<Employee> = rows_arc.iter().map(|(_, e)| e.clone()).collect();
             Employee::chorale_columns_with_rows(&employees)
         } else {
@@ -530,37 +530,38 @@ fn App() -> Element {
         Some(rsx! {
             div {
                 style: "display: flex; align-items: center; gap: 1rem; \
-                        padding: 0.75rem 1rem; background: #1d4ed8; color: white; \
-                        font-size: 0.875rem; font-weight: 600; width: 100%; \
+                        padding: 0.75rem 1rem; background: #eff6ff; \
+                        border: 1px solid #bfdbfe; \
+                        color: #1e3a8a; font-size: 0.875rem; font-weight: 600; width: 100%; \
                         box-sizing: border-box; flex-wrap: wrap;",
                 span { "{count} row(s) selected" }
                 div { class: "chorale-bulk-actions",
                     style: "display: flex; gap: 8px;",
                     button {
                         onclick: move |_| table.select_all_visible_page(),
-                        style: "padding: 0.25rem 0.75rem; background: rgba(255,255,255,0.2); \
-                                color: white; border: 1px solid rgba(255,255,255,0.4); \
+                        style: "padding: 0.25rem 0.75rem; background: #dbeafe; \
+                                color: #1e3a8a; border: 1px solid #93c5fd; \
                                 border-radius: 3px; cursor: pointer; font-size: 0.8rem;",
                         "Select page"
                     }
                     button {
                         onclick: move |_| table.select_all_filtered(),
-                        style: "padding: 0.25rem 0.75rem; background: rgba(255,255,255,0.2); \
-                                color: white; border: 1px solid rgba(255,255,255,0.4); \
+                        style: "padding: 0.25rem 0.75rem; background: #dbeafe; \
+                                color: #1e3a8a; border: 1px solid #93c5fd; \
                                 border-radius: 3px; cursor: pointer; font-size: 0.8rem;",
                         "Select all"
                     }
                     button {
                         onclick: move |_| table.deselect_all_visible_page(),
-                        style: "padding: 0.25rem 0.75rem; background: rgba(255,255,255,0.2); \
-                                color: white; border: 1px solid rgba(255,255,255,0.4); \
+                        style: "padding: 0.25rem 0.75rem; background: #dbeafe; \
+                                color: #1e3a8a; border: 1px solid #93c5fd; \
                                 border-radius: 3px; cursor: pointer; font-size: 0.8rem;",
                         "Deselect page"
                     }
                     button {
                         onclick: move |_| table.deselect_all(),
-                        style: "padding: 0.25rem 0.75rem; background: rgba(255,255,255,0.2); \
-                                color: white; border: 1px solid rgba(255,255,255,0.4); \
+                        style: "padding: 0.25rem 0.75rem; background: #dbeafe; \
+                                color: #1e3a8a; border: 1px solid #93c5fd; \
                                 border-radius: 3px; cursor: pointer; font-size: 0.8rem;",
                         "Deselect all"
                     }
@@ -600,7 +601,7 @@ fn App() -> Element {
                         checked: *sort_on.read(),
                         onchange: move |_| { let v = *sort_on.read(); sort_on.set(!v); },
                     }
-                    " Sort"
+                    " Sort (multi-sort in v0.2.0)"
                 }
                 label {
                     input {
