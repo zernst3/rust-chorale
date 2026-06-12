@@ -528,6 +528,7 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     // Unconditional use_effect (Dioxus hook ordering rules); no-op when no edit target.
     {
         let edit_target_memo = use_memo(move || sig.read().editing);
+        let kb_id_editor_focus = kb_id.clone();
         use_effect(move || {
             let target = *edit_target_memo.read();
             if let Some(target) = target {
@@ -546,6 +547,25 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
                     .unwrap_or_default();
                 editing_text.set(init_text);
                 edit_error.set(None);
+                // Auto-focus the freshly-mounted editor element (the
+                // `data-chorale-editor` attribute is set on both the text
+                // <input> and the <select> in editor_td). Load-bearing for
+                // two behaviors:
+                //   1. exit-on-blur — an unfocused element can never fire
+                //      onblur, so without this a <select> cell could not be
+                //      exited by clicking away / tabbing out;
+                //   2. keyboard operability — Enter/F2 on the active cell
+                //      must land keystrokes in the editor, not the grid.
+                // requestAnimationFrame defers one frame so the editor's DOM
+                // node exists even if this effect runs before the render
+                // patch that mounts it has been applied.
+                let id = kb_id_editor_focus.clone();
+                dioxus::document::eval(&format!(
+                    "requestAnimationFrame(()=>{{\
+                        var el=document.querySelector('#{id} [data-chorale-editor]');\
+                        if(el)el.focus();\
+                    }});"
+                ));
             }
         });
     }
@@ -1426,7 +1446,7 @@ dioxus.send(parts.join('\n'));"
                                         }
                                     }
                                     for (offset, grouped_row) in grouped_view_read[start_idx..end_idx].iter().cloned().enumerate() {
-                                        {render_grouped_row(grouped_row, start_idx + offset, effective_col_count, selection_enabled, has_detail, handle, &group_header_class, &visible_cols, row_height, &widths, variable_row_height, &cell_renderers, &row_cell_renderers, editing_target, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, &selection_set, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover, on_row_click)}
+                                        {render_grouped_row(grouped_row, start_idx + offset, effective_col_count, selection_enabled, has_detail, handle, &group_header_class, &visible_cols, row_height, &widths, variable_row_height, &cell_renderers, &row_cell_renderers, editing_target, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, &selection_set, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover, on_row_click, &kb_id)}
                                     }
                                     if bottom_pad_px > 0.0 {
                                         tr {
@@ -1466,7 +1486,7 @@ dioxus.send(parts.join('\n'));"
                                             let editing_col = editing_target
                                                 .filter(|t| t.row_id == row_id)
                                                 .map(|t| t.column_id);
-                                            data_tr(row, row_id, win.start_index + i, variable_row_height, &visible_cols, row_height, &widths, selection_enabled, selection_set.contains(&row_id), handle, &cell_renderers, &row_cell_renderers, editing_col, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover, has_detail, is_expanded, on_row_click)
+                                            data_tr(row, row_id, win.start_index + i, variable_row_height, &visible_cols, row_height, &widths, selection_enabled, selection_set.contains(&row_id), handle, &cell_renderers, &row_cell_renderers, editing_col, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover, has_detail, is_expanded, on_row_click, &kb_id)
                                         }
                                         RenderRow::DetailPanel { parent_row_id } => {
                                             let pid = *parent_row_id;
@@ -2459,6 +2479,9 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
     has_detail: bool,
     is_expanded: bool,
     on_row_click: Option<Callback<RowId>>,
+    // DOM id of the table's tabindex="0" keyboard container, threaded down to
+    // editor_td so editors can refocus it after a keyboard commit/cancel.
+    kb_id: &str,
 ) -> Element {
     // Row separator is rendered as a 1px inset box-shadow on each TD instead
     // of `border-bottom: 1px` on the TR. Reason: with `border-collapse: collapse`
@@ -2523,6 +2546,7 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
                         on_commit_edit,
                         handle,
                         sticky_css_map.get(&col.id).map_or("", String::as_str),
+                        kb_id,
                     )}
                 } else {
                     {
@@ -2568,6 +2592,9 @@ fn render_grouped_row<TRow: Clone + PartialEq + 'static>(
     fill_drag_active: Signal<bool>,
     fill_hover: Signal<Option<(usize, ColumnId)>>,
     on_row_click: Option<Callback<RowId>>,
+    // DOM id of the table's tabindex="0" keyboard container, threaded down to
+    // editor_td so editors can refocus it after a keyboard commit/cancel.
+    kb_id: &str,
 ) -> Element {
     match grouped_row {
         GroupedRow::Header {
@@ -2620,6 +2647,7 @@ fn render_grouped_row<TRow: Clone + PartialEq + 'static>(
                 has_detail,
                 false,
                 on_row_click,
+                kb_id,
             )
         }
         _ => rsx! {},
@@ -2673,6 +2701,20 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
     }
 }
 
+/// Return keyboard focus to the table's keyboard container (the
+/// `tabindex="0"` div that owns the grid-level keydown handler).
+///
+/// Editors call this after a keyboard-initiated commit/cancel: the editor
+/// element is about to unmount, and removing a focused element does NOT fire
+/// blur — the browser silently drops focus to `<body>`, so arrow keys would
+/// scroll the page instead of navigating cells. Deliberately NOT called from
+/// onblur — blur is an intentional click-away and must not steal focus back.
+fn refocus_keyboard_container(kb_id: &str) {
+    dioxus::document::eval(&format!(
+        "var el=document.getElementById('{kb_id}');if(el)el.focus();"
+    ));
+}
+
 #[allow(clippy::too_many_arguments, clippy::if_not_else)]
 fn editor_td<TRow: Clone + PartialEq + 'static>(
     row: &TRow,
@@ -2688,6 +2730,9 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
     on_commit_edit: Option<EventHandler<CommittedEdit<TRow>>>,
     handle: UseTableHandle<TRow>,
     sticky_css: &str,
+    // DOM id of the table's tabindex="0" keyboard container; editors refocus
+    // it after a keyboard commit/cancel so arrow-key navigation resumes.
+    kb_id: &str,
 ) -> Element {
     let col_id = col.id;
     let editor_kind = col.editor.clone().unwrap_or(EditorKind::Text);
@@ -2736,6 +2781,12 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
     let is_select = matches!(&editor_kind, EditorKind::Select { .. });
     let selected_val = text_val.clone();
 
+    // Owned copies of the keyboard-container id, one per closure that hands
+    // focus back to the grid after a keyboard-initiated commit/cancel.
+    let kb_for_select_change = kb_id.to_owned();
+    let kb_for_select_keys = kb_id.to_owned();
+    let kb_for_input_keys = kb_id.to_owned();
+
     // Editor visual parity with the display cell (data_td): the display td
     // pads 0.5rem 1rem and aligns text per column alignment. The editor td
     // pads 0.25rem 0.5rem, so the editor element's own padding tops it up to
@@ -2755,6 +2806,7 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
     let editor_el = if is_select {
         rsx! {
             select {
+                "data-chorale-editor": "true",
                 value: "{selected_val}",
                 style: "{editor_style}",
                 onchange: move |e| {
@@ -2778,11 +2830,33 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
                             let mut sig = handle.signal();
                             let new_state = commit_edit(&*sig.read());
                             sig.set(new_state);
+                            // Commit unmounts the <select>; hand focus back
+                            // to the grid container so a keyboard pick
+                            // (arrows / typing a letter) flows straight back
+                            // into cell navigation. Without this, focus
+                            // silently drops to <body> when the element is
+                            // removed, and arrow keys scroll the page.
+                            refocus_keyboard_container(&kb_for_select_change);
                         }
                         Err(msg) => edit_error.set(Some(msg)),
                     }
                 },
                 onblur: move |_| {
+                    // Guard: blur also fires when a keyboard commit/cancel
+                    // refocuses the grid container while the <select> is
+                    // still mounted. In that case `editing` no longer points
+                    // at this cell and the cleanup below must NOT run — it
+                    // would wipe the still-needed active_cell.
+                    {
+                        let sig_r = handle.signal();
+                        let still_editing = sig_r
+                            .peek()
+                            .editing
+                            .is_some_and(|t| t.row_id == row_id && t.column_id == col_id);
+                        if !still_editing {
+                            return;
+                        }
+                    }
                     // A native <select> fires NO change event when the user
                     // re-picks the already-selected option, so without a blur
                     // exit the cell would be stuck in edit mode. Any real pick
@@ -2802,10 +2876,45 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
                     sig.set(new_state);
                 },
                 onkeydown: move |e: KeyboardEvent| {
-                    if e.key() == Key::Escape {
-                        let mut sig = handle.signal();
-                        let new_state = cancel_edit(&*sig.read());
-                        sig.set(new_state);
+                    // While editing, no key may leak to the grid-level keydown
+                    // handler: it would prevent_default the arrow keys (which
+                    // must change the <select> value) and move the active
+                    // cell behind the editor's back.
+                    e.stop_propagation();
+                    match e.key() {
+                        Key::Escape => {
+                            let mut sig = handle.signal();
+                            let new_state = cancel_edit(&*sig.read());
+                            sig.set(new_state);
+                            refocus_keyboard_container(&kb_for_select_keys);
+                        }
+                        Key::Enter => {
+                            // A real pick has already committed via onchange;
+                            // Enter on the still-open editor (e.g. after
+                            // re-picking the same value, which fires no
+                            // change event) just closes it. commit_edit
+                            // clears `editing` but keeps `active_cell`, so
+                            // navigation resumes from this cell.
+                            let mut sig = handle.signal();
+                            let new_state = commit_edit(&*sig.read());
+                            sig.set(new_state);
+                            refocus_keyboard_container(&kb_for_select_keys);
+                        }
+                        Key::Tab => {
+                            // Mirror the text editor: Tab cycles the edit
+                            // cursor through the row's editable columns. The
+                            // next editor auto-focuses via the edit-target
+                            // effect, so no container refocus here.
+                            e.prevent_default();
+                            let mut sig = handle.signal();
+                            let new_state = if e.modifiers().contains(Modifiers::SHIFT) {
+                                prev_editable_cell(&*sig.read())
+                            } else {
+                                next_editable_cell(&*sig.read())
+                            };
+                            sig.set(new_state);
+                        }
+                        _ => {}
                     }
                 },
                 for opt in select_options.iter() {
@@ -2816,6 +2925,7 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
     } else {
         rsx! {
             input {
+                "data-chorale-editor": "true",
                 r#type: "{input_type}",
                 value: "{text_val}",
                 min: if !num_min.is_empty() { "{num_min}" },
@@ -2824,6 +2934,23 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
                 style: "{editor_style}",
                 oninput: move |e| editing_text.set(e.value()),
                 onblur: move |_| {
+                    // Guard: blur also fires when a keyboard commit/cancel
+                    // (Enter/Escape below) refocuses the grid container while
+                    // this <input> is still mounted, and when Tab has already
+                    // moved `editing` to another cell. In both cases the
+                    // commit below must NOT run again — it would fire a
+                    // duplicate on_commit_edit and wipe the still-needed
+                    // active_cell.
+                    {
+                        let sig_r = handle.signal();
+                        let still_editing = sig_r
+                            .peek()
+                            .editing
+                            .is_some_and(|t| t.row_id == row_id && t.column_id == col_id);
+                        if !still_editing {
+                            return;
+                        }
+                    }
                     let raw = editing_text.peek().clone();
                     let result = validate_blur.call(EditValidation {
                         row_id,
@@ -2868,15 +2995,17 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
                     // On validation error, leave editing open so user can fix.
                 },
                 onkeydown: move |e: KeyboardEvent| {
+                    // While editing, no key may leak to the grid-level keydown
+                    // handler. Two concrete failure modes without this:
+                    // Enter would hit the container's Enter-opens-editor arm
+                    // (commit_edit keeps `active_cell`, so it would re-open
+                    // the editor we just committed), and arrow keys would be
+                    // prevent_default-ed by the container's navigation arm
+                    // (freezing the caret) while moving the active cell
+                    // behind the editor's back.
+                    e.stop_propagation();
                     match e.key() {
                         Key::Enter => {
-                            // Don't let this Enter bubble to the grid-level
-                            // keydown handler: commit_edit clears `editing`
-                            // but keeps `active_cell`, so the container's
-                            // Enter-opens-editor arm would see a non-editing
-                            // state with an active cell and immediately
-                            // re-open the editor we just committed.
-                            e.stop_propagation();
                             let raw = editing_text.read().clone();
                             let result = validate.call(EditValidation {
                                 row_id,
@@ -2897,6 +3026,15 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
                                     let mut sig = handle.signal();
                                     let new_state = commit_edit(&*sig.read());
                                     sig.set(new_state);
+                                    // Successful keyboard commit: the input is
+                                    // about to unmount, which silently drops
+                                    // focus to <body>. Refocus the grid
+                                    // container so navigation resumes from the
+                                    // (still-set) active cell. Deliberately
+                                    // NOT done in onblur — blur is an
+                                    // intentional click-away and must not
+                                    // steal focus back.
+                                    refocus_keyboard_container(&kb_for_input_keys);
                                 }
                                 Err(msg) => edit_error.set(Some(msg)),
                             }
@@ -2905,8 +3043,13 @@ fn editor_td<TRow: Clone + PartialEq + 'static>(
                             let mut sig = handle.signal();
                             let new_state = cancel_edit(&*sig.read());
                             sig.set(new_state);
+                            // Same refocus rationale as the Enter arm above.
+                            refocus_keyboard_container(&kb_for_input_keys);
                         }
                         Key::Tab => {
+                            // Tab cycles `editing` to the adjacent editable
+                            // column; the next editor auto-focuses via the
+                            // edit-target effect, so no container refocus.
                             e.prevent_default();
                             let mut sig = handle.signal();
                             let new_state = if e.modifiers().contains(Modifiers::SHIFT) {
