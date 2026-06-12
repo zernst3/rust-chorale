@@ -3,19 +3,18 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-#[cfg(target_arch = "wasm32")]
-use chorale_core::theme_stylesheet;
 use chorale_core::{
     add_disjoint_range, cancel_edit, clear_active_cell, clear_range_selection, commit_edit,
     extend_range_to, fill_handle_targets, frozen_left_columns, frozen_right_columns,
     move_active_cell, move_active_cell_end, move_active_cell_first, move_active_cell_home,
     move_active_cell_last, move_active_cell_page, move_active_cell_to_edge, scrollable_columns,
-    select_all as select_all_range, start_range_selection, to_csv, visible_grouped_view,
-    visible_view, visible_window, visible_window_variable, ActiveCell, Alignment, CellValue,
-    ClipboardCopyEvent, ClipboardPasteEvent, ColumnDef, ColumnId, CommittedEdit, EditorKind,
-    FilterKind, FilterValue, GroupKey, GroupedPaginationMode, GroupedRow, Labels, NaiveDate,
-    NavDirection, PaginationMode, RangeSelection, RenderKind, RenderRow, RowId, SortAction,
-    SortDirection, SortState, TableState, Theme, VirtualWindow, THEME_ROOT_CLASS,
+    select_all as select_all_range, start_range_selection, theme_stylesheet, to_csv,
+    visible_grouped_view, visible_view, visible_window, visible_window_variable, ActiveCell,
+    Alignment, CellValue, ClipboardCopyEvent, ClipboardPasteEvent, ColumnDef, ColumnId,
+    CommittedEdit, EditorKind, FilterKind, FilterValue, GroupKey, GroupedPaginationMode,
+    GroupedRow, Labels, NaiveDate, NavDirection, PaginationMode, RangeSelection, RenderKind,
+    RenderRow, RowId, SortAction, SortDirection, SortState, TableState, Theme, VirtualWindow,
+    THEME_ROOT_CLASS,
 };
 #[cfg(target_arch = "wasm32")]
 use chorale_core::{batch_record_row_heights, paste_tsv_into_range, to_clipboard_tsv};
@@ -25,35 +24,6 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::hooks::UseTableHandle;
-
-/// Inject the built-in chorale theme stylesheet exactly once per document,
-/// keyed by the element id `chorale-theme-stylesheet`. The stylesheet ships
-/// both the light and dark `--chorale-*` token blocks, so switching themes at
-/// runtime is a pure `data-chorale-theme` attribute swap with no re-injection.
-///
-/// web-sys is a wasm32-only dependency, so this is a no-op on host builds.
-#[cfg(target_arch = "wasm32")]
-fn ensure_theme_stylesheet_injected() {
-    const STYLE_ID: &str = "chorale-theme-stylesheet";
-    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
-        return;
-    };
-    if doc.get_element_by_id(STYLE_ID).is_some() {
-        return;
-    }
-    let Ok(style) = doc.create_element("style") else {
-        return;
-    };
-    let _ = style.set_attribute("id", STYLE_ID);
-    style.set_text_content(Some(theme_stylesheet()));
-    if let Some(head) = doc.head() {
-        let _ = head.append_child(&style);
-    }
-}
-
-/// Host-build no-op: see the wasm32 variant above.
-#[cfg(not(target_arch = "wasm32"))]
-fn ensure_theme_stylesheet_injected() {}
 
 /// Type-erased cell renderer: maps a [`CellValue`] to a Leptos [`AnyView`].
 ///
@@ -2172,10 +2142,6 @@ pub fn Table<TRow>(
 where
     TRow: Clone + PartialEq + Send + Sync + 'static,
 {
-    // Inject the built-in light+dark token stylesheet once per document
-    // (idempotent by element id). wasm-only: web-sys is a wasm32 dependency.
-    ensure_theme_stylesheet_injected();
-
     let labels = Arc::new(labels.unwrap_or_default());
 
     // Master/detail rows are inherently variable-height: the parent table
@@ -2538,12 +2504,16 @@ where
     }
 
     view! {
+        // Ship the built-in light+dark token stylesheet inline (matches the
+        // dioxus adapter). `inner_html` injects the CSS verbatim so the
+        // [data-chorale-theme="..."] selector quotes are not escaped.
+        <style inner_html=theme_stylesheet()></style>
         <div
             node_ref=kb_ref
             class=THEME_ROOT_CLASS
             attr:data-chorale-theme=theme.attribute_value()
             tabindex="0"
-            style="border:1px solid var(--chorale-border, #ddd);border-radius:4px;overflow:hidden;user-select:none;outline:none;"
+            style="border:1px solid var(--chorale-border, #ddd);border-radius:4px;overflow:hidden;user-select:none;outline:none;background:var(--chorale-surface, #fff);color:var(--chorale-text, #333);"
             on:mousemove=move |ev| {
                 if let Some((col_id, start_x, start_w)) = drag_state.get_untracked() {
                     let delta = f64::from(ev.client_x()) - start_x;

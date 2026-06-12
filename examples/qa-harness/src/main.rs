@@ -599,14 +599,6 @@ fn App() -> Element {
                 label {
                     input {
                         r#type: "checkbox",
-                        checked: *dark_mode_on.read(),
-                        onchange: move |_| { let v = *dark_mode_on.read(); dark_mode_on.set(!v); },
-                    }
-                    " Dark mode"
-                }
-                label {
-                    input {
-                        r#type: "checkbox",
                         checked: *sort_on.read(),
                         onchange: move |_| { let v = *sort_on.read(); sort_on.set(!v); },
                     }
@@ -685,6 +677,14 @@ fn App() -> Element {
                         padding:0.75rem; background:#eff6ff; border-radius:4px; \
                         border: 1px solid #bfdbfe;",
 
+                label {
+                    input {
+                        r#type: "checkbox",
+                        checked: *dark_mode_on.read(),
+                        onchange: move |_| { let v = *dark_mode_on.read(); dark_mode_on.set(!v); },
+                    }
+                    " Dark mode"
+                }
                 label {
                     input {
                         r#type: "checkbox",
