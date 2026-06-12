@@ -13,7 +13,8 @@ use chorale_core::{
 };
 use chorale_derive::TableRow;
 use chorale_leptos::{
-    use_chorale_table, CellRenderer, CellRenderers, RowCellRenderer, RowCellRenderers, Table,
+    use_chorale_table, CellRenderer, CellRenderers, DetailRenderer, RowCellRenderer,
+    RowCellRenderers, Table,
 };
 use leptos::prelude::{StoredValue, *};
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -68,6 +69,108 @@ struct Employee {
     status: String,
     #[chorale(render = "currency")]
     salary: i64,
+}
+
+// ── Master/detail demo: per-employee order line items ────────────────────────
+//
+// Each row in the main table represents an Employee. When the master/detail
+// toggle is on, clicking a row's expand chevron reveals a child `<Table>`
+// showing that employee's order line items (qty + unit price). Demonstrates
+// that `detail_renderer` can mount any `AnyView`, including a nested
+// chorale-leptos Table with its own state, sorting, and rendering rules.
+
+#[derive(Clone, PartialEq)]
+struct LineItem {
+    label: &'static str,
+    qty: i64,
+    unit_price: f64,
+}
+
+static LINE_ITEM_LABELS: &[&str] = &["Widget A", "Widget B", "Gadget C", "Gizmo D", "Doohickey E"];
+
+// Deterministic per-employee line items, seeded from the employee's email
+// so the dataset is stable across re-renders. (The Dioxus harness pairs each
+// item with a RowId here; in Leptos, `use_chorale_table` assigns RowIds
+// itself, so this returns bare rows.)
+#[must_use]
+fn line_items_for_employee(email: &str) -> Vec<LineItem> {
+    let mut seed: u64 = 0xCBF2_9CE4_8422_2325; // FNV-1a offset basis
+    for b in email.bytes() {
+        seed ^= u64::from(b);
+        seed = seed.wrapping_mul(0x100_0000_01B3);
+    }
+    let mut rng = StdRng::seed_from_u64(seed);
+    let count = rng.gen_range(2..6);
+    (0..count)
+        .map(|_| LineItem {
+            label: LINE_ITEM_LABELS[rng.gen_range(0..LINE_ITEM_LABELS.len())],
+            qty: rng.gen_range(1..20),
+            unit_price: f64::from(rng.gen_range(500..50_000)) / 100.0,
+        })
+        .collect()
+}
+
+#[must_use]
+fn line_item_columns() -> Vec<ColumnDef<LineItem>> {
+    vec![
+        ColumnDef::new(ColumnId("li_label"), "Item", |li: &LineItem| {
+            CellValue::Text(li.label.to_string())
+        })
+        .sortable()
+        .initial_width(180.0),
+        ColumnDef::new(ColumnId("li_qty"), "Qty", |li: &LineItem| {
+            CellValue::Integer(li.qty)
+        })
+        .sortable()
+        .initial_width(80.0)
+        .alignment(Alignment::Right)
+        .render_kind(RenderKind::Number),
+        ColumnDef::new(ColumnId("li_price"), "Unit Price", |li: &LineItem| {
+            CellValue::Float(li.unit_price)
+        })
+        .sortable()
+        .initial_width(120.0)
+        .alignment(Alignment::Right)
+        .render_kind(RenderKind::Currency(CurrencyCode::USD)),
+    ]
+}
+
+#[component]
+fn EmployeeDetailPanel(employee: Employee) -> impl IntoView {
+    let items = line_items_for_employee(&employee.email);
+    let item_count = items.len();
+    let total: f64 = items
+        .iter()
+        .map(|li| f64::from(li.qty as i32) * li.unit_price)
+        .sum();
+    // The child <Table> renders with `inline=true` (see the prop below),
+    // which makes it render at natural height with no internal scroll
+    // container. That's what's needed for a child table embedded inside a
+    // parent's scrolling viewport: no nested scroll context, no wheel
+    // hand-off discontinuity. Page-size is set to item_count so the child
+    // never paginates either. update_untracked is safe here: the signal was
+    // just created and has no subscribers yet.
+    let detail_table = use_chorale_table(items, line_item_columns());
+    detail_table
+        .signal()
+        .update_untracked(|s| s.page_size = item_count.max(1));
+    let name = employee.name.clone();
+    let summary = format!("{item_count} item(s) — Total: ${total:.2}");
+    view! {
+        <div style="padding:12px 24px;background:#fafafa;border-top:1px solid #e5e7eb;">
+            <div style="font-size:0.75rem;font-weight:600;color:#6b7280;\
+                        margin-bottom:8px;display:flex;\
+                        justify-content:space-between;align-items:baseline;">
+                <span>"ORDER LINE ITEMS — "{name}</span>
+                <span style="font-weight:500;color:#374151;">{summary}</span>
+            </div>
+            // inline=true → no internal scroll container, no virtualization;
+            // child renders at natural height so the parent's scroll context
+            // owns wheel events end-to-end. on_commit_edit is a required
+            // Option prop on the Leptos Table; the read-only child passes None.
+            <Table handle=detail_table sort_enabled=true inline=true on_commit_edit=None />
+        </div>
+    }
 }
 
 fn generate_dataset() -> Vec<Employee> {
@@ -307,6 +410,7 @@ fn App() -> impl IntoView {
     let column_reorder_on = RwSignal::new(false);
     let frozen_columns_on = RwSignal::new(false);
     let selection_toolbar_on = RwSignal::new(false);
+    let master_detail_on = RwSignal::new(false);
     let use_derive_on = RwSignal::new(false);
     let xlsx_export_on = RwSignal::new(false);
     let row_renderers_on = RwSignal::new(false);
@@ -499,7 +603,7 @@ fn App() -> impl IntoView {
                         prop:checked=move || variable_height_on.get()
                         on:change=move |_| variable_height_on.update(|v| *v = !*v)
                     />
-                    " Variable Row Height (renderer only)"
+                    " Variable Row Height"
                 </label>
                 <label>
                     <input
@@ -541,7 +645,7 @@ fn App() -> impl IntoView {
                         prop:checked=move || frozen_columns_on.get()
                         on:change=move |_| frozen_columns_on.update(|v| *v = !*v)
                     />
-                    " Frozen Columns and Rows (Name=Left, Salary=Right)"
+                    " Frozen Columns and Rows (Name=Left, Salary=Right, header sticky)"
                 </label>
                 <label>
                     <input
@@ -550,6 +654,14 @@ fn App() -> impl IntoView {
                         on:change=move |_| selection_toolbar_on.update(|v| *v = !*v)
                     />
                     " Selection Toolbar"
+                </label>
+                <label>
+                    <input
+                        type="checkbox"
+                        prop:checked=move || master_detail_on.get()
+                        on:change=move |_| master_detail_on.update(|v| *v = !*v)
+                    />
+                    " Master/Detail (sub-table per row)"
                 </label>
                 <label>
                     <input
@@ -619,6 +731,18 @@ fn App() -> impl IntoView {
                 } else {
                     Labels::default()
                 };
+
+                // Master/detail: build the per-row detail renderer only when
+                // the toggle is on. The renderer mounts a nested chorale
+                // <Table> (inline mode) per expanded row.
+                let detail_renderer_val: Option<DetailRenderer<Employee>> =
+                    master_detail_on.get().then(|| {
+                        let renderer: DetailRenderer<Employee> =
+                            Arc::new(move |employee: Employee| {
+                                view! { <EmployeeDetailPanel employee /> }.into_any()
+                            });
+                        renderer
+                    });
 
                 // on_commit_edit: pass Option<Callback<_>> directly.
                 let commit_cb: Option<Callback<CommittedEdit<Employee>>> = if editing_on.get() {
@@ -738,6 +862,7 @@ fn App() -> impl IntoView {
                         labels=labels_val
                         on_commit_edit=commit_cb
                         on_row_click=row_click_cb
+                        detail_renderer=detail_renderer_val
                         selection_toolbar=toolbar_fn
                     />
                 }

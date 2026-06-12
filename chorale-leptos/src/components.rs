@@ -1938,8 +1938,13 @@ pub fn Table<TRow>(
     /// prepended; clicking it calls `toggle_row_expansion`. `RenderRow::DetailPanel`
     /// rows render as `<tr><td colspan>` containing the returned `AnyView`.
     ///
+    /// Takes the full `Option` (`optional_no_strip`) so consumers can wire a
+    /// conditional renderer directly, e.g.
+    /// `detail_renderer=toggle.get().then(|| renderer.clone())` — mirroring
+    /// the `Option`-typed prop on the Dioxus adapter.
+    ///
     /// Per CHANGELOG Item N (master/detail, MD-B).
-    #[prop(optional)]
+    #[prop(optional_no_strip)]
     detail_renderer: Option<DetailRenderer<TRow>>,
     #[prop(optional)] labels: Option<Labels>,
     #[prop(default = false)] column_reorder_enabled: bool,
@@ -1947,6 +1952,18 @@ pub fn Table<TRow>(
     /// container. Set `false` to let it scroll with the body.
     #[prop(default = true)]
     sticky_header: bool,
+    /// **Inline mode** (default `false`). When `true`, the `<Table>` does NOT
+    /// render its own scroll container — the body renders at its natural full
+    /// height and any overflow is handled by the parent's scroll context.
+    /// Virtualization is disabled (all visible rows render in one batch).
+    ///
+    /// Use this when embedding a `<Table>` inside an outer scrolling element
+    /// where a nested scroll context would otherwise produce wheel-event
+    /// hand-off discontinuities (master/detail panels, sidebars, modals).
+    /// The consumer should keep the dataset small enough that rendering every
+    /// row at once is acceptable (typically <500 rows).
+    #[prop(default = false)]
+    inline: bool,
     /// CSS `z-index` applied to frozen column cells.
     #[prop(default = 2)]
     frozen_column_z_index: i32,
@@ -2477,15 +2494,24 @@ where
                 .into_any()
             })}
 
-            // Virtualized scroll container
+            // Virtualized scroll container (or natural-height wrapper in
+            // inline mode).
             <div
                 node_ref=scroll_ref
                 style=move || {
-                    let h = sig.with(|s| s.viewport_height);
-                    format!(
-                        "overflow-y:auto;overflow-x:auto;overflow-anchor:none;\
-                         height:{h}px;"
-                    )
+                    if inline {
+                        // Inline mode: no own scroll, no height clamp. Body
+                        // flows at natural size; parent's scroll context owns
+                        // overflow. Wheel events bubble through cleanly with
+                        // no nested-scroll handoff discontinuity.
+                        "overflow:visible;height:auto;".to_string()
+                    } else {
+                        let h = sig.with(|s| s.viewport_height);
+                        format!(
+                            "overflow-y:auto;overflow-x:auto;overflow-anchor:none;\
+                             height:{h}px;"
+                        )
+                    }
                 }
                 on:scroll=move |_| {
                     let st = scroll_ref
@@ -2581,8 +2607,30 @@ where
                         let vis_data_count = vis.iter().filter(|r| matches!(r, RenderRow::Data { .. })).count();
                         let has_more = is_infinite && vis_data_count < total_rows;
 
-                        let (win, render_slice) =
-                            compute_window_slice(&s, &vis);
+                        // In inline mode we bypass virtualization entirely —
+                        // every visible row renders in a single batch with no
+                        // top/bottom spacer <tr>s. This makes the <Table>
+                        // usable as a child of an outer scrolling element
+                        // (e.g., master/detail panel) without creating a
+                        // nested scroll context that would otherwise produce
+                        // wheel-event hand-off discontinuities ("jumps") when
+                        // the user scrolls past the edge of the inner view.
+                        let (win, render_slice) = if inline {
+                            // visible_window(0, MAX, ...) covers all rows with
+                            // zero pad on either side, so the spacer-row
+                            // branches below render nothing.
+                            let full_slice: Vec<RenderRow<TRow>> = vis.clone();
+                            let iwin = visible_window(
+                                0.0,
+                                f64::MAX,
+                                row_height,
+                                full_slice.len(),
+                                0,
+                            );
+                            (iwin, full_slice)
+                        } else {
+                            compute_window_slice(&s, &vis)
+                        };
 
                         // Active cell + range selection for highlighting.
                         let active_cell = s.active_cell;
@@ -2711,7 +2759,7 @@ where
                                     ),
                                     _ => view! { <tr /> }.into_any(),
                                 };
-                            if is_virtualized_grouped {
+                            if is_virtualized_grouped && !inline {
                                 // GroupedPaginationMode::Virtualized: core's
                                 // visible_grouped_view returns the ENTIRE flat
                                 // grouped list (no pagination), so rendering it
@@ -2774,6 +2822,10 @@ where
                             } else {
                                 // DataRowsOnly: core already paginates the
                                 // grouped list; render it unchanged.
+                                // Inline mode also lands here regardless of
+                                // grouped-pagination mode: virtualization is
+                                // bypassed, so the entire grouped list renders
+                                // in one batch with no spacer rows.
                                 grouped_rows
                                     .into_iter()
                                     .enumerate()
