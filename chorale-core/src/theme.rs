@@ -212,6 +212,10 @@ const THEME_STYLESHEET: &str = r#".chorale-root[data-chorale-theme="light"] {
   --chorale-badge-default-bg: #3a3d41;
   --chorale-badge-default-text: #e5e7eb;
 }
+.chorale-root tr[data-chorale-row-selected="true"],
+.chorale-root tr[data-chorale-row-selected="true"] > td {
+  background: var(--chorale-row-selected-bg);
+}
 "#;
 
 /// Row metadata passed to `RowClassFn` resolvers.

@@ -15,11 +15,11 @@ planned for future releases. Inspired by
 
 ## Status
 
-The current release is **v0.2.0**: `chorale-core`, `chorale-dioxus`,
-`chorale-leptos`, and `chorale-derive` are published at v0.2.0 on crates.io.
-v0.2.0 adds the Leptos adapter, the `chorale-derive` macro, built-in
-light/dark theming, and a large batch of table features over v0.1.0 (see
-`CHANGELOG.md`).
+The current release is **v0.2.1**: `chorale-core`, `chorale-dioxus`, and
+`chorale-leptos` are published at v0.2.1 (and `chorale-derive` at v0.2.0) on
+crates.io. The 0.2.x line adds the Leptos adapter, the `chorale-derive` macro,
+built-in light/dark theming, grouping with rendered aggregates, and a large
+batch of table features over v0.1.0 (see `CHANGELOG.md`).
 
 All six `chorale-*` crate names are reserved on crates.io:
 [chorale](https://crates.io/crates/chorale),

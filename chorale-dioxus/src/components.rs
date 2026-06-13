@@ -12,11 +12,11 @@ use chorale_core::{
     next_editable_cell, paste_tsv_into_range, prev_editable_cell, scrollable_columns,
     select_all as select_all_range, start_range_selection, theme_stylesheet, to_clipboard_tsv,
     to_csv, visible_grouped_view, visible_view, visible_window, visible_window_variable,
-    ActiveCell, Alignment, BadgeVariantMap, CellValue, ClipboardCopyEvent, ClipboardPasteEvent,
-    ColumnDef, ColumnId, CommittedEdit, CurrencyCode, EditorKind, FilterKind, FilterValue,
-    GroupKey, GroupedPaginationMode, GroupedRow, Labels, NavDirection, PaginationMode, RenderKind,
-    RenderRow, RowId, SortAction, SortDirection, SortState, TableState, Theme, VirtualWindow,
-    THEME_ROOT_CLASS,
+    ActiveCell, AggregatorKind, Alignment, BadgeVariantMap, CellValue, ClipboardCopyEvent,
+    ClipboardPasteEvent, ColumnDef, ColumnId, CommittedEdit, CurrencyCode, EditorKind, FilterKind,
+    FilterValue, GroupKey, GroupedPaginationMode, GroupedRow, Labels, NavDirection, PaginationMode,
+    RenderKind, RenderRow, RowId, SortAction, SortDirection, SortState, TableState, Theme,
+    VirtualWindow, THEME_ROOT_CLASS,
 };
 use dioxus::prelude::*;
 
@@ -1408,15 +1408,18 @@ dioxus.send(parts.join('\n'));"
                                 // both header_th and select_all_th so the
                                 // line under the header is continuous
                                 // across all columns.
+                                // No border-bottom on the empty detail-expander
+                                // header cell: a line under an empty utility
+                                // column reads as a stray segment (issue #21).
+                                // The header underline begins at the first data
+                                // column.
                                 th {
                                     style: if sticky_header {
                                         "width: 24px; padding: 0; \
-                                         border-bottom: 1px solid var(--chorale-border, #ddd); \
                                          position: sticky; top: 0; \
                                          background: var(--chorale-header-bg, #f8f9fa); z-index: 1;"
                                     } else {
                                         "width: 24px; padding: 0; \
-                                         border-bottom: 1px solid var(--chorale-border, #ddd); \
                                          position: static; top: auto; \
                                          z-index: auto; \
                                          background: var(--chorale-header-bg, #f8f9fa);"
@@ -1437,7 +1440,7 @@ dioxus.send(parts.join('\n'));"
                                     }
                                 }
                                 if has_detail {
-                                    th { style: "width: 24px; padding: 0; border-bottom: 1px solid var(--chorale-divider, #eee); background: var(--chorale-surface, #fff);" }
+                                    th { style: "width: 24px; padding: 0; background: var(--chorale-surface, #fff);" }
                                 }
                                 for col in &visible_cols {
                                     {filter_th(col, widths.get(&col.id).copied(), handle, &filters, &labels, sticky_header_css.get(&col.id).map_or("", String::as_str))}
@@ -2696,28 +2699,28 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
     // different counts). The resulting scroll-extent drift caused a runaway
     // scroll feedback loop. `box-shadow` is purely paint, never layout, so
     // the rendered row is exactly `row_height` px regardless of borders.
-    // Note the explicit `background: transparent` on the deselected branch
-    // rather than an empty string. Dioxus's attribute diff does not reliably
-    // clear a previously-set inline style when the new value is `""`; the
-    // tr keeps its old `background: var(--chorale-row-selected-bg, #eff6ff)` and the row stays blue after
-    // the checkbox toggles off. Always emitting a concrete background
-    // value forces the override.
-    let (row_bg, separator_color) = if is_selected && selection_enabled {
-        (
-            "background: var(--chorale-row-selected-bg, #eff6ff);",
-            "var(--chorale-row-selected-divider, #dbeafe)",
-        )
+    // Selected-row background is applied via a STYLESHEET rule keyed on the
+    // `data-chorale-row-selected` attribute (see `theme_stylesheet`), not an
+    // inline `background` declaration. Dioxus 0.7's inline-style diff on a <tr>
+    // reliably updates CSS custom properties but drops standard `background`
+    // changes — confirmed by reading the live DOM: a freshly-selected row kept
+    // `--chorale-separator-color` updated to the selected divider but its
+    // `background` declaration was stale/absent, so the row never repainted
+    // (issue #20). Data attributes diff reliably (`data-chorale-index` proves
+    // it), so driving the highlight through the attribute + CSS sidesteps the
+    // bug. The divider color still rides the custom property, which diffs fine.
+    let row_selected = is_selected && selection_enabled;
+    let separator_color = if row_selected {
+        "var(--chorale-row-selected-divider, #dbeafe)"
     } else {
-        (
-            "background: transparent;",
-            "var(--chorale-button-disabled-bg, #f0f0f0)",
-        )
+        "var(--chorale-button-disabled-bg, #f0f0f0)"
     };
-    let row_style = format!("{row_bg}--chorale-separator-color: {separator_color};");
+    let row_style = format!("--chorale-separator-color: {separator_color};");
     rsx! {
         tr {
             style: "{row_style}",
             "data-chorale-index": "{row_index}",
+            "data-chorale-row-selected": "{row_selected}",
             if selection_enabled {
                 td {
                     style: "padding: 0.25rem 0.5rem; width: 2.5rem; text-align: center; \
@@ -2820,6 +2823,8 @@ fn render_grouped_row<TRow: Clone + PartialEq + 'static>(
             row_count,
             is_collapsed,
             aggregates,
+            visible_cols,
+            cell_renderers,
             effective_col_count,
             selection_enabled,
             handle,
@@ -2863,6 +2868,20 @@ fn render_grouped_row<TRow: Clone + PartialEq + 'static>(
     }
 }
 
+/// Short prefix shown before a column's aggregate value in the group header,
+/// hinting at which aggregator produced it. `AggregatorKind` is
+/// `#[non_exhaustive]`, so the wildcard covers `Custom` and future variants.
+fn aggregator_prefix<TRow>(kind: Option<&AggregatorKind<TRow>>) -> &'static str {
+    match kind {
+        Some(AggregatorKind::Sum) => "\u{3a3}", // Σ
+        Some(AggregatorKind::Average) => "avg",
+        Some(AggregatorKind::Count) => "count",
+        Some(AggregatorKind::Min) => "min",
+        Some(AggregatorKind::Max) => "max",
+        _ => "",
+    }
+}
+
 /// Render a single group-header `<tr>`.
 ///
 /// Clicking the row (or the toggle button) calls `toggle_group` on the handle.
@@ -2874,7 +2893,9 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
     depth: usize,
     row_count: usize,
     is_collapsed: bool,
-    _aggregates: Vec<Option<CellValue>>,
+    aggregates: Vec<Option<CellValue>>,
+    visible_cols: &[ColumnDef<TRow>],
+    cell_renderers: &CellRenderers,
     col_count: usize,
     selection_enabled: bool,
     handle: UseTableHandle<TRow>,
@@ -2883,6 +2904,34 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
     let indent = depth * 16;
     let toggle_icon = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
     let extra_class = extra_class.to_owned();
+    // Per-column aggregate summary. Core computes each group's aggregates (one
+    // per column, in effective column order); render them here for any column
+    // that declares an aggregator. The value is formatted through the SAME
+    // renderer / RenderKind the data cells use, so a summed Salary shows as
+    // "$148,234,567" exactly like the cells below.
+    let agg_summary: Vec<Element> = visible_cols
+        .iter()
+        .zip(aggregates.iter())
+        .filter_map(|(col, agg)| {
+            let value = agg.as_ref()?;
+            let prefix = aggregator_prefix(col.aggregator.as_ref());
+            let header = col.header.clone();
+            let value_el = if let Some(renderer) = cell_renderers.get(col.id) {
+                renderer(value)
+            } else {
+                let text = cell_text(value, &col.render_kind);
+                rsx! { "{text}" }
+            };
+            Some(rsx! {
+                span {
+                    style: "margin-left: 1.25rem; font-weight: 400; font-size: 0.8125rem; \
+                            color: var(--chorale-text-muted, #6b7280);",
+                    "{prefix} {header}: "
+                }
+                span { style: "font-weight: 600; font-size: 0.8125rem;", {value_el} }
+            })
+        })
+        .collect();
     rsx! {
         tr {
             class: "{extra_class}",
@@ -2905,6 +2954,7 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
                             color: var(--chorale-text-subtle, #888);",
                     "({row_count})"
                 }
+                {agg_summary.into_iter()}
             }
         }
     }

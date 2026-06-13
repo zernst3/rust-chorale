@@ -641,7 +641,7 @@ fn App() -> impl IntoView {
                         prop:checked=move || grouping_on.get()
                         on:change=move |_| grouping_on.update(|v| *v = !*v)
                     />
-                    " Group by Role"
+                    " Grouping & Aggregation"
                 </label>
                 <label style="display: flex; align-items: center; gap: 0.25rem;">
                     " Grouped pagination: "
