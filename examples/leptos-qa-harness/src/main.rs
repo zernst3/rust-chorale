@@ -205,6 +205,20 @@ fn generate_dataset() -> Vec<Employee> {
         .collect()
 }
 
+/// One labelled employee for the row-mutation controls (issue #25), so
+/// inserted/appended rows are visually distinct from the seeded dataset.
+fn make_employee(n: usize) -> Employee {
+    let base = NaiveDate::from_ymd_opt(2020, 1, 1).unwrap_or(NaiveDate::MIN);
+    Employee {
+        name: format!("New Row {n}"),
+        email: format!("new.row{n}@example.com"),
+        joined_date: base,
+        role: "Analyst".into(),
+        status: "Active".into(),
+        salary: 100_000 + i64::try_from(n % 50).unwrap_or(0) * 1_000,
+    }
+}
+
 /// Build the hand-crafted column set. Always includes `AggregatorKind::Sum`
 /// on salary (shown only when grouping is active). Editing and frozen-column
 /// features are opt-in via the toggles.
@@ -420,6 +434,9 @@ fn App() -> impl IntoView {
     let row_click_on = RwSignal::new(false);
     let dark_mode_on = RwSignal::new(false);
     let last_clicked: RwSignal<Option<String>> = RwSignal::new(None);
+    // Row-set mutation controls (issue #25): a monotonic counter labels each
+    // inserted/appended row uniquely.
+    let mut_counter = RwSignal::new(0usize);
 
     // ── Cell renderers (rebuilt when variable_height_on / use_derive_on changes) ─
     // In derive mode, the macro emits RenderKind::Currency on salary, so the
@@ -512,8 +529,36 @@ fn App() -> impl IntoView {
                 "Chorale QA Harness (Leptos)"
             </h1>
             <p style=move || if dark_mode_on.get() { "color:#c8c8c8;" } else { "color:#444;" }>
-                "Dataset: "{row_count}" rows"
+                "Dataset: "{move || table.signal().with(|s| s.rows.len())}" rows"
+                " (seeded "{row_count}")"
             </p>
+
+            // ── Row-set mutation controls (v0.2.2, issue #25) ────────────────
+            <p style="margin: 0.25rem 0; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: #6b7280;">
+                "Row mutation (v0.2.2)"
+            </p>
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.5rem; padding:0.75rem; background:#f0fdf4; border-radius:4px; border: 1px solid #86efac;">
+                <button on:click=move |_| {
+                    let n = mut_counter.get(); mut_counter.set(n + 1);
+                    table.append_rows(vec![(RowId::new(), make_employee(n))]);
+                }>"Append row"</button>
+                <button on:click=move |_| {
+                    let n = mut_counter.get(); mut_counter.set(n + 1);
+                    table.insert_row(0, RowId::new(), make_employee(n));
+                }>"Insert at top"</button>
+                <button on:click=move |_| {
+                    let ids = table.selected_ids();
+                    if !ids.is_empty() { table.remove_rows(&ids); }
+                }>"Remove selected"</button>
+                <button on:click=move |_| {
+                    let rows = stored_dataset
+                        .get_value()
+                        .into_iter()
+                        .map(|e| (RowId::new(), e))
+                        .collect();
+                    table.set_rows(rows);
+                }>"Reset dataset (set_rows)"</button>
+            </div>
 
             // ── Feature toggles ──────────────────────────────────────────────
             //

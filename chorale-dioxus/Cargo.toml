@@ -19,5 +19,5 @@ default = []
 xlsx = ["chorale-core/xlsx"]
 
 [dependencies]
-chorale-core = { path = "../chorale-core", version = "0.2.1" }
+chorale-core = { path = "../chorale-core", version = "0.2.2" }
 dioxus = { version = "0.7", default-features = false, features = ["macro", "html", "hooks", "signals", "document"] }

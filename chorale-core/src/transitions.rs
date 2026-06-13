@@ -441,6 +441,166 @@ pub fn update_row<TRow: Clone>(
     new_state
 }
 
+// ---------------------------------------------------------------------------
+// Row-set mutation (issue #25): set_rows / insert_row / append_rows /
+// remove_row / remove_rows. Unlike `update_row` (which replaces one row's
+// CONTENT in place), these change the row SET — the primitives a consumer with
+// live / streaming data (dashboards, search results, log tails) needs.
+//
+// Mutating the row set invalidates a lot of derived state. Every transition
+// here must leave `TableState` coherent:
+//   - `selection` (RowId-based): drop ids that no longer exist.
+//   - `expanded_rows` (RowId-based): drop ids that no longer exist.
+//   - `editing` (RowId-based): clear if the edited row was removed.
+//   - `active_cell` / `range_selection` (visible-INDEX based): any row-set
+//     change reshuffles indices, so clear them.
+//   - `row_heights` (visible-INDEX keyed VIRT-2 cache): clear; indices shift.
+//   - `page` / `loaded_row_count`: reset or clamp so we never sit past the end.
+//   - `data_generation`: bump so adapter view memos recompute.
+// `collapsed_groups` uses value-derived string keys, not RowIds; a stale key
+// for an emptied group is silently ignored by `visible_grouped_view`, so it
+// needs no cleanup.
+// ---------------------------------------------------------------------------
+
+/// `loaded_row_count` after a row-set change: fresh page in `InfiniteScroll`, 0 otherwise.
+fn reset_loaded_row_count<TRow: Clone>(state: &TableState<TRow>) -> usize {
+    if state.pagination_mode == PaginationMode::InfiniteScroll {
+        state.page_size
+    } else {
+        0
+    }
+}
+
+/// Replace the entire row set (e.g. a streaming full-refresh).
+///
+/// Drops all selection, editing, expanded-rows, active-cell and range state
+/// (every old `RowId` / index is gone), clears the row-height cache, and
+/// resets pagination to the first page. Bumps `data_generation`.
+#[must_use]
+pub fn set_rows<TRow: Clone>(
+    state: &TableState<TRow>,
+    rows: Vec<(RowId, TRow)>,
+) -> TableState<TRow> {
+    TableState {
+        rows: Arc::new(rows),
+        selection: Vec::new(),
+        editing: None,
+        expanded_rows: std::collections::HashSet::new(),
+        active_cell: None,
+        range_selection: Vec::new(),
+        row_heights: HashMap::new(),
+        page: 0,
+        scroll_top: 0.0,
+        loaded_row_count: reset_loaded_row_count(state),
+        data_generation: state.data_generation.wrapping_add(1),
+        ..state.clone()
+    }
+}
+
+/// Insert a single row at `position` (0 = prepend, `>= rows.len()` appends).
+///
+/// Shifts the indices of every row at/after `position`, so the active cell,
+/// range selection and row-height cache are reset and pagination returns to
+/// the first page. The caller supplies the `RowId`. Bumps `data_generation`.
+#[must_use]
+pub fn insert_row<TRow: Clone>(
+    state: &TableState<TRow>,
+    position: usize,
+    id: RowId,
+    row: TRow,
+) -> TableState<TRow> {
+    let mut new_state = state.clone();
+    let rows = Arc::make_mut(&mut new_state.rows);
+    let pos = position.min(rows.len());
+    rows.insert(pos, (id, row));
+    new_state.row_heights = HashMap::new();
+    new_state.active_cell = None;
+    new_state.range_selection = Vec::new();
+    new_state.page = 0;
+    new_state.scroll_top = 0.0;
+    new_state.loaded_row_count = reset_loaded_row_count(state);
+    new_state.data_generation = state.data_generation.wrapping_add(1);
+    new_state
+}
+
+/// Append rows to the end of the row set (e.g. streaming new records in).
+///
+/// Empty input is a no-op (returns the state unchanged). Appending does not
+/// remove any `RowId`, so selection / expanded / editing survive untouched;
+/// but with an active sort the appended rows can land anywhere in the visible
+/// order, so the row-height cache is cleared. Bumps `data_generation`.
+#[must_use]
+pub fn append_rows<TRow: Clone>(
+    state: &TableState<TRow>,
+    new_rows: Vec<(RowId, TRow)>,
+) -> TableState<TRow> {
+    if new_rows.is_empty() {
+        return state.clone();
+    }
+    let mut new_state = state.clone();
+    Arc::make_mut(&mut new_state.rows).extend(new_rows);
+    new_state.row_heights = HashMap::new();
+    new_state.data_generation = state.data_generation.wrapping_add(1);
+    new_state
+}
+
+/// Remove the row identified by `row_id`. No-op if it is not present.
+#[must_use]
+pub fn remove_row<TRow: Clone>(state: &TableState<TRow>, row_id: RowId) -> TableState<TRow> {
+    if !state.rows.iter().any(|(id, _)| *id == row_id) {
+        return state.clone();
+    }
+    remove_rows(state, &[row_id])
+}
+
+/// Remove every row whose `RowId` is in `ids` (order-independent).
+///
+/// Empty input is a no-op. Produces a single new `TableState` regardless of
+/// how many rows are removed. Reconciles selection / expanded / editing (drops
+/// removed ids), clears index-based active-cell / range / row-height state, and
+/// clamps `page` / `loaded_row_count` so the view never sits past the new end.
+#[must_use]
+pub fn remove_rows<TRow: Clone>(state: &TableState<TRow>, ids: &[RowId]) -> TableState<TRow> {
+    if ids.is_empty() {
+        return state.clone();
+    }
+    let remove: std::collections::HashSet<RowId> = ids.iter().copied().collect();
+    let mut new_state = state.clone();
+
+    Arc::make_mut(&mut new_state.rows).retain(|(id, _)| !remove.contains(id));
+    new_state.selection.retain(|id| !remove.contains(id));
+    new_state.expanded_rows.retain(|id| !remove.contains(id));
+
+    let clear_edit = new_state
+        .editing
+        .as_ref()
+        .is_some_and(|e| remove.contains(&e.row_id));
+    if clear_edit {
+        new_state.editing = None;
+    }
+
+    new_state.active_cell = None;
+    new_state.range_selection = Vec::new();
+    new_state.row_heights = HashMap::new();
+
+    // Clamp the current page: removals can leave us past the last page.
+    let total_pages = new_state.total_pages();
+    if new_state.page >= total_pages {
+        new_state.page = total_pages.saturating_sub(1);
+        new_state.scroll_top = 0.0;
+    }
+    // Clamp the InfiniteScroll reveal count to the shrunken filtered set.
+    if state.pagination_mode == PaginationMode::InfiniteScroll {
+        let filtered = new_state.filtered_row_count();
+        if new_state.loaded_row_count > filtered {
+            new_state.loaded_row_count = filtered;
+        }
+    }
+
+    new_state.data_generation = state.data_generation.wrapping_add(1);
+    new_state
+}
+
 /// Record the measured height (px) for row at `index` in the current page view.
 ///
 /// The adapter calls this after DOM measurement (VIRT-2). `index` is the row's
@@ -3119,5 +3279,152 @@ mod tests {
         let s3 = toggle_row_expansion(&s2, id1);
         let s4 = collapse_all_rows(&s3);
         assert!(s4.expanded_rows.is_empty());
+    }
+
+    // ---- row-set mutation (issue #25) -------------------------------------
+
+    fn new_row(name: &str) -> (RowId, TestRow) {
+        (
+            RowId::new(),
+            TestRow {
+                name: name.into(),
+                score: 0.0,
+            },
+        )
+    }
+
+    #[test]
+    fn set_rows_replaces_and_resets_derived_state() {
+        let mut s = make_state();
+        let removed = s.rows[0].0;
+        s.selection = vec![removed];
+        s.expanded_rows.insert(removed);
+        s.editing = Some(crate::types::EditTarget {
+            row_id: removed,
+            column_id: col_name(),
+        });
+        s.active_cell = Some(ActiveCell::new(1, col_name()));
+        s.row_heights.insert(0, 42.0);
+        s.page = 5;
+
+        let new = vec![new_row("X"), new_row("Y")];
+        let s2 = set_rows(&s, new);
+
+        assert_eq!(s2.rows.len(), 2);
+        assert_eq!(s2.rows[0].1.name, "X");
+        assert!(s2.selection.is_empty());
+        assert!(s2.expanded_rows.is_empty());
+        assert!(s2.editing.is_none());
+        assert!(s2.active_cell.is_none());
+        assert!(s2.row_heights.is_empty());
+        assert_eq!(s2.page, 0);
+        assert_eq!(s2.data_generation, s.data_generation.wrapping_add(1));
+        // input not mutated
+        assert_eq!(s.rows.len(), 3);
+    }
+
+    #[test]
+    fn insert_row_prepends_and_clamps_and_appends() {
+        let s = make_state();
+        let (id, row) = new_row("First");
+        let s2 = insert_row(&s, 0, id, row);
+        assert_eq!(s2.rows.len(), 4);
+        assert_eq!(s2.rows[0].0, id);
+        assert_eq!(s2.rows[0].1.name, "First");
+        assert_eq!(s2.page, 0);
+        assert!(s2.active_cell.is_none());
+        assert_eq!(s2.data_generation, s.data_generation.wrapping_add(1));
+
+        // position beyond len clamps to an append (no panic)
+        let (id2, row2) = new_row("Last");
+        let s3 = insert_row(&s, 999, id2, row2);
+        assert_eq!(s3.rows.len(), 4);
+        assert_eq!(s3.rows[3].0, id2);
+        // input not mutated
+        assert_eq!(s.rows.len(), 3);
+    }
+
+    #[test]
+    fn append_rows_extends_and_empty_is_noop() {
+        let s = make_state();
+        let s2 = append_rows(&s, vec![new_row("D"), new_row("E")]);
+        assert_eq!(s2.rows.len(), 5);
+        assert_eq!(s2.rows[3].1.name, "D");
+        assert_eq!(s2.rows[4].1.name, "E");
+        assert_eq!(s2.data_generation, s.data_generation.wrapping_add(1));
+
+        let s3 = append_rows(&s, vec![]);
+        assert_eq!(s3.rows.len(), 3);
+        assert_eq!(s3.data_generation, s.data_generation); // no-op: no bump
+                                                           // input not mutated
+        assert_eq!(s.rows.len(), 3);
+    }
+
+    #[test]
+    fn remove_row_drops_references_and_unknown_is_noop() {
+        let mut s = make_state();
+        let target = s.rows[1].0;
+        let keep = s.rows[0].0;
+        s.selection = vec![keep, target];
+        s.expanded_rows.insert(target);
+        s.editing = Some(crate::types::EditTarget {
+            row_id: target,
+            column_id: col_name(),
+        });
+        s.active_cell = Some(ActiveCell::new(2, col_name()));
+
+        let s2 = remove_row(&s, target);
+        assert_eq!(s2.rows.len(), 2);
+        assert!(!s2.rows.iter().any(|(id, _)| *id == target));
+        assert_eq!(s2.selection, vec![keep]); // removed id dropped, survivor kept
+        assert!(s2.expanded_rows.is_empty());
+        assert!(s2.editing.is_none()); // edited row was removed
+        assert!(s2.active_cell.is_none());
+        assert!(s2.row_heights.is_empty());
+        assert_eq!(s2.data_generation, s.data_generation.wrapping_add(1));
+
+        // unknown id: no-op, no data_generation bump
+        let s3 = remove_row(&s, RowId::new());
+        assert_eq!(s3.rows.len(), 3);
+        assert_eq!(s3.data_generation, s.data_generation);
+        // input not mutated
+        assert_eq!(s.rows.len(), 3);
+    }
+
+    #[test]
+    fn remove_row_preserves_editing_of_a_different_row() {
+        let mut s = make_state();
+        let edited = s.rows[0].0;
+        let removed = s.rows[2].0;
+        s.editing = Some(crate::types::EditTarget {
+            row_id: edited,
+            column_id: col_name(),
+        });
+        let s2 = remove_row(&s, removed);
+        assert_eq!(
+            s2.editing.as_ref().map(|e| e.row_id),
+            Some(edited),
+            "editing of a surviving row must be preserved"
+        );
+    }
+
+    #[test]
+    fn remove_rows_removes_many_and_clamps_page() {
+        let mut s = make_state();
+        // 3 rows, 1 per page -> 3 pages; sit on the last page.
+        s.page_size = 1;
+        s.page = 2;
+        let a = s.rows[0].0;
+        let b = s.rows[1].0;
+        let s2 = remove_rows(&s, &[a, b]);
+        assert_eq!(s2.rows.len(), 1);
+        // now 1 row -> 1 page -> page clamped to 0
+        assert_eq!(s2.page, 0);
+        assert_eq!(s2.data_generation, s.data_generation.wrapping_add(1));
+
+        // empty slice is a no-op
+        let s3 = remove_rows(&s, &[]);
+        assert_eq!(s3.rows.len(), 3);
+        assert_eq!(s3.data_generation, s.data_generation);
     }
 }
