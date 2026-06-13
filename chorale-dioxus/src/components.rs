@@ -1719,6 +1719,7 @@ fn scroll_top_to_reveal_row<S: std::hash::BuildHasher>(
     row_height: f64,
     row_heights: &HashMap<usize, f64, S>,
     variable_row_height: bool,
+    header_h: f64,
 ) -> Option<f64> {
     let (row_top, row_h) = if variable_row_height {
         let mut top = 0.0_f64;
@@ -1734,9 +1735,16 @@ fn scroll_top_to_reveal_row<S: std::hash::BuildHasher>(
     };
     let row_bottom = row_top + row_h;
     if row_top < scroll_top {
+        // Above the viewport: align the row top to just below the sticky
+        // header (scroll_top = row_top lands its content origin at header_h).
         Some(row_top)
-    } else if row_bottom > scroll_top + viewport_height {
-        Some((row_bottom - viewport_height).max(0.0))
+    } else if row_bottom + header_h > scroll_top + viewport_height {
+        // Below the viewport: the sticky <thead> permanently covers the top
+        // `header_h` band, so row content is shifted down by header_h. A row
+        // is cut off at the bottom once `row_bottom + header_h` passes the
+        // container's bottom edge — fire then (when it's the last fully
+        // visible row), matching the chorale-leptos adapter.
+        Some((row_bottom + header_h - viewport_height).max(0.0))
     } else {
         None
     }
@@ -1745,14 +1753,18 @@ fn scroll_top_to_reveal_row<S: std::hash::BuildHasher>(
 /// After a keyboard-navigation transition lands a new `active_cell`, scroll
 /// the virtualized container so the active row sits inside the viewport.
 ///
-/// Two synchronized writes, in this order:
+/// The sticky `<thead>` permanently covers the top `header_h` band of the
+/// container, so the down-scroll trigger must account for it (otherwise it
+/// fires ~one header late — when the row is already half off-screen). web-sys
+/// is unavailable in this adapter, so `header_h` is measured via an async
+/// `eval` round-trip (the parallel to chorale-leptos's synchronous
+/// `offset_height` read); the round-trip also ensures a post-layout read.
+///
+/// Then two synchronized writes, in this order:
 /// 1. `handle.set_scroll(..)` updates `TableState.scroll_top` so the next
-///    render (already queued by the nav transition) computes the visible
-///    window from the post-scroll position — without this the rendered
-///    window lags one keypress behind the DOM scroll.
+///    render computes the visible window from the post-scroll position.
 /// 2. A `document.getElementById(..).scrollTop = ..` eval moves the actual
-///    DOM scroll container. The resulting native `onscroll` event calls
-///    `handle.set_scroll` with the same value, which is a no-op.
+///    DOM scroll container; the native `onscroll` re-set is a no-op.
 ///
 /// Inline mode is a deliberate no-op: there is no internal scroll container
 /// (`overflow: visible; height: auto`), the parent owns scrolling and this
@@ -1766,28 +1778,46 @@ fn ensure_active_row_visible<TRow: Clone + PartialEq + 'static>(
     if inline {
         return;
     }
-    let sig = handle.signal();
-    let target = {
+    // Snapshot the geometry inputs synchronously (pure state math — the target
+    // row may not be rendered under virtualization).
+    let (row_idx, scroll_top, viewport_height, row_height, row_heights) = {
+        let sig = handle.signal();
         let s = sig.peek();
         let Some(ac) = s.active_cell else {
             return;
         };
-        scroll_top_to_reveal_row(
+        (
             ac.row_idx,
             s.scroll_top,
             s.viewport_height,
             s.row_height,
-            &s.row_heights,
-            variable_row_height,
+            s.row_heights.clone(),
         )
     };
-    if let Some(new_scroll) = target {
-        handle.set_scroll(new_scroll);
-        dioxus::document::eval(&format!(
-            "var el = document.getElementById('{scroll_container_id}'); \
-             if (el) el.scrollTop = {new_scroll};"
+    let cid = scroll_container_id.to_owned();
+    spawn(async move {
+        let mut js = dioxus::document::eval(&format!(
+            "const el = document.getElementById('{cid}'); \
+             const th = el ? el.querySelector(':scope > table > thead') : null; \
+             dioxus.send(th ? th.getBoundingClientRect().height : 0);"
         ));
-    }
+        let header_h = js.recv::<f64>().await.unwrap_or(0.0);
+        if let Some(new_scroll) = scroll_top_to_reveal_row(
+            row_idx,
+            scroll_top,
+            viewport_height,
+            row_height,
+            &row_heights,
+            variable_row_height,
+            header_h,
+        ) {
+            handle.set_scroll(new_scroll);
+            dioxus::document::eval(&format!(
+                "var el = document.getElementById('{cid}'); \
+                 if (el) el.scrollTop = {new_scroll};"
+            ));
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -3784,7 +3814,7 @@ mod tests {
     fn reveal_row_returns_none_when_row_already_visible() {
         let heights: HashMap<usize, f64> = HashMap::new();
         // viewport [100, 400): row 5 spans [200, 240) — fully visible.
-        let r = super::scroll_top_to_reveal_row(5, 100.0, 300.0, 40.0, &heights, false);
+        let r = super::scroll_top_to_reveal_row(5, 100.0, 300.0, 40.0, &heights, false, 0.0);
         assert_eq!(r, None);
     }
 
@@ -3793,7 +3823,7 @@ mod tests {
     fn reveal_row_scrolls_up_to_row_top() {
         let heights: HashMap<usize, f64> = HashMap::new();
         // viewport [400, 700): row 3 spans [120, 160) — above.
-        let r = super::scroll_top_to_reveal_row(3, 400.0, 300.0, 40.0, &heights, false);
+        let r = super::scroll_top_to_reveal_row(3, 400.0, 300.0, 40.0, &heights, false, 0.0);
         assert_eq!(r, Some(120.0));
     }
 
@@ -3804,8 +3834,28 @@ mod tests {
         let heights: HashMap<usize, f64> = HashMap::new();
         // viewport [0, 300): row 10 spans [400, 440) — below.
         // Expected: 440 - 300 = 140.
-        let r = super::scroll_top_to_reveal_row(10, 0.0, 300.0, 40.0, &heights, false);
+        let r = super::scroll_top_to_reveal_row(10, 0.0, 300.0, 40.0, &heights, false, 0.0);
         assert_eq!(r, Some(140.0));
+    }
+
+    /// A sticky header shrinks the usable row viewport by `header_h`, so the
+    /// down-scroll must fire one header EARLIER (when the row is the last
+    /// fully-visible one) and target a scroll offset that clears the header.
+    #[test]
+    fn reveal_row_accounts_for_sticky_header_height() {
+        let heights: HashMap<usize, f64> = HashMap::new();
+        // viewport [0, 300): row 6 spans [240, 280). With no header it is
+        // fully visible (280 <= 300) → None.
+        assert_eq!(
+            super::scroll_top_to_reveal_row(6, 0.0, 300.0, 40.0, &heights, false, 0.0),
+            None
+        );
+        // With a 40px sticky header the usable bottom is 260, so row 6's
+        // bottom (280) is clipped → scroll to 280 + 40 - 300 = 20.
+        assert_eq!(
+            super::scroll_top_to_reveal_row(6, 0.0, 300.0, 40.0, &heights, false, 40.0),
+            Some(20.0)
+        );
     }
 
     /// Row partially clipped at the bottom edge also triggers a scroll.
@@ -3813,7 +3863,7 @@ mod tests {
     fn reveal_row_scrolls_when_row_straddles_bottom_edge() {
         let heights: HashMap<usize, f64> = HashMap::new();
         // viewport [0, 300): row 7 spans [280, 320) — straddles the bottom.
-        let r = super::scroll_top_to_reveal_row(7, 0.0, 300.0, 40.0, &heights, false);
+        let r = super::scroll_top_to_reveal_row(7, 0.0, 300.0, 40.0, &heights, false, 0.0);
         assert_eq!(r, Some(20.0));
     }
 
@@ -3828,7 +3878,7 @@ mod tests {
         // measured height 80 → bottom 280. Viewport [400, 700) → above →
         // scroll to row top.
         heights.insert(3, 80.0);
-        let r = super::scroll_top_to_reveal_row(3, 400.0, 300.0, 40.0, &heights, true);
+        let r = super::scroll_top_to_reveal_row(3, 400.0, 300.0, 40.0, &heights, true, 0.0);
         assert_eq!(r, Some(200.0));
     }
 
@@ -3836,7 +3886,7 @@ mod tests {
     #[test]
     fn reveal_row_zero_clamps_at_top() {
         let heights: HashMap<usize, f64> = HashMap::new();
-        let r = super::scroll_top_to_reveal_row(0, 250.0, 300.0, 40.0, &heights, false);
+        let r = super::scroll_top_to_reveal_row(0, 250.0, 300.0, 40.0, &heights, false, 0.0);
         assert_eq!(r, Some(0.0));
     }
 
