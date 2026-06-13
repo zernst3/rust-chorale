@@ -1334,8 +1334,10 @@ dioxus.send(parts.join('\n'));"
             // through the handle.
             if let Some(toolbar) = selection_toolbar {
                 div {
+                    // Structural only: the slot content supplies its own
+                    // visual treatment (kept consistent with the leptos adapter).
                     class: "chorale-selection-toolbar",
-                    style: "width: 100%; box-sizing: border-box; border-bottom: 2px solid var(--chorale-accent-strong, #1d4ed8);",
+                    style: "width: 100%; box-sizing: border-box;",
                     {toolbar}
                 }
             }

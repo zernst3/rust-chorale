@@ -605,8 +605,14 @@ fn App() -> Element {
         div {
             style: "font-family: sans-serif; padding: 1rem; max-width: 1400px; margin: 0 auto;",
 
-            h1 { "chorale QA Harness" }
-            p { "Dataset: {row_count} rows" }
+            h1 {
+                style: if *dark_mode_on.read() { "color: #e6e6e6;" } else { "color: #1a1a1a;" },
+                "Chorale QA Harness (Dioxus)"
+            }
+            p {
+                style: if *dark_mode_on.read() { "color: #c8c8c8;" } else { "color: #444;" },
+                "Dataset: {row_count} rows"
+            }
 
             // ── v0.1 feature toggles ─────────────────────────────────────────
             p {
