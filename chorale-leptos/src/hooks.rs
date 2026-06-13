@@ -1,13 +1,13 @@
 //! Leptos hooks for Chorale tables.
 
 use chorale_core::{
-    clear_sort, collapse_all_groups, collapse_all_rows, deselect_all, deselect_all_visible_page,
-    expand_all_groups, load_more_rows, move_column, remove_sort, reset_column_width,
-    select_all_filtered, select_all_visible_page, set_column_visibility, set_column_width,
-    set_filter, set_grouping, set_page, set_page_size, set_pagination_mode, set_scroll,
-    set_selection, start_edit, toggle_group, toggle_row_expansion, toggle_select_all, toggle_sort,
-    update_row, ColumnId, FilterValue, GroupKey, PaginationMode, RowId, SortAction, StateError,
-    TableState,
+    append_rows, clear_sort, collapse_all_groups, collapse_all_rows, deselect_all,
+    deselect_all_visible_page, expand_all_groups, insert_row, load_more_rows, move_column,
+    remove_row, remove_rows, remove_sort, reset_column_width, select_all_filtered,
+    select_all_visible_page, set_column_visibility, set_column_width, set_filter, set_grouping,
+    set_page, set_page_size, set_pagination_mode, set_rows, set_scroll, set_selection, start_edit,
+    toggle_group, toggle_row_expansion, toggle_select_all, toggle_sort, update_row, ColumnId,
+    FilterValue, GroupKey, PaginationMode, RowId, SortAction, StateError, TableState,
 };
 use leptos::prelude::*;
 
@@ -163,6 +163,32 @@ impl<TRow: Clone + PartialEq + Send + Sync + 'static> UseTableHandle<TRow> {
     /// Replace `row_id`'s data in-place.
     pub fn update_row(&self, row_id: RowId, new_row: TRow) {
         self.dispatch(|s| update_row(s, row_id, new_row));
+    }
+
+    /// Replace the entire row set (streaming full-refresh). Drops selection,
+    /// editing, expanded-rows, active-cell and range state for the old rows.
+    pub fn set_rows(&self, rows: Vec<(RowId, TRow)>) {
+        self.dispatch(|s| set_rows(s, rows));
+    }
+
+    /// Insert a row at `position` (0 = prepend, past the end = append).
+    pub fn insert_row(&self, position: usize, id: RowId, row: TRow) {
+        self.dispatch(|s| insert_row(s, position, id, row));
+    }
+
+    /// Append rows to the end of the row set (streaming new records).
+    pub fn append_rows(&self, new_rows: Vec<(RowId, TRow)>) {
+        self.dispatch(|s| append_rows(s, new_rows));
+    }
+
+    /// Remove a single row by `RowId` (no-op if absent).
+    pub fn remove_row(&self, row_id: RowId) {
+        self.dispatch(|s| remove_row(s, row_id));
+    }
+
+    /// Remove multiple rows by `RowId` in one transition.
+    pub fn remove_rows(&self, ids: &[RowId]) {
+        self.dispatch(|s| remove_rows(s, ids));
     }
 
     /// Move `column_id` to `to_index` in the render order.

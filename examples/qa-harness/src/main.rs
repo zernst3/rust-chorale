@@ -189,6 +189,20 @@ fn EmployeeDetailPanel(employee: Employee) -> Element {
 }
 
 #[must_use]
+/// One labelled employee for the row-mutation controls (issue #25), so
+/// inserted/appended rows are visually distinct from the seeded dataset.
+fn make_employee(n: usize) -> Employee {
+    let base = NaiveDate::from_ymd_opt(2020, 1, 1).unwrap_or(NaiveDate::MIN);
+    Employee {
+        name: format!("New Row {n}"),
+        email: format!("new.row{n}@example.com"),
+        joined_date: base,
+        role: "Analyst".into(),
+        status: "Active".into(),
+        salary: 100_000 + i64::try_from(n % 50).unwrap_or(0) * 1_000,
+    }
+}
+
 fn generate_dataset() -> Vec<(RowId, Employee)> {
     let mut rng = StdRng::seed_from_u64(SEED);
     // 2015-01-01 is always a valid Gregorian date.
@@ -419,6 +433,9 @@ fn App() -> Element {
     let mut row_click_on = use_signal(|| false);
     let mut dark_mode_on = use_signal(|| false);
     let mut last_clicked: Signal<Option<String>> = use_signal(|| None);
+    // Row-set mutation controls (issue #25): a monotonic counter labels each
+    // inserted/appended row uniquely.
+    let mut mut_counter = use_signal(|| 0usize);
 
     // ── Cell renderers (re-built when variable_height_on changes) ────────────
     let cell_renderers = use_memo(move || {
@@ -611,7 +628,43 @@ fn App() -> Element {
             }
             p {
                 style: if *dark_mode_on.read() { "color: #c8c8c8;" } else { "color: #444;" },
-                "Dataset: {row_count} rows"
+                "Dataset: {table.signal().read().rows.len()} rows (seeded {row_count})"
+            }
+
+            // ── Row-set mutation controls (v0.2.2, issue #25) ────────────────
+            p {
+                style: "margin: 0.25rem 0; font-size: 0.75rem; font-weight: 700; \
+                        text-transform: uppercase; color: #6b7280;",
+                "Row mutation (v0.2.2)"
+            }
+            div {
+                style: "display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.5rem; \
+                        padding:0.75rem; background:#f0fdf4; border-radius:4px; border: 1px solid #86efac;",
+                button {
+                    onclick: move |_| {
+                        let n = mut_counter(); mut_counter.set(n + 1);
+                        table.append_rows(vec![(RowId::new(), make_employee(n))]);
+                    },
+                    "Append row"
+                }
+                button {
+                    onclick: move |_| {
+                        let n = mut_counter(); mut_counter.set(n + 1);
+                        table.insert_row(0, RowId::new(), make_employee(n));
+                    },
+                    "Insert at top"
+                }
+                button {
+                    onclick: move |_| {
+                        let ids = table.selected_ids();
+                        if !ids.is_empty() { table.remove_rows(&ids); }
+                    },
+                    "Remove selected"
+                }
+                button {
+                    onclick: move |_| { table.set_rows(generate_dataset()); },
+                    "Reset dataset (set_rows)"
+                }
             }
 
             // ── v0.1 feature toggles ─────────────────────────────────────────

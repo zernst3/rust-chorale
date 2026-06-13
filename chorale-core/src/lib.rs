@@ -328,6 +328,21 @@ pub use transitions::set_scroll;
 /// Replace a row's data in-place by `RowId` (the cell-editing escape valve).
 pub use transitions::update_row;
 
+/// Replace the entire row set (streaming full-refresh).
+pub use transitions::set_rows;
+
+/// Insert a single row at a position (caller supplies the `RowId`).
+pub use transitions::insert_row;
+
+/// Append rows to the end of the row set (streaming new records).
+pub use transitions::append_rows;
+
+/// Remove a single row by `RowId` (no-op if absent).
+pub use transitions::remove_row;
+
+/// Remove multiple rows by `RowId` in one transition.
+pub use transitions::remove_rows;
+
 /// Record a measured row height (px) for the variable-row-height cache.
 ///
 /// `index` is the row's zero-based position in the current page's
