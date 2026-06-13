@@ -80,17 +80,17 @@
       text-decoration: none;
     }
     footer a:hover { text-decoration: underline; }
-    .testing-note {
+    .release-note {
       margin-top: 2.25rem;
       padding: 0.75rem 1rem;
-      background: #fef3c7;
-      border: 1px solid #fcd34d;
+      background: #dcfce7;
+      border: 1px solid #86efac;
       border-radius: 6px;
       font-size: 0.875rem;
-      color: #78350f;
+      color: #166534;
       line-height: 1.5;
     }
-    .testing-note strong { color: #78350f; }
+    .release-note strong { color: #166534; }
   </style>
 </head>
 <body>
@@ -98,7 +98,7 @@
     <div class="logo">chorale<span>.</span></div>
     <p class="tagline">
       Framework-agnostic headless table components for Rust web apps.<br />
-      Pure immutable state transitions — plug into Dioxus or Leptos.
+      Pure immutable state transitions. Plug into Dioxus or Leptos.
     </p>
     <div class="buttons">
       <a href="/rust-chorale/dioxus/" class="btn btn-dioxus">
@@ -108,13 +108,14 @@
         Leptos demo <span class="badge">0.8</span>
       </a>
     </div>
-    <p class="testing-note">
-      <strong>* v0.2.0 is currently in testing.</strong> Expect bugs.
-      File anything broken at the GitHub repo below.
+    <p class="release-note">
+      <strong>v0.2.0 is released and live on crates.io.</strong> Adds the
+      Leptos adapter, the <code>chorale-derive</code> macro, and built-in
+      light/dark theming. Found a bug? File it at the GitHub repo below.
     </p>
   </main>
   <footer>
-    <p>chorale v0.2.0 &mdash;
+    <p>chorale v0.2.0 ·
       <a href="https://github.com/zernst3/rust-chorale" target="_blank" rel="noopener">
         github.com/zernst3/rust-chorale
       </a>
