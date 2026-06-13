@@ -1316,7 +1316,9 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
     let editor_h_css = if variable_row_height {
         String::new()
     } else {
-        format!("height:{row_height}px;")
+        // border-box: keep the editing row exactly `row_height` px (border
+        // included) so it matches the spacer math and the display-row height.
+        format!("box-sizing:border-box;height:{row_height}px;")
     };
     let is_editing = editing_col == Some(col_id);
     let render_kind = col.render_kind.clone();
@@ -1651,8 +1653,15 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
     let clamp_css = if variable_row_height {
         String::new()
     } else {
+        // box-sizing:border-box makes `height` the row's TOTAL height (padding +
+        // border included), so the rendered row is exactly `row_height` px — the
+        // same height the virtualization spacer math reserves per row. Without it
+        // the 0.5rem vertical padding + 1px border leak ~17px past `row_height`,
+        // so scrollHeight wobbles as the rendered:spacer row ratio shifts during
+        // scroll and you get bounced up at the bottom. Mirrors the dioxus data_td
+        // fixed branch (which already sets box-sizing:border-box).
         format!(
-            "height:{row_height}px;overflow:hidden;\
+            "box-sizing:border-box;height:{row_height}px;overflow:hidden;\
              white-space:nowrap;text-overflow:ellipsis;"
         )
     };
