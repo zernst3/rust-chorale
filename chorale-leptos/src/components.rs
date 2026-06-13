@@ -1,4 +1,4 @@
-//! Leptos components for chorale tables.
+//! Leptos components for Chorale tables.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -2264,107 +2264,120 @@ where
             if !variable_row_height {
                 return;
             }
-            // Leptos runs user effects after the render effects for the same
-            // signal change have applied their DOM updates, so the rows this
-            // trigger change produced are already in the document, and
-            // getBoundingClientRect (which forces layout) returns real
-            // post-layout heights.
-            let Some(container) = scroll_ref.get_untracked() else {
-                return;
-            };
-            // Direct-child chain rather than a descendant selector:
-            // `:scope > table > tbody > tr[data-chorale-index]`. When a
-            // consumer renders a nested Table inside a detail panel, the
-            // descendant form (`[data-chorale-index]` anywhere below) also
-            // matches the child Table's rows, producing duplicate
-            // `data-chorale-index` keys (child 0,1,2... collide with parent
-            // 0,1,2...) that would corrupt the parent's row_heights map. The
-            // direct-child chain stops at the parent's own tbody. `:scope`
-            // anchors the selector at the scroll container itself — the same
-            // role Dioxus's `#{scroll_id}` element id plays.
-            let Ok(node_list) =
-                container.query_selector_all(":scope > table > tbody > tr[data-chorale-index]")
-            else {
-                return;
-            };
-            let mut measurements: HashMap<usize, f64> = HashMap::new();
-            for i in 0..node_list.length() {
-                let Some(node) = node_list.item(i) else {
-                    continue;
+            // Defer the DOM read to requestAnimationFrame. In Leptos 0.8 a
+            // user `Effect` and the view's `RenderEffect`s are ALL
+            // channel-driven `spawn_local` tasks with no relative ordering
+            // guarantee — and this Effect is created before the view, so on
+            // a trigger change (e.g. expanded_rows toggling) it wakes FIRST
+            // and would measure the PRE-PATCH DOM: every height matches the
+            // cached row_heights, the diff check below sees no change, and
+            // the stale (index-shifted) cache survives until the next scroll
+            // bucket — the user sees rows vanish after a collapse and a
+            // scroll jump when a first-expanded detail panel is finally
+            // measured late, above the fold. rAF callbacks run only after
+            // the microtask queue (including the render task that patches
+            // the DOM) has drained, so getBoundingClientRect (which forces
+            // layout) returns real post-patch heights — the same "measure
+            // after the framework flushed its edits" timing the Dioxus
+            // adapter gets from its `document::eval` round-trip.
+            request_animation_frame(move || {
+                let Some(container) = scroll_ref.get_untracked() else {
+                    return;
                 };
-                let Ok(el) = node.dyn_into::<web_sys::Element>() else {
-                    continue;
-                };
-                let Some(idx) = el
-                    .get_attribute("data-chorale-index")
-                    .and_then(|a| a.parse::<usize>().ok())
+                // Direct-child chain rather than a descendant selector:
+                // `:scope > table > tbody > tr[data-chorale-index]`. When a
+                // consumer renders a nested Table inside a detail panel, the
+                // descendant form (`[data-chorale-index]` anywhere below) also
+                // matches the child Table's rows, producing duplicate
+                // `data-chorale-index` keys (child 0,1,2... collide with parent
+                // 0,1,2...) that would corrupt the parent's row_heights map. The
+                // direct-child chain stops at the parent's own tbody. `:scope`
+                // anchors the selector at the scroll container itself — the same
+                // role Dioxus's `#{scroll_id}` element id plays.
+                let Ok(node_list) =
+                    container.query_selector_all(":scope > table > tbody > tr[data-chorale-index]")
                 else {
-                    continue;
+                    return;
                 };
-                measurements.insert(idx, el.get_bounding_client_rect().height());
-            }
-            if measurements.is_empty() {
-                return;
-            }
-            let total = visible.with_untracked(Vec::len);
-            // Compute the diff check, scroll anchoring, and the new state in
-            // one untracked read. try_* accessors make a stale fire after the
-            // table subtree is disposed a silent no-op instead of a panic.
-            let Some(update) = sig.try_with_untracked(|cur| {
-                // 0.5px diff threshold: prevents convergence loops caused by
-                // sub-pixel float rounding (matches chorale-dioxus).
-                let mut any_changed = false;
-                for (k, v) in &measurements {
-                    let old = cur.row_heights.get(k).copied().unwrap_or(cur.row_height);
-                    if (v - old).abs() > 0.5 {
-                        any_changed = true;
-                        break;
+                let mut measurements: HashMap<usize, f64> = HashMap::new();
+                for i in 0..node_list.length() {
+                    let Some(node) = node_list.item(i) else {
+                        continue;
+                    };
+                    let Ok(el) = node.dyn_into::<web_sys::Element>() else {
+                        continue;
+                    };
+                    let Some(idx) = el
+                        .get_attribute("data-chorale-index")
+                        .and_then(|a| a.parse::<usize>().ok())
+                    else {
+                        continue;
+                    };
+                    measurements.insert(idx, el.get_bounding_client_rect().height());
+                }
+                if measurements.is_empty() {
+                    return;
+                }
+                let total = visible.with_untracked(Vec::len);
+                // Compute the diff check, scroll anchoring, and the new state in
+                // one untracked read. try_* accessors make a stale fire after the
+                // table subtree is disposed a silent no-op instead of a panic.
+                let Some(update) = sig.try_with_untracked(|cur| {
+                    // 0.5px diff threshold: prevents convergence loops caused by
+                    // sub-pixel float rounding (matches chorale-dioxus).
+                    let mut any_changed = false;
+                    for (k, v) in &measurements {
+                        let old = cur.row_heights.get(k).copied().unwrap_or(cur.row_height);
+                        if (v - old).abs() > 0.5 {
+                            any_changed = true;
+                            break;
+                        }
+                    }
+                    if !any_changed {
+                        return None;
+                    }
+                    // Scroll anchoring: when a row's measured height changes
+                    // (typically a freshly-rendered detail panel going from
+                    // estimate → real), the total height of all rows ABOVE the
+                    // current scroll position can change too. Applying the new
+                    // measurements without adjusting scroll_top shifts visible
+                    // content by the delta — the user sees that as a jump. Sum
+                    // the per-row height delta for every row whose top edge sits
+                    // above cur.scroll_top, bump scroll_top by that sum, and
+                    // write it back to the DOM scroll container so the visible
+                    // content stays visually anchored. Math is identical to the
+                    // chorale-dioxus VIRT-2 anchoring loop.
+                    let cur_scroll = cur.scroll_top;
+                    let default_h = cur.row_height;
+                    let mut row_top_with_old = 0.0_f64;
+                    let mut scroll_delta = 0.0_f64;
+                    for idx in 0..total {
+                        let old_h = cur.row_heights.get(&idx).copied().unwrap_or(default_h);
+                        if row_top_with_old >= cur_scroll {
+                            break;
+                        }
+                        if let Some(new_h) = measurements.get(&idx).copied() {
+                            let bounded_old = old_h.max(0.0);
+                            let bounded_new = new_h.max(0.0);
+                            scroll_delta += bounded_new - bounded_old;
+                        }
+                        row_top_with_old += old_h.max(0.0);
+                    }
+                    let new_scroll = (cur_scroll + scroll_delta).max(0.0);
+                    let mut new_state = batch_record_row_heights(cur, &measurements);
+                    new_state.scroll_top = new_scroll;
+                    Some((new_state, new_scroll, scroll_delta))
+                }) else {
+                    return;
+                };
+                if let Some((new_state, new_scroll, scroll_delta)) = update {
+                    let _ = sig.try_set(new_state);
+                    if scroll_delta.abs() > 0.5 {
+                        #[allow(clippy::cast_possible_truncation)]
+                        container.set_scroll_top(new_scroll.round() as i32);
                     }
                 }
-                if !any_changed {
-                    return None;
-                }
-                // Scroll anchoring: when a row's measured height changes
-                // (typically a freshly-rendered detail panel going from
-                // estimate → real), the total height of all rows ABOVE the
-                // current scroll position can change too. Applying the new
-                // measurements without adjusting scroll_top shifts visible
-                // content by the delta — the user sees that as a jump. Sum
-                // the per-row height delta for every row whose top edge sits
-                // above cur.scroll_top, bump scroll_top by that sum, and
-                // write it back to the DOM scroll container so the visible
-                // content stays visually anchored. Math is identical to the
-                // chorale-dioxus VIRT-2 anchoring loop.
-                let cur_scroll = cur.scroll_top;
-                let default_h = cur.row_height;
-                let mut row_top_with_old = 0.0_f64;
-                let mut scroll_delta = 0.0_f64;
-                for idx in 0..total {
-                    let old_h = cur.row_heights.get(&idx).copied().unwrap_or(default_h);
-                    if row_top_with_old >= cur_scroll {
-                        break;
-                    }
-                    if let Some(new_h) = measurements.get(&idx).copied() {
-                        let bounded_old = old_h.max(0.0);
-                        let bounded_new = new_h.max(0.0);
-                        scroll_delta += bounded_new - bounded_old;
-                    }
-                    row_top_with_old += old_h.max(0.0);
-                }
-                let new_scroll = (cur_scroll + scroll_delta).max(0.0);
-                let mut new_state = batch_record_row_heights(cur, &measurements);
-                new_state.scroll_top = new_scroll;
-                Some((new_state, new_scroll, scroll_delta))
-            }) else {
-                return;
-            };
-            if let Some((new_state, new_scroll, scroll_delta)) = update {
-                let _ = sig.try_set(new_state);
-                if scroll_delta.abs() > 0.5 {
-                    #[allow(clippy::cast_possible_truncation)]
-                    container.set_scroll_top(new_scroll.round() as i32);
-                }
-            }
+            }); // end request_animation_frame
         });
     }
 
