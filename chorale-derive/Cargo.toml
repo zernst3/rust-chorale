@@ -9,7 +9,7 @@ rust-version.workspace = true
 description = "Proc-macro for automatic ColumnDef generation from a #[derive(TableRow)] struct."
 readme = "../README.md"
 keywords = ["table", "derive", "macro", "headless"]
-categories = ["gui", "proc-macros"]
+categories = ["gui", "development-tools::procedural-macro-helpers"]
 
 [lib]
 proc-macro = true
