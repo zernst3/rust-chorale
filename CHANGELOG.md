@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_No unreleased changes; everything below shipped in 0.2.0._
+
+## [0.2.0] — 2026-06-12
+
 ### Added
 
 - **Select cell-editor (`EditorKind::Select { options }`).** A native `<select>`
@@ -31,8 +35,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entry described the prop as `EventHandler<TRow, Element>`; the actual
   `chorale-dioxus` `<Table>` prop is `Callback<TRow, Element>`
   (`chorale-dioxus/src/components.rs`). Corrected in the 0.2.0 entry below.
-
-## [0.2.0] — 2026-06-05
 
 ### ⚠ Breaking changes
 
