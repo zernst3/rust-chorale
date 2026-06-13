@@ -257,6 +257,7 @@ pub type RowClassFn<TRow> = Arc<dyn Fn(&Row<TRow>) -> String + Send + Sync>;
 pub type CellClassFn<TRow> = Arc<dyn Fn(&CellInfo<TRow>) -> String + Send + Sync>;
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
