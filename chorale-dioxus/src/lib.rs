@@ -144,7 +144,7 @@ pub use components::RowCellRenderer;
 /// ```
 pub use components::RowCellRenderers;
 
-/// Create a reactive chorale table handle backed by a Dioxus signal.
+/// Create a reactive Chorale table handle backed by a Dioxus signal.
 ///
 /// Call inside a component to obtain a [`UseTableHandle<TRow>`]. Pass the
 /// handle to [`Table`] and use its typed methods to dispatch transitions from

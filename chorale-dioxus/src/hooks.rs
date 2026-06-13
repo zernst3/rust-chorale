@@ -1,4 +1,4 @@
-//! Dioxus hooks for chorale tables.
+//! Dioxus hooks for Chorale tables.
 
 use chorale_core::{
     clear_sort, collapse_all_groups, collapse_all_rows, deselect_all, deselect_all_visible_page,
@@ -11,7 +11,7 @@ use chorale_core::{
 };
 use dioxus::prelude::*;
 
-/// A reactive handle to a chorale table, returned by [`use_table`].
+/// A reactive handle to a Chorale table, returned by [`use_table`].
 ///
 /// Wraps a [`Signal<TableState<TRow>>`] and exposes typed transition
 /// helpers so call sites do not need to import `chorale_core::transitions`
@@ -282,7 +282,7 @@ impl<TRow: Clone + 'static> UseTableHandle<TRow> {
     }
 }
 
-/// Create a reactive chorale table handle backed by a Dioxus signal.
+/// Create a reactive Chorale table handle backed by a Dioxus signal.
 ///
 /// `init` is called once on component mount to produce the initial
 /// [`TableState`]. The returned [`UseTableHandle`] is [`Copy`] and provides
