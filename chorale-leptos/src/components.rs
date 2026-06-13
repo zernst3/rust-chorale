@@ -2830,8 +2830,11 @@ where
                 view! {
                     <div
                         class="chorale-selection-toolbar"
-                        style="width:100%;box-sizing:border-box;\
-                               border-bottom:2px solid var(--chorale-accent-strong, #1d4ed8);"
+                        // Structural only: no visible border here. The slot
+                        // content supplies its own visual treatment. A colored
+                        // border on the wrapper showed as a stray line whenever
+                        // the slot rendered empty (consumer toolbar toggled off).
+                        style="width:100%;box-sizing:border-box;"
                     >
                         {slot()}
                     </div>

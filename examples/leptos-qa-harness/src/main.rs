@@ -508,8 +508,12 @@ fn App() -> impl IntoView {
             if dark_mode_on.get() { "body{background:#14121e;}" } else { "body{background:#f5f5f7;}" }
         }></style>
         <div style="font-family: sans-serif; padding: 1rem; max-width: 1400px; margin: 0 auto;">
-            <h1>"chorale QA Harness (Leptos)"</h1>
-            <p>"Dataset: "{row_count}" rows"</p>
+            <h1 style=move || if dark_mode_on.get() { "color:#e6e6e6;" } else { "color:#1a1a1a;" }>
+                "Chorale QA Harness (Leptos)"
+            </h1>
+            <p style=move || if dark_mode_on.get() { "color:#c8c8c8;" } else { "color:#444;" }>
+                "Dataset: "{row_count}" rows"
+            </p>
 
             // ── Feature toggles ──────────────────────────────────────────────
             //
