@@ -10,8 +10,8 @@ use chorale_core::{
     move_active_cell_last, move_active_cell_page, move_active_cell_to_edge, scrollable_columns,
     select_all as select_all_range, start_range_selection, theme_stylesheet, to_csv,
     visible_grouped_view, visible_view, visible_window, visible_window_variable, ActiveCell,
-    Alignment, CellValue, ClipboardCopyEvent, ClipboardPasteEvent, ColumnDef, ColumnId,
-    CommittedEdit, EditorKind, FilterKind, FilterValue, GroupKey, GroupedPaginationMode,
+    AggregatorKind, Alignment, CellValue, ClipboardCopyEvent, ClipboardPasteEvent, ColumnDef,
+    ColumnId, CommittedEdit, EditorKind, FilterKind, FilterValue, GroupKey, GroupedPaginationMode,
     GroupedRow, Labels, NaiveDate, NavDirection, PaginationMode, RangeSelection, RenderKind,
     RenderRow, RowId, SortAction, SortDirection, SortState, TableState, Theme, VirtualWindow,
     THEME_ROOT_CLASS,
@@ -1846,6 +1846,20 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
 // Group header row
 // ---------------------------------------------------------------------------
 
+/// Short prefix shown before a column's aggregate value in the group header,
+/// hinting at which aggregator produced it. `AggregatorKind` is
+/// `#[non_exhaustive]`, so the wildcard covers `Custom` and future variants.
+fn aggregator_prefix<TRow>(kind: Option<&AggregatorKind<TRow>>) -> &'static str {
+    match kind {
+        Some(AggregatorKind::Sum) => "\u{3a3}", // Σ
+        Some(AggregatorKind::Average) => "avg",
+        Some(AggregatorKind::Count) => "count",
+        Some(AggregatorKind::Min) => "min",
+        Some(AggregatorKind::Max) => "max",
+        _ => "",
+    }
+}
+
 #[allow(clippy::too_many_arguments, clippy::cast_precision_loss)]
 fn render_group_header<TRow: Clone + PartialEq + Send + Sync + 'static>(
     key: GroupKey,
@@ -1853,6 +1867,9 @@ fn render_group_header<TRow: Clone + PartialEq + Send + Sync + 'static>(
     depth: usize,
     row_count: usize,
     is_collapsed: bool,
+    aggregates: &[Option<CellValue>],
+    visible_cols: &[ColumnDef<TRow>],
+    cell_renderers: &CellRenderers,
     effective_col_count: usize,
     handle: UseTableHandle<TRow>,
     group_header_class: &str,
@@ -1860,6 +1877,32 @@ fn render_group_header<TRow: Clone + PartialEq + Send + Sync + 'static>(
     let indent = format!("{}rem", depth as f64 * 1.5);
     let icon = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
     let group_header_class = group_header_class.to_owned();
+    // Per-column aggregate summary. Core computes each group's aggregates
+    // (one per column, in effective column order); render them here for any
+    // column that declares an aggregator. The value is formatted through the
+    // SAME renderer / RenderKind the data cells use, so currency, numbers,
+    // etc. match the column below (e.g. a summed Salary shows as "$148,234,567").
+    let agg_summary: Vec<AnyView> = visible_cols
+        .iter()
+        .zip(aggregates.iter())
+        .filter_map(|(col, agg)| {
+            let value = agg.as_ref()?;
+            let prefix = aggregator_prefix(col.aggregator.as_ref());
+            let header = col.header.clone();
+            let renderer = cell_renderers.get(col.id);
+            let value_view = render_cell_value(value, &col.render_kind, renderer.as_ref());
+            Some(
+                view! {
+                    <span style="margin-left:1.25rem;font-weight:normal;font-size:0.8125rem;\
+                                  color:var(--chorale-text-muted, #6b7280);">
+                        {format!("{prefix} {header}: ")}
+                    </span>
+                    <span style="font-weight:600;font-size:0.8125rem;">{value_view}</span>
+                }
+                .into_any(),
+            )
+        })
+        .collect();
     view! {
         <tr
             class=group_header_class
@@ -1880,6 +1923,7 @@ fn render_group_header<TRow: Clone + PartialEq + Send + Sync + 'static>(
                               font-weight:normal;color:var(--chorale-text-muted, #6b7280);">
                     {format!("({row_count})")}
                 </span>
+                {agg_summary}
             </td>
         </tr>
     }
@@ -3107,13 +3151,16 @@ where
                                         depth,
                                         row_count,
                                         is_collapsed,
-                                        ..
+                                        aggregates,
                                     } => render_group_header(
                                         key,
                                         label,
                                         depth,
                                         row_count,
                                         is_collapsed,
+                                        &aggregates,
+                                        &visible_cols,
+                                        &cell_renderers,
                                         effective_col_count,
                                         handle,
                                         &group_header_class,
@@ -3399,8 +3446,13 @@ where
                                 "position:static;top:auto;z-index:auto;"
                             };
                             Some(view! {
+                                // No border-bottom on the empty detail-expander
+                                // header cell: a line under an empty utility
+                                // column reads as a stray segment (issue #21).
+                                // The header underline begins at the first data
+                                // column. Matches the dioxus chevron header.
                                 <th style=format!(
-                                    "width:24px;padding:0;border-bottom:1px solid var(--chorale-border, #ddd);\
+                                    "width:24px;padding:0;\
                                      background:var(--chorale-header-bg, #f8f9fa);{chev_sticky}"
                                 ) />
                             })
@@ -3419,7 +3471,7 @@ where
 
                         let filter_chevron_th = if has_detail && filter_enabled {
                             Some(view! {
-                                <th style="width:24px;padding:0;border-bottom:1px solid var(--chorale-divider, #eee);background:var(--chorale-surface, #fff);" />
+                                <th style="width:24px;padding:0;background:var(--chorale-surface, #fff);" />
                             })
                         } else {
                             None

@@ -766,7 +766,7 @@ fn App() -> Element {
                             grouping_on.set(!v);
                         },
                     }
-                    " Group by Role"
+                    " Grouping & Aggregation"
                 }
                 label {
                     style: "display: flex; align-items: center; gap: 0.25rem;",

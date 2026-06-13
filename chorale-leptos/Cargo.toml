@@ -19,7 +19,7 @@ default = []
 xlsx = ["chorale-core/xlsx"]
 
 [dependencies]
-chorale-core = { path = "../chorale-core", version = "0.2.0" }
+chorale-core = { path = "../chorale-core", version = "0.2.1" }
 leptos = { version = "0.8", features = ["csr"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

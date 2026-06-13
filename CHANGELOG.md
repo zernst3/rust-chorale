@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_No unreleased changes; everything below shipped in 0.2.0._
+_No unreleased changes._
+
+## [0.2.1] — 2026-06-12
+
+### Fixed
+
+- **Group-header aggregates were computed but never rendered (both adapters).** Core computed each group's per-column aggregates (`GroupedRow::Header.aggregates`) and the README/CHANGELOG advertised "aggregators appear in group header rows," but `chorale-leptos` never received the values and `chorale-dioxus` took them as an unused `_aggregates` parameter — so grouping showed no totals. Both adapters now render a per-column aggregate summary in the group-header row (e.g. `Σ Salary: $147,520,249`), formatting each value through the same renderer / `RenderKind` the data cells use so currency and number formatting match. A short prefix (`Σ`, `avg`, `min`, `max`, `count`) hints at the aggregator.
+- **`AggregatorKind::Sum` of an all-integer column now returns `CellValue::Integer` instead of `CellValue::Float`.** A `Float` sum bypassed thousands-separator formatting (rendering `147520249.00` instead of `147,520,249`) and broke integer-only cell renderers. Sums fall back to `Float` only when a `Float` value actually contributed (or the total exceeds the exact-integer range of `f64`).
+- **Dioxus: selected rows were not visually highlighted (#20).** The selected-row background was set as an inline `background` declaration on the `<tr>`, but Dioxus 0.7's inline-style diff reliably updates CSS custom properties while dropping standard-property changes on `<tr>` — confirmed by reading the live DOM (a selected row kept the updated selected divider custom property but a stale/absent `background`). The highlight now rides a `data-chorale-row-selected` attribute plus a stylesheet rule in `theme_stylesheet()`; data attributes diff reliably, so selected rows paint correctly (matches the Leptos adapter).
+- **Detail-expander (chevron) column header drew a stray underline (#21).** The empty 24px expander column header carried a `border-bottom`, drawing a line under an empty utility column. Removed it in both adapters (header and filter rows) so the header underline begins at the first data column.
+
+### Changed
+
+- QA harness grouping toggle renamed **"Group by Role" → "Grouping & Aggregation"** to reflect that aggregates now render.
 
 ## [0.2.0] — 2026-06-12
 

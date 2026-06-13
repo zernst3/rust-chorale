@@ -223,7 +223,18 @@ fn compute_aggregates<TRow: Clone>(
             Some(match agg {
                 AggregatorKind::Sum => {
                     let sum: f64 = values.iter().filter_map(cell_to_f64).sum();
-                    CellValue::Float(sum)
+                    // Keep an all-integer sum as an Integer so downstream
+                    // number/currency formatters apply thousands separators —
+                    // a Float sum bypasses them (e.g. renders 147520249.00
+                    // instead of 147,520,249). Only fall back to Float when a
+                    // Float value actually contributed.
+                    let any_float = values.iter().any(|v| matches!(v, CellValue::Float(_)));
+                    if !any_float && sum.abs() < 9.007_199_254_740_992e15 {
+                        #[allow(clippy::cast_possible_truncation)]
+                        CellValue::Integer(sum as i64)
+                    } else {
+                        CellValue::Float(sum)
+                    }
                 }
                 AggregatorKind::Average => {
                     let nums: Vec<f64> = values.iter().filter_map(cell_to_f64).collect();
@@ -1588,8 +1599,8 @@ mod tests {
         } = &view[0]
         {
             assert_eq!(label, "A");
-            // aggregates[1] = Some(Float(30.0)) (value column at index 1)
-            assert_eq!(aggregates[1], Some(CellValue::Float(30.0)));
+            // aggregates[1] = Some(Integer(30)) — all-integer sum stays Integer (value col idx 1)
+            assert_eq!(aggregates[1], Some(CellValue::Integer(30)));
         } else {
             panic!("expected header at index 0");
         }
@@ -1598,7 +1609,7 @@ mod tests {
         } = &view[3]
         {
             assert_eq!(label, "B");
-            assert_eq!(aggregates[1], Some(CellValue::Float(30.0)));
+            assert_eq!(aggregates[1], Some(CellValue::Integer(30)));
         } else {
             panic!("expected header at index 3");
         }
