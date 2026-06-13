@@ -244,6 +244,7 @@ items land via opt-in props or transitions; nothing was removed.
 | **CSV export** (RFC 4180) | ✅ | ✅ |
 | **XLSX export** via `ExportXlsxButton` (feature = `"xlsx"`) | — | ✅ |
 | **User-overridable `Labels`** (i18n) | — | ✅ |
+| **Light / dark theming** out of the box (`theme` prop) + `Theme::Custom` for full token control | — | ✅ |
 | **`#[derive(TableRow)]`** macro (chorale-derive crate) | — | ✅ |
 | **Leptos adapter** (`chorale-leptos` crate) | — | ✅ |
 
@@ -293,6 +294,15 @@ items land via opt-in props or transitions; nothing was removed.
 - **User-overridable labels.** Pass a custom `Labels` struct to override every
   user-visible string — filter placeholder, pagination labels, export button
   text — for i18n without patching the library.
+- **Light / dark theming.** A `theme` prop on `<Table>` (`Theme::Light` default,
+  `Theme::Dark`, or `Theme::Custom`). Light and dark are built in and need zero
+  configuration — `theme=Theme::Dark` flips the whole table (header, rows,
+  toolbars, frozen cells, detail panels) via a shipped CSS-variable stylesheet
+  that the table injects on mount. `Theme::Light` is pixel-identical to the
+  previous hardcoded colors, so it is a no-op upgrade. `Theme::Custom` suppresses
+  the injected stylesheet so you can define the `--chorale-*` tokens yourself
+  (brand palette, a third theme, system-preference switching). Both adapters
+  expose the same prop and tokens.
 - **`selection_toolbar` slot.** Pass a child component shown only when one or
   more rows are selected (bulk-action toolbar pattern).
 - **Master/detail (sub-tables, Item 12).** Expandable rows reveal a per-row
