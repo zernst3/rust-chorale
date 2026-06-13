@@ -1,11 +1,11 @@
-# chorale
+# Chorale
 
 A framework-agnostic, type-safe data-table library for Rust. Ships with
 a Dioxus adapter and a Leptos adapter; adapters for Yew and Sycamore are
 planned for future releases. Inspired by
 [TanStack Table](https://tanstack.com/table).
 
-> **A note on "headless":** chorale uses the term in the
+> **A note on "headless":** Chorale uses the term in the
 > [TanStack](https://tanstack.com/table) /
 > [Radix UI](https://www.radix-ui.com/) sense — the logic (sort, filter,
 > paginate, virtualize, select) lives in a separate crate from any

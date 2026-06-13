@@ -1,7 +1,7 @@
 //! `chorale-derive`: `#[derive(TableRow)]` for automatic `ColumnDef` generation.
 //!
 //! Apply to a concrete (non-generic) struct whose fields you want to expose as
-//! chorale table columns:
+//! Chorale table columns:
 //!
 //! ```rust,ignore
 //! use chorale_derive::TableRow;

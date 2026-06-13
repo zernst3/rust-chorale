@@ -123,7 +123,7 @@ pub use components::ValidateEditFn;
 /// Input passed to the `validate_edit` callback before a cell edit is committed.
 pub use components::EditValidation;
 
-/// Create a reactive chorale table handle backed by a Leptos `RwSignal`.
+/// Create a reactive Chorale table handle backed by a Leptos `RwSignal`.
 ///
 /// Call inside a Leptos component to obtain a [`UseTableHandle<TRow>`]. Pass
 /// the handle to [`Table`] and use its typed methods to dispatch transitions

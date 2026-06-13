@@ -48,7 +48,7 @@ impl Theme {
 ///
 /// The shipped stylesheet scopes every token block under
 /// `.chorale-root[data-chorale-theme="..."]`, so themes apply only inside
-/// chorale tables and never leak variables into the host page. Multiple
+/// Chorale tables and never leak variables into the host page. Multiple
 /// tables on one page can carry different `data-chorale-theme` values
 /// simultaneously.
 pub const THEME_ROOT_CLASS: &str = "chorale-root";

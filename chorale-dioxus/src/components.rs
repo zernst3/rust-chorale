@@ -1,4 +1,4 @@
-//! Dioxus components for chorale tables.
+//! Dioxus components for Chorale tables.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};

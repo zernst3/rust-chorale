@@ -3,7 +3,7 @@ name = "qa-harness"
 default_platform = "web"
 
 [web.app]
-title = "chorale QA Harness (Dioxus)"
+title = "Chorale QA Harness (Dioxus)"
 
 [web.watcher]
 reload_html = true

@@ -1,4 +1,4 @@
-//! Leptos hooks for chorale tables.
+//! Leptos hooks for Chorale tables.
 
 use chorale_core::{
     clear_sort, collapse_all_groups, collapse_all_rows, deselect_all, deselect_all_visible_page,
@@ -11,7 +11,7 @@ use chorale_core::{
 };
 use leptos::prelude::*;
 
-/// A reactive handle to a chorale table, returned by [`use_chorale_table`].
+/// A reactive handle to a Chorale table, returned by [`use_chorale_table`].
 ///
 /// Wraps a [`RwSignal<TableState<TRow>>`] and exposes typed transition
 /// helpers so call sites do not need to import `chorale_core::transitions`
@@ -234,7 +234,7 @@ impl<TRow: Clone + PartialEq + Send + Sync + 'static> UseTableHandle<TRow> {
     }
 }
 
-/// Create a reactive chorale table handle backed by a Leptos `RwSignal`.
+/// Create a reactive Chorale table handle backed by a Leptos `RwSignal`.
 ///
 /// `rows` and `columns` define the initial table state. Each row is assigned
 /// a new random [`RowId`]. The returned [`UseTableHandle`] is [`Copy`] and
