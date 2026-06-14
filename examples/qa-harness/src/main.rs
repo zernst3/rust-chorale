@@ -936,6 +936,25 @@ fn App() -> Element {
                 }
             }
 
+            if *master_detail_on.read() {
+                div {
+                    style: "margin-bottom: 0.5rem; padding: 0.5rem 0.75rem; font-size: 0.8rem; \
+                            line-height: 1.55; color: #374151; background: #eef2ff; \
+                            border: 1px solid #c7d2fe; border-radius: 4px;",
+                    div {
+                        style: "font-weight: 600; margin-bottom: 0.25rem;",
+                        "Master/detail keyboard navigation"
+                    }
+                    div { "Press ▶ ", b { "←" }, " onto the chevron column, then ", b { "Enter" }, " to expand or collapse the row." }
+                    div { "With the chevron highlighted on an expanded row, press ", b { "Tab" }, " to enter its sub-table (the first cell selects automatically)." }
+                    div { "Inside a sub-table, arrows navigate it and ", b { "Esc" }, " returns to the parent row." }
+                    div {
+                        style: "color: #6b7280; margin-top: 0.25rem;",
+                        "Note: Tabbing from a data cell moves to the next cell. You must be on the chevron to enter the sub-table."
+                    }
+                }
+            }
+
             Table {
                 handle: table,
                 theme: if *dark_mode_on.read() { Theme::Dark } else { Theme::Light },

@@ -9,12 +9,12 @@ use chorale_core::{
     move_active_cell, move_active_cell_end, move_active_cell_first, move_active_cell_home,
     move_active_cell_last, move_active_cell_page, move_active_cell_to_edge, scrollable_columns,
     select_all as select_all_range, start_range_selection, theme_stylesheet, to_csv,
-    visible_grouped_view, visible_view, visible_window, visible_window_variable, ActiveCell,
-    AggregatorKind, Alignment, CellValue, ClipboardCopyEvent, ClipboardPasteEvent, ColumnDef,
-    ColumnId, CommittedEdit, EditorKind, FilterKind, FilterValue, GroupKey, GroupedPaginationMode,
-    GroupedRow, Labels, NaiveDate, NavDirection, PaginationMode, RangeSelection, RenderKind,
-    RenderRow, RowId, SortAction, SortDirection, SortState, TableState, Theme, VirtualWindow,
-    THEME_ROOT_CLASS,
+    toggle_active_row_expansion, visible_grouped_view, visible_view, visible_window,
+    visible_window_variable, ActiveCell, AggregatorKind, Alignment, CellValue, ClipboardCopyEvent,
+    ClipboardPasteEvent, ColumnDef, ColumnId, CommittedEdit, EditorKind, FilterKind, FilterValue,
+    GroupKey, GroupedPaginationMode, GroupedRow, Labels, NaiveDate, NavDirection, PaginationMode,
+    RangeSelection, RenderKind, RenderRow, RowId, SortAction, SortDirection, SortState, TableState,
+    Theme, VirtualWindow, DETAIL_EXPANDER_COLUMN, THEME_ROOT_CLASS,
 };
 #[cfg(target_arch = "wasm32")]
 use chorale_core::{batch_record_row_heights, paste_tsv_into_range, to_clipboard_tsv};
@@ -1689,6 +1689,9 @@ fn data_td<TRow: Clone + PartialEq + Send + Sync + 'static>(
                         cb.run(row_id);
                     }
                 }
+                // Focus this cell's OWN table container so arrow keys drive the
+                // table you just clicked into (the child sub-table, when nested).
+                focus_owning_container(&ev);
                 ev.stop_propagation();
             }
             on:dblclick=move |_| {
@@ -1802,7 +1805,7 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
         >
             {if selection_enabled {
                 Some(view! {
-                    <td style="padding:0.5rem;border-bottom:1px solid var(--chorale-divider, #eee);width:2.5rem;">
+                    <td style="padding:0.5rem;border-bottom:1px solid var(--chorale-divider, #eee);width:2.5rem;text-align:center;">
                         <input
                             type="checkbox"
                             prop:checked=is_selected
@@ -1819,13 +1822,28 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
             {if has_detail {
                 let chevron = if is_expanded { "▼" } else { "▶" };
                 let aria = if is_expanded { "Collapse row" } else { "Expand row" };
+                // Focus ring when the active cell is on the detail-expander
+                // column of this row (keyboard navigation, issue #17).
+                let chevron_focused = active_cell.is_some_and(|ac| {
+                    ac.row_idx == row_index && ac.column_id == DETAIL_EXPANDER_COLUMN
+                });
+                let outline = if chevron_focused {
+                    "outline:2px solid var(--chorale-active-cell-outline, #0078d4);outline-offset:-2px;"
+                } else {
+                    ""
+                };
                 Some(view! {
                     <td
                         class="chorale-cell chorale-detail-chevron"
-                        style="width:24px;cursor:pointer;user-select:none;text-align:center;\
-                               border-bottom:1px solid var(--chorale-divider, #eee);"
+                        style=format!(
+                            "width:24px;cursor:pointer;user-select:none;text-align:center;\
+                             position:relative;\
+                             border-bottom:1px solid var(--chorale-divider, #eee);{outline}"
+                        )
                         aria-label=aria
+                        aria-expanded=if is_expanded { "true" } else { "false" }
                         on:click=move |ev| {
+                            focus_owning_container(&ev);
                             ev.stop_propagation();
                             handle.toggle_row_expansion(row_id);
                         }
@@ -2041,6 +2059,84 @@ fn trigger_blob_download(blob: &web_sys::Blob, filename: &str) {
     web_sys::Url::revoke_object_url(&url).ok();
 }
 
+/// Move keyboard focus INTO the nested sub-table of an expanded row (issue #17
+/// part 2): find this table's data row by visible index, take its detail-panel
+/// sibling, and focus the first `tabindex=0` container inside it (the child
+/// table's keyboard container). The `:scope > table > tbody > tr` chain keeps
+/// the lookup scoped to this table's own rows.
+#[cfg(target_arch = "wasm32")]
+fn focus_child_subtable(scroll_ref: NodeRef<html::Div>, row_idx: usize) {
+    use wasm_bindgen::JsCast;
+    let Some(container) = scroll_ref.get_untracked() else {
+        return;
+    };
+    let sel = format!(":scope > table > tbody > tr[data-chorale-index=\"{row_idx}\"]");
+    if let Ok(Some(row)) = container.query_selector(&sel) {
+        if let Some(panel) = row.next_element_sibling() {
+            if let Ok(Some(kb)) = panel.query_selector("[tabindex=\"0\"]") {
+                if let Ok(el) = kb.dyn_into::<web_sys::HtmlElement>() {
+                    let _ = el.focus();
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn focus_child_subtable(_scroll_ref: NodeRef<html::Div>, _row_idx: usize) {}
+
+/// Move keyboard focus OUT of a nested sub-table back to its parent table's
+/// keyboard container (issue #17 part 2): walk up from this table's own
+/// container to the nearest ancestor with `tabindex=0` (the only such ancestors
+/// are chorale keyboard containers) and focus it. No-op at top level.
+#[cfg(target_arch = "wasm32")]
+fn focus_parent_container(kb_ref: NodeRef<html::Div>) {
+    use wasm_bindgen::JsCast;
+    let Some(self_el) = kb_ref.get_untracked() else {
+        return;
+    };
+    let mut cur = self_el.parent_element();
+    while let Some(el) = cur {
+        if el.get_attribute("tabindex").as_deref() == Some("0") {
+            if let Ok(html_el) = el.clone().dyn_into::<web_sys::HtmlElement>() {
+                let _ = html_el.focus();
+            }
+            break;
+        }
+        cur = el.parent_element();
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn focus_parent_container(_kb_ref: NodeRef<html::Div>) {}
+
+/// Focus the keyboard container that OWNS the clicked element. Data cells and
+/// the chevron `stop_propagation()` on click, so the container's own bubble-
+/// phase focus-steal never sees the event; without this, a click sets the
+/// active cell visually but DOM focus stays on `<body>` (or, worse, on the
+/// parent table when you click into a nested child) and arrow keys then drive
+/// the wrong table. Walking from the event target to the nearest
+/// `.chorale-root[tabindex=0]` focuses exactly the table you clicked into —
+/// the child when you click a child cell, the parent otherwise (issue #17).
+#[cfg(target_arch = "wasm32")]
+fn focus_owning_container(ev: &leptos::ev::MouseEvent) {
+    use wasm_bindgen::JsCast;
+    let Some(target) = ev.target() else {
+        return;
+    };
+    let Ok(el) = target.dyn_into::<web_sys::Element>() else {
+        return;
+    };
+    if let Ok(Some(kb)) = el.closest(".chorale-root[tabindex=\"0\"]") {
+        if let Ok(html_el) = kb.dyn_into::<web_sys::HtmlElement>() {
+            let _ = html_el.focus();
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn focus_owning_container(_ev: &leptos::ev::MouseEvent) {}
+
 #[cfg(target_arch = "wasm32")]
 fn trigger_csv_download(csv: &str) {
     let array = js_sys::Array::new();
@@ -2207,6 +2303,14 @@ where
     // This shadow MUST come before the VIRT-2 measurement effect below and
     // before any downstream consumer of `variable_row_height`.
     let variable_row_height = variable_row_height || detail_renderer.is_some();
+    // Whether a detail panel can render; gates keyboard expand/collapse (#17).
+    let has_detail = detail_renderer.is_some();
+    // Activate the keyboard-navigable detail-expander column (#17) when a detail
+    // renderer is configured. `set_detail_column_enabled` no-ops when the flag
+    // already matches, so this settles after one dispatch.
+    Effect::new(move |_| {
+        handle.set_detail_column_enabled(has_detail);
+    });
 
     // on_copy is only used inside #[cfg(target_arch = "wasm32")] blocks.
     // on_paste is also used by the fill handle drag (pure Rust, no cfg guard needed).
@@ -2648,12 +2752,29 @@ where
                     fill_hover.set(None);
                 }
             }
-            on:click=move |_| {
+            on:click=move |ev: leptos::ev::MouseEvent| {
+                // Stop the click from bubbling to an ANCESTOR table's keyboard
+                // container. A nested child table lives inside the parent's DOM,
+                // so without this the parent's focus-steal would yank focus back
+                // to the parent the instant you click a child cell, and every
+                // arrow key would then drive the parent (issue #17 part 2).
+                ev.stop_propagation();
                 if let Some(el) = kb_ref.get_untracked() {
                     let _ = el.focus();
                 }
             }
+            // When this container gains focus with nothing selected — e.g. a
+            // single Tab descending into a nested sub-table — light up the first
+            // cell so keyboard nav is immediately visible (issue #17). `focus`
+            // does not bubble, so focusing a descendant (editor input, filter
+            // box) never triggers a spurious selection.
+            on:focus=move |_| handle.ensure_active_cell()
             on:keydown=move |ev: leptos::ev::KeyboardEvent| {
+                // A nested child table's keydown bubbles to this (parent)
+                // container too; without stopping it, both tables would
+                // navigate at once. Stop propagation so only the focused table
+                // handles the key (issue #17 part 2).
+                ev.stop_propagation();
                 let shift = ev.shift_key();
                 let ctrl = ev.ctrl_key() || ev.meta_key();
                 let key = ev.key();
@@ -2762,6 +2883,9 @@ where
                             clear_active_cell(&s2)
                         });
                         handle.signal.set(new_s);
+                        // Nested sub-table: Escape returns focus to the parent
+                        // container (issue #17 part 2). No-op at top level.
+                        focus_parent_container(kb_ref);
                     }
                     // Enter / F2 starts in-cell editing on the active cell
                     // (mirrors the dioxus Enter|F2 handler). The editor
@@ -2771,31 +2895,53 @@ where
                     // against any keydown that still bubbles while an edit
                     // is in progress.
                     "Enter" | "F2" => {
-                        let target = handle.signal.with_untracked(|s| {
-                            if s.editing.is_some() {
-                                return None;
-                            }
-                            s.active_cell.and_then(|ac| {
-                                let editable = s
-                                    .columns
-                                    .iter()
-                                    .any(|c| c.id == ac.column_id && c.editor.is_some());
-                                if !editable {
+                        // Enter on an expandable row whose focused cell is NOT
+                        // editable toggles its detail panel (keyboard expand/
+                        // collapse, issue #17). F2 always edits; Enter still
+                        // edits when the focused cell is editable.
+                        let is_enter = key == "Enter";
+                        let toggle_detail = is_enter
+                            && handle.signal.with_untracked(|s| {
+                                s.editing.is_none()
+                                    && s.active_cell.is_some_and(|ac| {
+                                        ac.column_id == DETAIL_EXPANDER_COLUMN
+                                    })
+                            });
+                        if toggle_detail {
+                            ev.prevent_default();
+                            let new_s = handle
+                                .signal
+                                .with_untracked(toggle_active_row_expansion);
+                            handle.signal.set(new_s);
+                        } else {
+                            let target = handle.signal.with_untracked(|s| {
+                                if s.editing.is_some() {
                                     return None;
                                 }
-                                // active_cell holds a visible row INDEX;
-                                // resolve it to a RowId through the same
-                                // post-filter post-sort view the body renders.
-                                let rows = visible_view(s);
-                                match rows.get(ac.row_idx) {
-                                    Some(RenderRow::Data { id, .. }) => Some((*id, ac.column_id)),
-                                    _ => None,
-                                }
-                            })
-                        });
-                        if let Some((row_id, col_id)) = target {
-                            ev.prevent_default();
-                            handle.start_edit(row_id, col_id);
+                                s.active_cell.and_then(|ac| {
+                                    let editable = s
+                                        .columns
+                                        .iter()
+                                        .any(|c| c.id == ac.column_id && c.editor.is_some());
+                                    if !editable {
+                                        return None;
+                                    }
+                                    // active_cell holds a visible row INDEX;
+                                    // resolve it to a RowId through the same
+                                    // post-filter post-sort view the body renders.
+                                    let rows = visible_view(s);
+                                    match rows.get(ac.row_idx) {
+                                        Some(RenderRow::Data { id, .. }) => {
+                                            Some((*id, ac.column_id))
+                                        }
+                                        _ => None,
+                                    }
+                                })
+                            });
+                            if let Some((row_id, col_id)) = target {
+                                ev.prevent_default();
+                                handle.start_edit(row_id, col_id);
+                            }
                         }
                     }
                     "a" | "A" if ctrl => {
@@ -2865,19 +3011,47 @@ where
                     }
                     "Tab" => {
                         ev.prevent_default();
-                        let tab_dir = if shift { NavDirection::Left } else { NavDirection::Right };
-                        let (new_s, new_ac) = handle.signal.with_untracked(|s| {
-                            let ns = move_active_cell(s, tab_dir);
-                            let ac = ns.active_cell;
-                            (ns, ac)
-                        });
-                        handle.signal.set(new_s);
-                        if let (Some(ac), Some(cb)) = (new_ac, on_tab_to_editable) {
-                            let is_editable = handle.signal.with_untracked(|s| {
-                                s.columns.iter().any(|c| c.id == ac.column_id && c.editor.is_some())
+                        // Tab on the chevron of an EXPANDED row descends into the
+                        // sub-table (issue #17 part 2). Otherwise normal cell tab.
+                        let descend_row = if shift {
+                            None
+                        } else {
+                            handle.signal.with_untracked(|s| {
+                                s.active_cell.and_then(|ac| {
+                                    if ac.column_id != DETAIL_EXPANDER_COLUMN {
+                                        return None;
+                                    }
+                                    match visible_view(s).get(ac.row_idx) {
+                                        Some(RenderRow::Data { id, .. })
+                                            if s.expanded_rows.contains(id) =>
+                                        {
+                                            Some(ac.row_idx)
+                                        }
+                                        _ => None,
+                                    }
+                                })
+                            })
+                        };
+                        if let Some(row_idx) = descend_row {
+                            focus_child_subtable(scroll_ref, row_idx);
+                        } else {
+                            let tab_dir =
+                                if shift { NavDirection::Left } else { NavDirection::Right };
+                            let (new_s, new_ac) = handle.signal.with_untracked(|s| {
+                                let ns = move_active_cell(s, tab_dir);
+                                let ac = ns.active_cell;
+                                (ns, ac)
                             });
-                            if is_editable {
-                                cb.run(ac);
+                            handle.signal.set(new_s);
+                            if let (Some(ac), Some(cb)) = (new_ac, on_tab_to_editable) {
+                                let is_editable = handle.signal.with_untracked(|s| {
+                                    s.columns
+                                        .iter()
+                                        .any(|c| c.id == ac.column_id && c.editor.is_some())
+                                });
+                                if is_editable {
+                                    cb.run(ac);
+                                }
                             }
                         }
                     }
@@ -3424,6 +3598,15 @@ where
                                         <input
                                             type="checkbox"
                                             prop:checked=all_page_selected
+                                            // Stop the click bubbling to the keyboard
+                                            // container's focus-steal: focusing the
+                                            // container runs `ensure_active_cell`, whose
+                                            // state change re-renders the header and
+                                            // resets this controlled checkbox back to
+                                            // unchecked mid-click — so `change` would
+                                            // otherwise fire as `false` and deselect.
+                                            // Mirrors the row checkbox.
+                                            on:click=move |ev: leptos::ev::MouseEvent| ev.stop_propagation()
                                             on:change=move |ev| {
                                                 if event_target_checked(&ev) {
                                                     handle.select_all_filtered();
@@ -3446,13 +3629,15 @@ where
                                 "position:static;top:auto;z-index:auto;"
                             };
                             Some(view! {
-                                // No border-bottom on the empty detail-expander
-                                // header cell: a line under an empty utility
-                                // column reads as a stray segment (issue #21).
-                                // The header underline begins at the first data
-                                // column. Matches the dioxus chevron header.
+                                // The detail-expander header carries the same
+                                // border-bottom as every other header cell so the
+                                // line under the header is continuous across all
+                                // columns. Omitting it left a visible gap in the
+                                // header underline above the chevron column.
+                                // Matches the dioxus chevron header.
                                 <th style=format!(
                                     "width:24px;padding:0;\
+                                     border-bottom:1px solid var(--chorale-border, #ddd);\
                                      background:var(--chorale-header-bg, #f8f9fa);{chev_sticky}"
                                 ) />
                             })

@@ -418,6 +418,15 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     let has_detail = detail_renderer.is_some();
     let variable_row_height = variable_row_height || has_detail;
 
+    // Keep the keyboard-navigable detail-expander column (#17) in sync with
+    // whether a detail renderer is configured. `use_reactive!` re-runs the
+    // effect when `has_detail` changes (the harness flips `detail_renderer` as
+    // a prop on the same component), not just on table-state changes;
+    // `set_detail_column_enabled` no-ops when the flag already matches.
+    use_effect(use_reactive!(|has_detail| {
+        handle.set_detail_column_enabled(has_detail);
+    }));
+
     // drag_state: Some((col_id, start_x_px, start_width_px)) while a resize is active.
     let mut drag_state: Signal<Option<(ColumnId, f64, f64)>> = use_signal(|| None);
     // drag_col_id: column being dragged for column-reorder (None when not reordering).
@@ -1097,9 +1106,21 @@ dioxus.send(parts.join('\n'));"
                     fill_hover.set(None);
                 }
             },
+            // When this container gains focus with nothing selected — e.g. a
+            // single Tab descending into a nested sub-table — light up the first
+            // cell so keyboard nav is immediately visible (issue #17). `onfocus`
+            // does not bubble, so focusing a descendant (editor input, filter
+            // box) never triggers a spurious selection.
+            onfocus: move |_| handle.ensure_active_cell(),
             onclick: {
                 let kb_id = kb_id.clone();
-                move |_| {
+                move |e: MouseEvent| {
+                    // Stop the click from bubbling to an ANCESTOR table's keyboard
+                    // container. A nested child table lives inside the parent's DOM,
+                    // so without this the parent's focus-steal below would yank focus
+                    // back to the parent the instant you click a child cell, and every
+                    // arrow key would then drive the parent (issue #17 part 2).
+                    e.stop_propagation();
                     let id = kb_id.clone();
                     // Only steal focus to the keyboard container when the click was NOT on
                     // an interactive child element (input, select, textarea, button).
@@ -1116,7 +1137,13 @@ dioxus.send(parts.join('\n'));"
             },
             onkeydown: {
                 let scroll_id_kb = scroll_id.clone();
+                let kb_id_kb = kb_id.clone();
                 move |e: KeyboardEvent| {
+                // A nested child table's keydown bubbles to this (parent)
+                // container too; without stopping it, both tables would
+                // navigate at once. Stop propagation so only the focused table
+                // handles the key (issue #17 part 2).
+                e.stop_propagation();
                 let shift = e.modifiers().contains(Modifiers::SHIFT);
                 let ctrl = e.modifiers().contains(Modifiers::CONTROL)
                     || e.modifiers().contains(Modifiers::META);
@@ -1227,6 +1254,10 @@ dioxus.send(parts.join('\n'));"
                                 clear_active_cell(&s2)
                             };
                             sig_w.set(new_s);
+                            // If this table is nested in another chorale table,
+                            // Escape returns focus to the parent (issue #17 part 2).
+                            // No-op for a top-level table.
+                            focus_parent_container(&kb_id_kb);
                         }
                         // Item 7: F2 (or Enter) starts in-cell editing on the
                         // active cell. The `editing.is_none()` guard matters:
@@ -1238,7 +1269,21 @@ dioxus.send(parts.join('\n'));"
                             let mut sig_w = handle.signal();
                             let s = sig_w.peek();
                             if s.editing.is_none() {
-                                if let Some(ac) = s.active_cell {
+                                // Enter while the active cell is on the
+                                // detail-expander (chevron) column toggles that
+                                // row's panel (keyboard expand/collapse, issue
+                                // #17). F2 always edits; Enter on a data cell
+                                // still edits.
+                                let is_enter = matches!(e.key(), Key::Enter);
+                                let on_expander = s.active_cell.is_some_and(|ac| {
+                                    ac.column_id == chorale_core::DETAIL_EXPANDER_COLUMN
+                                });
+                                if is_enter && on_expander {
+                                    e.prevent_default();
+                                    let new_s = chorale_core::toggle_active_row_expansion(&s);
+                                    drop(s);
+                                    sig_w.set(new_s);
+                                } else if let Some(ac) = s.active_cell {
                                     let rows = visible_view(&*s);
                                     if let Some(RenderRow::Data { id: row_id, .. }) = rows.get(ac.row_idx) {
                                         if let Ok(new_s) = chorale_core::start_edit(&*s, *row_id, ac.column_id) {
@@ -1303,15 +1348,43 @@ dioxus.send(parts.join('\n'));"
                         }
                         Key::Tab => {
                             e.prevent_default();
-                            let tab_dir = if shift { NavDirection::Left } else { NavDirection::Right };
-                            let mut sig_w = handle.signal();
-                            let new_s = move_active_cell(&*sig_w.peek(), tab_dir);
-                            let new_ac = new_s.active_cell;
-                            sig_w.set(new_s);
-                            if let (Some(ac), Some(cb)) = (new_ac, on_tab_to_editable) {
-                                let s = sig_w.peek();
-                                if s.columns.iter().any(|c| c.id == ac.column_id && c.editor.is_some()) {
-                                    cb.call(ac);
+                            // Tab on the chevron of an EXPANDED row descends into
+                            // that row's sub-table (issue #17 part 2). The active
+                            // cell otherwise tab-navigates cells as before.
+                            let descend_row = if shift {
+                                None
+                            } else {
+                                let sig = handle.signal();
+                                let s = sig.peek();
+                                s.active_cell.and_then(|ac| {
+                                    if ac.column_id != chorale_core::DETAIL_EXPANDER_COLUMN {
+                                        return None;
+                                    }
+                                    let view = visible_view(&s);
+                                    match view.get(ac.row_idx) {
+                                        Some(RenderRow::Data { id, .. })
+                                            if s.expanded_rows.contains(id) =>
+                                        {
+                                            Some(ac.row_idx)
+                                        }
+                                        _ => None,
+                                    }
+                                })
+                            };
+                            if let Some(row_idx) = descend_row {
+                                focus_child_subtable(&scroll_id_kb, row_idx);
+                            } else {
+                                let tab_dir =
+                                    if shift { NavDirection::Left } else { NavDirection::Right };
+                                let mut sig_w = handle.signal();
+                                let new_s = move_active_cell(&*sig_w.peek(), tab_dir);
+                                let new_ac = new_s.active_cell;
+                                sig_w.set(new_s);
+                                if let (Some(ac), Some(cb)) = (new_ac, on_tab_to_editable) {
+                                    let s = sig_w.peek();
+                                    if s.columns.iter().any(|c| c.id == ac.column_id && c.editor.is_some()) {
+                                        cb.call(ac);
+                                    }
                                 }
                             }
                         }
@@ -1408,18 +1481,20 @@ dioxus.send(parts.join('\n'));"
                                 // both header_th and select_all_th so the
                                 // line under the header is continuous
                                 // across all columns.
-                                // No border-bottom on the empty detail-expander
-                                // header cell: a line under an empty utility
-                                // column reads as a stray segment (issue #21).
-                                // The header underline begins at the first data
-                                // column.
+                                // The detail-expander header carries the same
+                                // border-bottom as every other header cell so the
+                                // line under the header is continuous across all
+                                // columns. Omitting it left a visible gap in the
+                                // header underline above the chevron column.
                                 th {
                                     style: if sticky_header {
                                         "width: 24px; padding: 0; \
+                                         border-bottom: 1px solid var(--chorale-border, #ddd); \
                                          position: sticky; top: 0; \
                                          background: var(--chorale-header-bg, #f8f9fa); z-index: 1;"
                                     } else {
                                         "width: 24px; padding: 0; \
+                                         border-bottom: 1px solid var(--chorale-border, #ddd); \
                                          position: static; top: auto; \
                                          z-index: auto; \
                                          background: var(--chorale-header-bg, #f8f9fa);"
@@ -1950,12 +2025,15 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
 
     rsx! {
         th {
-            // Key includes column_reorder_enabled so the <th> is RECREATED when
-            // reorder toggles (the cursor in `extra` changes the style string,
-            // and Dioxus 0.7's inline-style diff unreliably drops the background
-            // — leaving a transparent sticky header). Keying by col_id also lets
-            // reorder MOVE the <th> by identity rather than diffing in place.
-            key: "{col_id}-{column_reorder_enabled}",
+            // Key includes column_reorder_enabled AND is_sortable so the <th> is
+            // RECREATED whenever either toggles — both change the cursor in
+            // `extra` and thus the style string, and Dioxus 0.7's inline-style
+            // diff unreliably drops a declaration on an in-place change (the
+            // background on reorder, the border-bottom on sort — the header
+            // underline vanished from every data column when Sort was enabled).
+            // Keying by col_id also lets reorder MOVE the <th> by identity
+            // rather than diffing in place.
+            key: "{col_id}-{column_reorder_enabled}-{is_sortable}",
             style: "{extra}padding: 0.5rem 1rem; border-bottom: 1px solid var(--chorale-border, #ddd); \
                     text-align: {align}; white-space: nowrap; overflow: hidden; \
                     text-overflow: ellipsis; {sticky_top_decl} \
@@ -2716,6 +2794,16 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
         "var(--chorale-button-disabled-bg, #f0f0f0)"
     };
     let row_style = format!("--chorale-separator-color: {separator_color};");
+    // Focus ring on the chevron when the active cell is on the detail-expander
+    // column of this row (keyboard navigation, issue #17).
+    let chevron_focused = active_cell.is_some_and(|ac| {
+        ac.row_idx == row_index && ac.column_id == chorale_core::DETAIL_EXPANDER_COLUMN
+    });
+    let chevron_outline = if chevron_focused {
+        "outline: 2px solid var(--chorale-active-cell-outline, #0078d4); outline-offset: -2px;"
+    } else {
+        ""
+    };
     rsx! {
         tr {
             style: "{row_style}",
@@ -2736,8 +2824,9 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
                 td {
                     class: "chorale-cell chorale-detail-chevron",
                     style: "width: 24px; cursor: pointer; user-select: none; text-align: center; \
-                            box-shadow: inset 0 -1px 0 {separator_color};",
+                            position: relative; box-shadow: inset 0 -1px 0 {separator_color};{chevron_outline}",
                     "aria-label": if is_expanded { "Collapse row" } else { "Expand row" },
+                    "aria-expanded": if is_expanded { "true" } else { "false" },
                     onclick: move |_| handle.toggle_row_expansion(row_id),
                     if is_expanded { "▼" } else { "▶" }
                 }
@@ -2971,6 +3060,34 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
 fn refocus_keyboard_container(kb_id: &str) {
     dioxus::document::eval(&format!(
         "var el=document.getElementById('{kb_id}');if(el)el.focus();"
+    ));
+}
+
+/// Move keyboard focus INTO the nested sub-table of an expanded row (issue #17
+/// part 2). Finds the parent's data row by visible index, takes its detail
+/// panel sibling, and focuses the first `tabindex=0` container inside it (the
+/// child table's keyboard container). The `:scope > table > tbody > tr` chain
+/// keeps the lookup scoped to this table's own rows, not a nested child's.
+fn focus_child_subtable(scroll_id: &str, row_idx: usize) {
+    dioxus::document::eval(&format!(
+        "var sc=document.getElementById('{scroll_id}');\
+         if(sc){{var row=sc.querySelector(':scope > table > tbody > tr[data-chorale-index=\"{row_idx}\"]');\
+         if(row){{var p=row.nextElementSibling;\
+         var kb=p?p.querySelector('[tabindex=\"0\"]'):null;\
+         if(kb)kb.focus();}}}}"
+    ));
+}
+
+/// Move keyboard focus OUT of a nested sub-table back to its parent table's
+/// keyboard container (issue #17 part 2). Walks up the DOM from this table's
+/// own container to the nearest ancestor chorale keyboard container (id ending
+/// `-kb`) and focuses it. No-op for a top-level table (no such ancestor).
+fn focus_parent_container(kb_id: &str) {
+    dioxus::document::eval(&format!(
+        "var self=document.getElementById('{kb_id}');\
+         if(self){{var p=self.parentElement;\
+         while(p){{if(p.id&&p.id.slice(-3)==='-kb'&&p.getAttribute('tabindex')==='0'){{p.focus();break;}}\
+         p=p.parentElement;}}}}"
     ));
 }
 

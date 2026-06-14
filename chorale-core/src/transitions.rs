@@ -1026,6 +1026,59 @@ pub fn toggle_row_expansion<TRow: Clone>(
     }
 }
 
+/// Toggle the detail panel of the row that currently holds the active cell.
+///
+/// Resolves `active_cell.row_idx` through the visible view and, if it lands on
+/// a data row, toggles that row's expansion (keyboard expand/collapse, issue
+/// #17). No-op when there is no active cell or the active index is not a data
+/// row. Whether a panel actually renders is up to the adapter's
+/// `detail_renderer`; this only flips `expanded_rows`.
+#[must_use]
+pub fn toggle_active_row_expansion<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    let Some(ac) = state.active_cell else {
+        return state.clone();
+    };
+    let view = crate::views::visible_view(state);
+    if let Some(crate::views::RenderRow::Data { id, .. }) = view.get(ac.row_idx) {
+        let id = *id;
+        toggle_row_expansion(state, id)
+    } else {
+        state.clone()
+    }
+}
+
+/// Whether the active cell's column has an editor configured (so Enter should
+/// start an edit there rather than, say, toggle a detail panel).
+#[must_use]
+pub fn is_active_cell_editable<TRow: Clone>(state: &TableState<TRow>) -> bool {
+    let Some(ac) = state.active_cell else {
+        return false;
+    };
+    state
+        .columns
+        .iter()
+        .any(|c| c.id == ac.column_id && c.editor.is_some())
+}
+
+/// Enable or disable the detail-expander column as a keyboard-navigable column.
+///
+/// The adapter calls this (typically once, on mount) when a `detail_renderer`
+/// is configured, so [`DETAIL_EXPANDER_COLUMN`](crate::DETAIL_EXPANDER_COLUMN)
+/// joins the keyboard column order. No-op when the flag already matches.
+#[must_use]
+pub fn set_detail_column_enabled<TRow: Clone>(
+    state: &TableState<TRow>,
+    enabled: bool,
+) -> TableState<TRow> {
+    if state.detail_column_enabled == enabled {
+        return state.clone();
+    }
+    TableState {
+        detail_column_enabled: enabled,
+        ..state.clone()
+    }
+}
+
 /// Collapse all expanded rows (clear `expanded_rows`).
 #[must_use]
 pub fn collapse_all_rows<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
@@ -1040,17 +1093,68 @@ pub fn collapse_all_rows<TRow: Clone>(state: &TableState<TRow>) -> TableState<TR
 // ---------------------------------------------------------------------------
 
 /// Returns the ordered list of visible `ColumnId`s for keyboard navigation.
+///
+/// When `detail_column_enabled` is set, [`DETAIL_EXPANDER_COLUMN`] is prepended
+/// as the leading navigable column (issue #17), so `ArrowLeft` from the first
+/// data column lands the active cell on the chevron.
+///
+/// [`DETAIL_EXPANDER_COLUMN`]: crate::DETAIL_EXPANDER_COLUMN
 fn visible_column_ids<TRow: Clone>(state: &TableState<TRow>) -> Vec<ColumnId> {
-    crate::views::effective_column_order(state)
+    let mut ids: Vec<ColumnId> = crate::views::effective_column_order(state)
         .into_iter()
         .filter(|c| state.is_column_visible(c.id))
         .map(|c| c.id)
-        .collect()
+        .collect();
+    if state.detail_column_enabled {
+        ids.insert(0, crate::types::DETAIL_EXPANDER_COLUMN);
+    }
+    ids
 }
 
 /// Returns the visible row count (post-filter, post-sort, post-pagination).
 fn visible_row_count<TRow: Clone>(state: &TableState<TRow>) -> usize {
     crate::views::visible_view(state).len()
+}
+
+/// Advance `idx` past any detail-panel rows in the direction of travel.
+///
+/// Detail panels occupy a visible-row index but are full-width and have no
+/// selectable cell, so arrow navigation must skip over them rather than land
+/// the active cell on one. Walks in the travel direction first, then falls back
+/// to the nearest data row if it runs off the end still on a panel.
+fn skip_detail_rows<TRow: Clone>(
+    view: &[crate::views::RenderRow<TRow>],
+    idx: usize,
+    direction: NavDirection,
+) -> usize {
+    let is_panel = |i: usize| {
+        matches!(
+            view.get(i),
+            Some(crate::views::RenderRow::DetailPanel { .. })
+        )
+    };
+    if !is_panel(idx) {
+        return idx;
+    }
+    let last = view.len().saturating_sub(1);
+    let forward = matches!(direction, NavDirection::Down | NavDirection::Right);
+    let mut i = idx;
+    if forward {
+        while i < last && is_panel(i) {
+            i += 1;
+        }
+        while i > 0 && is_panel(i) {
+            i -= 1;
+        }
+    } else {
+        while i > 0 && is_panel(i) {
+            i -= 1;
+        }
+        while i < last && is_panel(i) {
+            i += 1;
+        }
+    }
+    i
 }
 
 /// Set the active cell to a specific visible-row index and column.
@@ -1148,10 +1252,40 @@ pub fn move_active_cell<TRow: Clone>(
         NavDirection::Right => (row, (col_idx + 1).min(last_col_idx)),
     };
 
+    // Detail panels occupy a visible-row index but have no selectable cell;
+    // skip over them so vertical navigation lands on the next/prev data row.
+    let new_row = skip_detail_rows(&crate::views::visible_view(state), new_row, direction);
+
     let new_col = cols[new_col_idx];
     TableState {
         active_cell: Some(ActiveCell::new(new_row, new_col)),
         range_selection: vec![RangeSelection::single(new_row, new_col)],
+        ..state.clone()
+    }
+}
+
+/// Ensure a cell is active so the table shows a focus ring the moment its
+/// keyboard container gains focus.
+///
+/// No-op when a cell is already active; otherwise selects the first navigable
+/// cell (row 0, first visible column). This is what lets a single Tab into a
+/// nested sub-table land on a visible, ready-to-navigate cell instead of an
+/// invisibly-focused container — without it, the first Tab only moves DOM focus
+/// and a second key press is needed before anything highlights (issue #17).
+#[must_use]
+pub fn ensure_active_cell<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
+    if state.active_cell.is_some() {
+        return state.clone();
+    }
+    let cols = visible_column_ids(state);
+    let row_count = visible_row_count(state);
+    if cols.is_empty() || row_count == 0 {
+        return state.clone();
+    }
+    let target = cols[0];
+    TableState {
+        active_cell: Some(ActiveCell::new(0, target)),
+        range_selection: vec![RangeSelection::single(0, target)],
         ..state.clone()
     }
 }

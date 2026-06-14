@@ -46,6 +46,17 @@ impl ColumnId {
     }
 }
 
+/// Reserved `ColumnId` for the detail-expander (chevron) column when it
+/// participates in keyboard navigation (issue #17).
+///
+/// When [`TableState::detail_column_enabled`](crate::TableState::detail_column_enabled)
+/// is `true`, this id is prepended to the keyboard column order so the active
+/// cell can land on the chevron. The leading control character makes it
+/// impossible to collide with a consumer-defined column id. Adapters compare
+/// `active_cell.column_id` against this constant to render the chevron's focus
+/// ring and to route Enter (toggle) / Tab (descend) on it.
+pub const DETAIL_EXPANDER_COLUMN: ColumnId = ColumnId("\u{1}chorale-detail-expander");
+
 impl std::fmt::Display for ColumnId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.0)

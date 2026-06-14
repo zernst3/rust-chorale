@@ -2,12 +2,13 @@
 
 use chorale_core::{
     append_rows, clear_sort, collapse_all_groups, collapse_all_rows, deselect_all,
-    deselect_all_visible_page, expand_all_groups, insert_row, load_more_rows, move_column,
-    remove_row, remove_rows, remove_sort, reset_column_width, select_all_filtered,
-    select_all_visible_page, set_column_visibility, set_column_width, set_filter, set_grouping,
-    set_page, set_page_size, set_pagination_mode, set_rows, set_scroll, set_selection, start_edit,
-    toggle_group, toggle_row_expansion, toggle_select_all, toggle_sort, update_row, ColumnId,
-    FilterValue, GroupKey, PaginationMode, RowId, SortAction, StateError, TableState,
+    deselect_all_visible_page, ensure_active_cell, expand_all_groups, insert_row, load_more_rows,
+    move_column, remove_row, remove_rows, remove_sort, reset_column_width, select_all_filtered,
+    select_all_visible_page, set_column_visibility, set_column_width, set_detail_column_enabled,
+    set_filter, set_grouping, set_page, set_page_size, set_pagination_mode, set_rows, set_scroll,
+    set_selection, start_edit, toggle_group, toggle_row_expansion, toggle_select_all, toggle_sort,
+    update_row, ColumnId, FilterValue, GroupKey, PaginationMode, RowId, SortAction, StateError,
+    TableState,
 };
 use leptos::prelude::*;
 
@@ -189,6 +190,19 @@ impl<TRow: Clone + PartialEq + Send + Sync + 'static> UseTableHandle<TRow> {
     /// Remove multiple rows by `RowId` in one transition.
     pub fn remove_rows(&self, ids: &[RowId]) {
         self.dispatch(|s| remove_rows(s, ids));
+    }
+
+    /// Enable/disable the detail-expander column in keyboard navigation (#17).
+    /// The `Table` component calls this on mount when a `detail_renderer` is set.
+    pub fn set_detail_column_enabled(&self, enabled: bool) {
+        self.dispatch(|s| set_detail_column_enabled(s, enabled));
+    }
+
+    /// Select the first navigable cell if none is active. Called when the
+    /// keyboard container gains focus so a single Tab into a nested sub-table
+    /// lands on a visible cell (#17).
+    pub fn ensure_active_cell(&self) {
+        self.dispatch(ensure_active_cell);
     }
 
     /// Move `column_id` to `to_index` in the render order.
