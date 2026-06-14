@@ -15,11 +15,16 @@ planned for future releases. Inspired by
 
 ## Status
 
-The current release is **v0.2.1**: `chorale-core`, `chorale-dioxus`, and
-`chorale-leptos` are published at v0.2.1 (and `chorale-derive` at v0.2.0) on
-crates.io. The 0.2.x line adds the Leptos adapter, the `chorale-derive` macro,
-built-in light/dark theming, grouping with rendered aggregates, and a large
-batch of table features over v0.1.0 (see `CHANGELOG.md`).
+The current release is **v0.2.2**: `chorale-core`, `chorale-dioxus`, and
+`chorale-leptos` are published at v0.2.2 (and `chorale-derive` at v0.2.0 — its
+macro is unchanged since 0.2.0) on crates.io. v0.2.2 adds a **row-set mutation
+API** (`set_rows` / `insert_row` / `append_rows` / `remove_row` / `remove_rows`
+for live and streaming data) and **full keyboard navigation for master/detail
+child tables** (the expand chevron is a navigable column — arrow onto it, Enter
+to expand, Tab to descend into the sub-table, Esc to return). The 0.2.x line
+also adds the Leptos adapter, the `chorale-derive` macro, built-in light/dark
+theming, grouping with rendered aggregates, and a large batch of table features
+over v0.1.0 (see `CHANGELOG.md`).
 
 All six `chorale-*` crate names are reserved on crates.io:
 [chorale](https://crates.io/crates/chorale),
@@ -309,6 +314,18 @@ items land via opt-in props or transitions; nothing was removed.
   detail panel. Pass an optional `detail_renderer` prop to `<Table>`; a 24px
   chevron column appears and clicking it calls `toggle_row_expansion`. Mount a
   child `<Table>` (or any element) inside the renderer for nested grids.
+- **Row-set mutation (live data).** `set_rows`, `insert_row(position, id, row)`,
+  `append_rows`, `remove_row(id)`, and `remove_rows(&[RowId])` on the handle
+  mutate the row *set* (not just one row's content via `update_row`) — what you
+  need for streaming or live-updating data. Each transition reconciles all
+  derived state (selection, expansion, editing, active cell, page) so
+  `TableState` stays coherent.
+- **Full keyboard navigation, including master/detail child tables.** Arrow
+  keys, `Shift`/`Ctrl`/`Cmd`+arrow, `Home`/`End`, `Page Up`/`Down`,
+  `Enter`/`F2` to edit, and `Ctrl`/`Cmd`+`C`/`V`. The expand chevron is a
+  navigable column: arrow onto it, `Enter` to expand/collapse, `Tab` to descend
+  into the open sub-table, `Esc` to return. See the
+  [Keyboard navigation](#keyboard-navigation) section.
 
 ### `chorale-derive`
 
@@ -319,6 +336,21 @@ items land via opt-in props or transitions; nothing was removed.
 Supported field attributes: `skip`, `header`, `initial_width`, `sortable`, `filter`,
 `options`, `align`, `render`. See the [Using `#[derive(TableRow)]`](#using-derivetablerow)
 section for the complete attribute reference.
+
+## Keyboard navigation
+
+Both adapters are fully keyboard navigable with identical bindings. Arrow keys
+move the active cell, `Shift`+arrow extends a range, `Ctrl`/`Cmd`+arrow jumps to
+the data edge, `Enter`/`F2` edits, and `Ctrl`/`Cmd`+`C`/`V` copy/paste.
+
+For **master/detail** tables, the expand/collapse chevron is a real navigable
+column: move `←` Left onto the chevron, press `Enter` to expand or collapse the
+row, and press `Tab` (while the chevron is highlighted) to descend into the
+sub-table. `Esc` returns to the parent. Tabbing from a data cell does **not**
+enter the sub-table — the chevron is the single, predictable doorway.
+
+See [docs/keyboard-navigation.md](docs/keyboard-navigation.md) for the complete
+key reference.
 
 ## Architecture
 

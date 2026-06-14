@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _No unreleased changes._
 
+## [0.2.2] — 2026-06-14
+
+### Added
+
+- **Row-set mutation API.** New pure transitions in `chorale-core` (re-exported from the crate root): `set_rows`, `insert_row`, `append_rows`, `remove_row`, and `remove_rows`. Until now `chorale-core` had only `update_row` (replace one row's *content*); these mutate the row *set* itself, which is what a consumer with live or streaming data needs. Each transition reconciles all derived state so `TableState` stays coherent: `RowId`-based state (selection, `expanded_rows`, editing) drops removed ids; index-based state (`active_cell`, `range_selection`, `row_heights`) clears; `page` and `loaded_row_count` reset or clamp so the view never sits past the new end; and `data_generation` bumps. `append_rows` is the gentle case (no `RowId` is removed, so selection/expanded/editing survive) and an empty input is a no-op. Both adapters' `UseTableHandle` gain matching wrappers: `set_rows`, `insert_row(position, id, row)` (0 = prepend, past the end = append), `append_rows`, `remove_row(id)`, and `remove_rows(&[RowId])`. Both QA harnesses gain a "Row mutation" control group (Append row, Insert at top, Remove selected, Reset dataset) plus a live row count, so each transition is exercisable by hand. Fully additive.
+- **Full keyboard navigation for master/detail (child) tables.** The detail-expander chevron is now a real, keyboard-navigable column rather than a mouse-only control. A reserved `DETAIL_EXPANDER_COLUMN` id and a new `detail_column_enabled` flag on `TableState` (set by the adapter when a `detail_renderer` is configured) prepend the chevron to the keyboard column order. New transitions back the behavior: `toggle_active_row_expansion`, `set_detail_column_enabled`, `ensure_active_cell` (selects the first navigable cell on focus-in), and `is_active_cell_editable`. The interaction model: `ArrowLeft` from the first data column lands the active cell on the chevron, `Enter` there expands or collapses the row, `Tab` (while the chevron is highlighted) descends into an open sub-table, and `Esc` returns to the parent. Tabbing from a data cell does not enter the sub-table, so the chevron is the single, predictable doorway. Arrow navigation skips over full-width detail-panel rows rather than landing on them. Both adapters' `UseTableHandle` gain `set_detail_column_enabled` and `ensure_active_cell`. Additive; tables without a `detail_renderer` are unaffected.
+
+### Fixed
+
+- **Detail-expander (chevron) column header now carries the header underline (both adapters).** The 0.2.1 fix for #21 over-corrected: removing the chevron header's `border-bottom` left a visible *gap* in the header underline directly above the chevron column, which read worse than the stray segment it was avoiding. The chevron header now carries the same `border-bottom` as every other header cell, so the underline is continuous across all columns.
+- **Leptos: row-selection checkbox is now centered in its column.** The selection cell was missing `text-align: center` (the Dioxus adapter already had it), so checkboxes sat left-aligned and misaligned with the centered header checkbox.
+- **Dioxus: header underline no longer disappears when Sort is toggled.** Enabling sort added `cursor: pointer` to the header cell's inline style; because the `<th>` key did not include sort state, Dioxus 0.7 diffed the style in place and unreliably dropped the `border-bottom` declaration, erasing the underline under every data column. The `<th>` key now includes `is_sortable`, so it is recreated (not in-place diffed) when sort toggles and the underline holds.
+
+### Documentation
+
+- New `docs/keyboard-navigation.md` with the complete key reference, and a "Keyboard navigation" section added to the README.
+
 ## [0.2.1] — 2026-06-12
 
 ### Fixed
