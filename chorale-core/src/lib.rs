@@ -120,6 +120,9 @@ pub use types::RowId;
 /// `ColumnId("my_column")`.
 pub use types::ColumnId;
 
+/// Reserved `ColumnId` for the keyboard-navigable detail-expander column (#17).
+pub use types::DETAIL_EXPANDER_COLUMN;
+
 /// The cell that currently holds keyboard focus (row + column), if any.
 ///
 /// Stored in `TableState::active_cell: Option<ActiveCell>`. `None` on mount;
@@ -436,6 +439,15 @@ pub use transitions::collapse_all_groups;
 /// (row collapses). Otherwise it is inserted (row expands).
 pub use transitions::toggle_row_expansion;
 
+/// Toggle the detail panel of the row holding the active cell (keyboard).
+pub use transitions::toggle_active_row_expansion;
+
+/// Whether the active cell's column has an editor configured.
+pub use transitions::is_active_cell_editable;
+
+/// Enable/disable the detail-expander column in keyboard navigation (#17).
+pub use transitions::set_detail_column_enabled;
+
 /// Collapse all expanded rows (clear `expanded_rows`).
 pub use transitions::collapse_all_rows;
 
@@ -453,6 +465,9 @@ pub use transitions::move_active_cell;
 
 /// Move the active cell to the data edge in `direction` (Ctrl+Arrow behavior).
 pub use transitions::move_active_cell_to_edge;
+
+/// Select the first navigable cell if none is active (focus-in default).
+pub use transitions::ensure_active_cell;
 
 /// Move the active cell by `page_size` rows Up or Down (Page Up/Down behavior).
 pub use transitions::move_active_cell_page;

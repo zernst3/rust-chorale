@@ -112,6 +112,15 @@ pub struct TableState<TRow: Clone> {
     /// Mirrors `collapsed_groups` but opt-IN: rows default to collapsed.
     /// Empty default. Toggled by `toggle_row_expansion`.
     pub expanded_rows: std::collections::HashSet<RowId>,
+    /// Whether the leading detail-expander column participates in keyboard
+    /// navigation as a focusable column (issue #17). The adapter sets this when
+    /// a `detail_renderer` is configured. When `true`, [`DETAIL_EXPANDER_COLUMN`]
+    /// is prepended to the keyboard column order: `ArrowLeft` from the first
+    /// data column lands the active cell on the chevron, where Enter toggles
+    /// the row's panel and Tab descends into an open sub-table.
+    ///
+    /// [`DETAIL_EXPANDER_COLUMN`]: crate::DETAIL_EXPANDER_COLUMN
+    pub detail_column_enabled: bool,
     /// How pagination interacts with grouped rows. Defaults to `DataRowsOnly`.
     ///
     /// `DataRowsOnly`: page controls count data rows only; headers repeat on
@@ -165,6 +174,7 @@ impl<TRow: Clone + std::fmt::Debug> std::fmt::Debug for TableState<TRow> {
             .field("grouping", &self.grouping)
             .field("collapsed_groups", &self.collapsed_groups)
             .field("expanded_rows", &self.expanded_rows)
+            .field("detail_column_enabled", &self.detail_column_enabled)
             .field("grouped_pagination", &self.grouped_pagination)
             .field("active_cell", &self.active_cell)
             .field("range_selection", &self.range_selection)
@@ -197,6 +207,7 @@ impl<TRow: Clone> Clone for TableState<TRow> {
             grouping: self.grouping.clone(),
             collapsed_groups: self.collapsed_groups.clone(),
             expanded_rows: self.expanded_rows.clone(),
+            detail_column_enabled: self.detail_column_enabled,
             grouped_pagination: self.grouped_pagination,
             active_cell: self.active_cell,
             range_selection: self.range_selection.clone(),
@@ -249,6 +260,7 @@ impl<TRow: Clone> TableState<TRow> {
             grouping: vec![],
             collapsed_groups: std::collections::HashSet::new(),
             expanded_rows: std::collections::HashSet::new(),
+            detail_column_enabled: false,
             grouped_pagination: GroupedPaginationMode::DataRowsOnly,
             data_generation: 0,
             active_cell: None,
