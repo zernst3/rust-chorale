@@ -1,0 +1,50 @@
+<svg viewBox="0 0 900 600" role="img" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+<title>chorale architecture: where state lives and the write and read paths</title>
+<desc>The core is stateless pure functions. The adapter holds the live TableState in a signal (single source of truth) and a derived cache of visible rows in a memo. The write path runs from a user action through the handle into a core transition and back into the signal. The read path runs from the signal through the memo and core view functions to the drawn UI.</desc>
+<rect x="1" y="1" width="898" height="598" rx="14" fill="#FCFCFA" stroke="#E5E4DD" stroke-width="1"/>
+<defs>
+<marker id="aw" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#185FA5"/></marker>
+<marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#0F6E56"/></marker>
+</defs>
+<text x="450" y="28" text-anchor="middle" font-size="16" font-weight="500" fill="#2C2C2A">chorale: where the state lives, and the two paths</text>
+<rect x="64" y="184" width="772" height="152" rx="10" fill="none" stroke="#CFCEC7" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="78" y="178" font-size="12" fill="#6B6A64">adapter (chorale-dioxus / leptos)</text>
+<rect x="64" y="400" width="772" height="130" rx="10" fill="none" stroke="#CFCEC7" stroke-width="1" stroke-dasharray="4 4"/>
+<text x="78" y="394" font-size="12" fill="#6B6A64">core (chorale-core) · stateless, holds no live state</text>
+<rect x="320" y="44" width="260" height="62" rx="8" fill="none" stroke="#CFCEC7" stroke-width="1.5"/>
+<text x="450" y="72" text-anchor="middle" font-size="15" font-weight="500" fill="#2C2C2A">ui / dom</text>
+<text x="450" y="92" text-anchor="middle" font-size="12" fill="#6B6A64">pixels + events (click, scroll, key)</text>
+<rect x="90" y="210" width="320" height="104" rx="8" fill="none" stroke="#185FA5" stroke-width="1.8"/>
+<text x="108" y="240" font-size="15" font-weight="500" fill="#2C2C2A">useTableHandle</text>
+<text x="108" y="263" font-size="12.5" fill="#6B6A64">holds Signal&lt;TableState&gt;</text>
+<text x="108" y="295" font-size="11.5" fill="#185FA5">the live state · single source of truth</text>
+<rect x="490" y="210" width="320" height="104" rx="8" fill="none" stroke="#CFCEC7" stroke-width="1.5"/>
+<text x="508" y="240" font-size="15" font-weight="500" fill="#2C2C2A">render · use_memo</text>
+<text x="508" y="263" font-size="12.5" fill="#6B6A64">visible rows + window</text>
+<text x="508" y="295" font-size="11.5" fill="#6B6A64">derived from state · a cache</text>
+<rect x="90" y="420" width="320" height="92" rx="8" fill="none" stroke="#CFCEC7" stroke-width="1.5"/>
+<text x="108" y="452" font-size="15" font-weight="500" fill="#2C2C2A">transitions</text>
+<text x="108" y="476" font-size="12.5" fill="#6B6A64">pure: state to new state</text>
+<rect x="490" y="420" width="320" height="92" rx="8" fill="none" stroke="#CFCEC7" stroke-width="1.5"/>
+<text x="508" y="452" font-size="15" font-weight="500" fill="#2C2C2A">views</text>
+<text x="508" y="476" font-size="12.5" fill="#6B6A64">pure: state to render data</text>
+<line x1="415" y1="106" x2="306" y2="207" stroke="#185FA5" stroke-width="1.8" marker-end="url(#aw)"/>
+<text x="356" y="150" text-anchor="middle" font-size="11.5" fill="#185FA5">1 user action</text>
+<line x1="205" y1="314" x2="205" y2="416" stroke="#185FA5" stroke-width="1.8" marker-end="url(#aw)"/>
+<text x="150" y="372" text-anchor="end" font-size="11.5" fill="#185FA5">2 state in</text>
+<line x1="285" y1="418" x2="285" y2="318" stroke="#185FA5" stroke-width="1.8" marker-end="url(#aw)"/>
+<text x="338" y="360" text-anchor="start" font-size="11.5" fill="#185FA5">3 new state</text>
+<text x="338" y="376" text-anchor="start" font-size="11.5" fill="#185FA5">to signal.set</text>
+<line x1="410" y1="252" x2="486" y2="252" stroke="#0F6E56" stroke-width="1.8" marker-end="url(#ar)"/>
+<text x="448" y="244" text-anchor="middle" font-size="11.5" fill="#0F6E56">4 read state</text>
+<line x1="605" y1="314" x2="605" y2="416" stroke="#0F6E56" stroke-width="1.8" marker-end="url(#ar)"/>
+<text x="560" y="372" text-anchor="end" font-size="11.5" fill="#0F6E56">5 state</text>
+<line x1="685" y1="418" x2="685" y2="318" stroke="#0F6E56" stroke-width="1.8" marker-end="url(#ar)"/>
+<text x="700" y="372" text-anchor="start" font-size="11.5" fill="#0F6E56">6 render data</text>
+<line x1="560" y1="208" x2="527" y2="108" stroke="#0F6E56" stroke-width="1.8" marker-end="url(#ar)"/>
+<text x="566" y="150" text-anchor="middle" font-size="11.5" fill="#0F6E56">7 draw</text>
+<line x1="318" y1="556" x2="350" y2="556" stroke="#185FA5" stroke-width="2.5"/>
+<text x="356" y="560" font-size="12" fill="#6B6A64">write path (user action)</text>
+<line x1="540" y1="556" x2="572" y2="556" stroke="#0F6E56" stroke-width="2.5"/>
+<text x="578" y="560" font-size="12" fill="#6B6A64">read path (render)</text>
+</svg>

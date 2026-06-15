@@ -202,7 +202,7 @@ let cols = Product::chorale_columns_with_rows(&rows);
 // - status column: MultiSelect with options ["In Stock", "Out of Stock"] (hard-coded, always)
 ```
 
-## What you get in v0.2.0
+## What you get in v0.2.x
 
 ### ⚠ Breaking change from v0.1.0
 
@@ -222,10 +222,10 @@ See [CHANGELOG.md](CHANGELOG.md) for the full migration note.
 
 ### Features by version
 
-Every v0.1.0 feature still works in v0.2.0 — these are additive. New
+Every v0.1.0 feature still works in v0.2.x — these are additive. New
 items land via opt-in props or transitions; nothing was removed.
 
-| Feature | v0.1.0 | v0.2.0 |
+| Feature | v0.1.0 | v0.2.x |
 |---|:-:|:-:|
 | **Sort** — single column | ✅ | ✅ |
 | **Sort** — multi-column (Shift+click) with priority badges | — | ✅ |
@@ -242,6 +242,9 @@ items land via opt-in props or transitions; nothing was removed.
 | **Variable-row-height virtualization** | — | ✅ |
 | **Grouping** with collapse/expand + aggregators (sum, avg, min, max, count) | — | ✅ |
 | **Master/detail** sub-tables via `detail_renderer` | — | ✅ |
+| **Range selection, fill-handle & clipboard** (Excel-style copy/paste TSV) | — | ✅ |
+| **Row-set mutation** (`set_rows` / `insert_row` / `append_rows` / `remove_row` / `remove_rows`, for live data) | — | ✅ |
+| **Full keyboard navigation** (including master/detail child tables) | — | ✅ |
 | **In-cell editing** with `EditorKind`, validators, commit/cancel | — | ✅ |
 | **Custom cell renderers** + `RenderKind::Badge` | ✅ | ✅ |
 | **Row-aware cell renderers** (full row + value) | — | ✅ |
@@ -268,6 +271,11 @@ items land via opt-in props or transitions; nothing was removed.
   as the user scrolls near the bottom. Switch back to Pages mode at any time.
 - **Selection.** Per-row checkboxes plus a header select-all. Readable via
   `handle.selected_ids()` / `handle.selection_count()`.
+- **Range selection, fill-handle, and clipboard.** Select rectangular cell ranges
+  (`Shift`+arrow or `Shift`+click), add disjoint ranges (`Ctrl`/`Cmd`+click), drag the
+  fill-handle to extend a numeric pattern, and copy/paste a range as TSV
+  (`Ctrl`/`Cmd`+`C`/`V`), Excel-style. Single-rect ranges feed the clipboard; multi-rect
+  ranges are for general selection.
 - **Grouping and aggregation.** Group by one or more columns; collapse and
   expand groups. Per-column aggregators (sum, average, min, max, count)
   appear in group header rows.
@@ -354,6 +362,15 @@ key reference.
 
 ## Architecture
 
+![Chorale data flow: where the state lives and the write and read paths](docs/architecture-state-flow.svg)
+
+The core is stateless pure functions; the live `TableState` lives in the adapter's signal
+(the single source of truth), with the rendered view held as a derived `use_memo`. A user
+action runs the write path (action, then the handle, then a core transition, then the new
+state is stored back in the signal); rendering runs the read path (signal, then memo, then
+core views, then the drawn UI). Transitions only ever produce a new state; views only ever
+produce render data. The state lives in exactly one place, and the core holds none of it.
+
 Two persistent layers separated by a hard, lint-enforced boundary.
 
 ### `chorale-core`
@@ -365,10 +382,11 @@ Framework-agnostic state plus pure functions over it. Zero UI dependencies
 | Module | Surface |
 |---|---|
 | `state` | `TableState<TRow>`, `VirtualWindow` |
-| `column` | `ColumnDef<TRow>`, `RenderKind`, `FilterKind`, `BadgeVariantMap`, `EditorKind`, `FrozenSide` |
-| `types` | `CellValue`, `FilterValue`, `SortState`, `RowId`, `ColumnId`, `Alignment`, `CurrencyCode`, `GroupKey`, `PaginationMode` |
-| `transitions` | `toggle_sort`, `set_filter`, `set_page`, `set_page_size`, `set_scroll`, `set_selection`, `toggle_select_all`, `set_column_visibility`, `set_column_width`, `update_row`, `move_column`, `set_grouping`, `toggle_group`, `expand_all_groups`, `collapse_all_groups`, `set_pagination_mode`, `load_more_rows`, `start_edit`, `commit_edit`, `cancel_edit`, `toggle_row_expansion`, `collapse_all_rows` |
-| `views` | `visible_view`, `visible_grouped_view`, `visible_rows`, `visible_row_ids`, `visible_window`, `filtered_sorted_rows`, `to_csv`, `frozen_left_columns`, `frozen_right_columns`, `scrollable_columns` |
+| `column` | `ColumnDef<TRow>`, `RenderKind`, `FilterKind`, `BadgeVariantMap`, `EditorKind`, `FrozenSide`, `AggregatorKind` |
+| `types` | `CellValue`, `FilterValue`, `SortState`, `RowId`, `ColumnId`, `Alignment`, `CurrencyCode`, `GroupKey`, `PaginationMode`, `GroupedRow`, `RangeSelection` |
+| `range` / `clipboard` | `RangeSelection`, `fill_handle_targets`, `to_clipboard_tsv`, `paste_tsv_into_range`, `ClipboardError` |
+| `transitions` | `toggle_sort`, `set_filter`, `set_page`, `set_page_size`, `set_scroll`, `set_selection`, `toggle_select_all`, `set_column_visibility`, `set_column_width`, `update_row`, `move_column`, `set_grouping`, `toggle_group`, `expand_all_groups`, `collapse_all_groups`, `set_pagination_mode`, `load_more_rows`, `start_edit`, `commit_edit`, `cancel_edit`, `toggle_row_expansion`, `collapse_all_rows`, `set_rows`, `insert_row`, `append_rows`, `remove_row`, `remove_rows`, `start_range_selection`, `clear_range_selection`, `paste_tsv_into_range`, `ensure_active_cell`, `toggle_active_row_expansion`, `set_detail_column_enabled` |
+| `views` | `visible_view`, `visible_grouped_view`, `visible_rows`, `visible_row_ids`, `visible_window`, `filtered_sorted_rows`, `to_csv`, `frozen_left_columns`, `frozen_right_columns`, `scrollable_columns`, `visible_window_variable`, `to_clipboard_tsv`, `fill_handle_targets` |
 | `labels` | `Labels` |
 | `error` | `StateError` |
 
