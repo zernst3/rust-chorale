@@ -271,6 +271,20 @@ impl<TRow: Clone + 'static> UseTableHandle<TRow> {
         self.dispatch(|s| toggle_group(s, &key));
     }
 
+    /// Toggle selection for every (filter-visible) row in a group. If the group is fully
+    /// selected it is deselected; otherwise all its rows are selected. Drives the per-group
+    /// "select all" checkbox in the group header (#31).
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn toggle_select_group(&self, key: GroupKey) {
+        self.dispatch(|s| chorale_core::toggle_select_group(s, &key));
+    }
+
+    /// The selection state (None / Partial / All) of a group, for a tri-state header checkbox.
+    #[must_use]
+    pub fn group_selection_state(&self, key: &GroupKey) -> chorale_core::GroupSelectionState {
+        chorale_core::group_selection_state(&self.inner.read(), key)
+    }
+
     /// Expand all groups (clear `collapsed_groups`).
     pub fn expand_all_groups(&self) {
         self.dispatch(|s| expand_all_groups(s));

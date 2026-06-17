@@ -3126,6 +3126,26 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
     let indent = depth * 16;
     let toggle_icon = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
     let extra_class = extra_class.to_owned();
+    // Per-group select-all (#31): tri-state checkbox in the header's selection cell. The key
+    // is moved into the collapse onclick below, so clone the pieces the checkbox needs first.
+    let group_sel = if selection_enabled {
+        handle.group_selection_state(&key)
+    } else {
+        chorale_core::GroupSelectionState::None
+    };
+    let group_all = matches!(group_sel, chorale_core::GroupSelectionState::All);
+    let group_partial = matches!(group_sel, chorale_core::GroupSelectionState::Partial);
+    let key_for_select = key.clone();
+    // A DOM id to set the native `indeterminate` property (not an HTML attribute) via eval;
+    // sanitized so the opaque GroupKey is a safe id/selector.
+    let cb_id = format!(
+        "chorale-grp-cb-{}",
+        key.to_string()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect::<String>()
+    );
+    let cb_id_mount = cb_id.clone();
     // Per-column aggregate summary. Core computes each group's aggregates (one
     // per column, in effective column order); render them here for any column
     // that declares an aggregator. The value is formatted through the SAME
@@ -3164,7 +3184,26 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
             style: "background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;",
             onclick: move |_| { handle.toggle_group(key.clone()); },
             if selection_enabled {
-                td { style: "padding: 0.25rem 0.5rem; width: 2.5rem;" }
+                td {
+                    style: "padding: 0.25rem 0.5rem; width: 2.5rem; text-align: center;",
+                    input {
+                        id: "{cb_id}",
+                        r#type: "checkbox",
+                        checked: group_all,
+                        // `indeterminate` is a JS property, not an HTML attribute, so set it
+                        // after mount when the group is partially selected.
+                        onmounted: move |_| {
+                            if group_partial {
+                                let _ = dioxus::document::eval(&format!(
+                                    "var e=document.getElementById('{cb_id_mount}');if(e)e.indeterminate=true;"
+                                ));
+                            }
+                        },
+                        // Don't let the checkbox click bubble to the row's collapse toggle.
+                        onclick: move |e| { e.stop_propagation(); },
+                        onchange: move |_| { handle.toggle_select_group(key_for_select.clone()); },
+                    }
+                }
             }
             td {
                 colspan: "{col_count - usize::from(selection_enabled)}",

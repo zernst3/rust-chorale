@@ -310,6 +310,10 @@ pub use transitions::select_all_visible_page;
 /// Select every row in the filtered + sorted set (across all pages).
 pub use transitions::select_all_filtered;
 
+/// Toggle selection for every (filter-visible) row in a group, plus the tri-state query for a
+/// group-header checkbox. Drives the per-group "select all" affordance (#31).
+pub use transitions::{group_selection_state, toggle_select_group, GroupSelectionState};
+
 /// Deselect every row currently on the visible page, leaving other-page selections intact.
 pub use transitions::deselect_all_visible_page;
 
