@@ -1,0 +1,17 @@
+[package]
+name = "nested-collapse-qa"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Dedicated QA harness for the v0.2.3 nested-grouping collapse bug (#36).
+# Run via `dx serve --package nested-collapse-qa` (requires dioxus-cli).
+
+[lints]
+workspace = true
+
+[dependencies]
+chorale-core = { path = "../../chorale-core", version = "0.2.0" }
+chorale-dioxus = { path = "../../chorale-dioxus", version = "0.2.0" }
+dioxus = { version = "0.7", features = ["web"] }
+getrandom = { version = "0.2", features = ["js"] }

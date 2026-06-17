@@ -2806,6 +2806,12 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
     };
     rsx! {
         tr {
+            // Stable key so Dioxus diffs grouped rows by IDENTITY, not position. Without it,
+            // collapsing a group removes a contiguous run of rows and the positional diff
+            // patches a data `tr` (N cells) and a group-header `tr` (one colspan cell) into
+            // each other, corrupting the render (a parent header showing a child's indent /
+            // jumbled counts). Data rows key on their RowId.
+            key: "row-{row_id:?}",
             style: "{row_style}",
             "data-chorale-index": "{row_index}",
             "data-chorale-row-selected": "{row_selected}",
@@ -3023,6 +3029,10 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
         .collect();
     rsx! {
         tr {
+            // Stable identity key (see data_tr): group headers key on their GroupKey so a
+            // collapse/expand moves DOM nodes by identity instead of patching a header `tr`
+            // against a data `tr` at a shifted position.
+            key: "grp-{key}",
             class: "{extra_class}",
             style: "background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;",
             onclick: move |_| { handle.toggle_group(key.clone()); },

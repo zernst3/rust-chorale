@@ -893,6 +893,97 @@ mod tests {
         }
     }
 
+    // ---- nested grouping + collapse invariant (#36) ------------------------
+
+    /// Collapsing a depth-1 (child) group must not change the depth-0 (parent)
+    /// header's depth or `row_count`, and must leave sibling child groups alone.
+    /// This is the contract the adapters' keyed render relies on (#36): if the
+    /// core ever regressed here, the parent-collapses-and-indents corruption
+    /// would be unavoidable downstream.
+    #[test]
+    fn nested_collapse_keeps_parent_depth_and_count() {
+        use crate::transitions::toggle_group;
+
+        let rows = vec![
+            (
+                RowId::new(),
+                R {
+                    name: "Eng".into(),
+                    score: 1,
+                },
+            ),
+            (
+                RowId::new(),
+                R {
+                    name: "Eng".into(),
+                    score: 1,
+                },
+            ),
+            (
+                RowId::new(),
+                R {
+                    name: "Eng".into(),
+                    score: 2,
+                },
+            ),
+            (
+                RowId::new(),
+                R {
+                    name: "Sales".into(),
+                    score: 1,
+                },
+            ),
+        ];
+        let columns = vec![
+            ColumnDef::new(ColumnId("name"), "Name", |r: &R| {
+                CellValue::Text(r.name.clone())
+            }),
+            ColumnDef::new(ColumnId("score"), "Score", |r: &R| {
+                CellValue::Integer(r.score)
+            }),
+        ];
+        let state = TableState {
+            rows: Arc::new(rows),
+            columns,
+            grouping: vec![ColumnId("name"), ColumnId("score")],
+            ..TableState::new(vec![], vec![])
+        };
+
+        let find = |view: &[GroupedRow<R>], want: &GroupKey| -> Option<(usize, usize, bool)> {
+            view.iter().find_map(|r| match r {
+                GroupedRow::Header {
+                    key,
+                    depth,
+                    row_count,
+                    is_collapsed,
+                    ..
+                } if key == want => Some((*depth, *row_count, *is_collapsed)),
+                _ => None,
+            })
+        };
+
+        let eng = GroupKey::from_values(&["Eng"]);
+        let eng_1 = GroupKey::from_values(&["Eng", "1"]);
+        let eng_2 = GroupKey::from_values(&["Eng", "2"]);
+
+        // Baseline: Eng is a depth-0 parent over 3 rows, expanded.
+        let before = visible_grouped_view(&state);
+        assert_eq!(find(&before, &eng), Some((0, 3, false)));
+
+        // Collapse the depth-1 child Eng -> 1.
+        let after = visible_grouped_view(&toggle_group(&state, &eng_1));
+
+        // Parent unchanged: still depth 0, still counts all 3 rows.
+        assert_eq!(
+            find(&after, &eng),
+            Some((0, 3, false)),
+            "collapsing a child must not collapse, re-depth, or recount the parent"
+        );
+        // The collapsed child is depth 1 + collapsed; its sibling stays depth 1 + expanded.
+        assert_eq!(find(&after, &eng_1), Some((1, 2, true)));
+        assert_eq!(find(&after, &eng_2), Some((1, 1, false)));
+    }
+
     // ---- visible_rows ------------------------------------------------------
 
     #[test]
