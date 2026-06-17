@@ -1991,10 +1991,21 @@ fn render_group_header<TRow: Clone + PartialEq + Send + Sync + 'static>(
     effective_col_count: usize,
     handle: UseTableHandle<TRow>,
     group_header_class: &str,
+    selection_enabled: bool,
 ) -> AnyView {
     let indent = format!("{}rem", depth as f64 * 1.5);
     let icon = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
     let group_header_class = group_header_class.to_owned();
+    // Per-group select-all (#31): tri-state checkbox prepended to the header when selection
+    // is on. The key is moved into the collapse on:click below, so capture select pieces now.
+    let group_sel = if selection_enabled {
+        handle.group_selection_state(&key)
+    } else {
+        chorale_core::GroupSelectionState::None
+    };
+    let group_all = matches!(group_sel, chorale_core::GroupSelectionState::All);
+    let group_partial = matches!(group_sel, chorale_core::GroupSelectionState::Partial);
+    let key_for_select = key.clone();
     // Per-column aggregate summary. Core computes each group's aggregates
     // (one per column, in effective column order); render them here for any
     // column that declares an aggregator. The value is formatted through the
@@ -2035,6 +2046,19 @@ fn render_group_header<TRow: Clone + PartialEq + Send + Sync + 'static>(
                      font-weight:600;font-size:0.875rem;"
                 )
             >
+                {selection_enabled.then(|| view! {
+                    <input
+                        type="checkbox"
+                        style="margin-right:0.5rem;vertical-align:middle;"
+                        prop:checked=group_all
+                        prop:indeterminate=group_partial
+                        on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()
+                        on:change=move |ev| {
+                            ev.stop_propagation();
+                            handle.toggle_select_group(key_for_select.clone());
+                        }
+                    />
+                })}
                 <span style="margin-right:0.5rem;">{icon}</span>
                 {label}
                 <span style="margin-left:0.5rem;font-size:0.75rem;\
@@ -3443,6 +3467,7 @@ where
                                         effective_col_count,
                                         handle,
                                         &group_header_class,
+                                        selection_enabled,
                                     ),
                                     GroupedRow::Data(row_id, row) => render_data_row(
                                         &row,

@@ -274,6 +274,100 @@ pub fn select_all_filtered<TRow: Clone>(state: &TableState<TRow>) -> TableState<
     }
 }
 
+/// The `RowId`s belonging to a group, filter-aware. A group header at depth `d` carries a
+/// `GroupKey` of the row's first `d+1` group-by column values; a row is in the group when its
+/// values for those columns match. Only currently-visible (post-filter, post-sort) rows are
+/// considered, mirroring [`select_all_filtered`].
+fn group_member_ids<TRow: Clone>(state: &TableState<TRow>, group_key: &GroupKey) -> Vec<RowId> {
+    let key_parts: Vec<&str> = group_key.0.split('\u{0}').collect();
+    let group_cols: Vec<ColumnId> = state
+        .grouping
+        .iter()
+        .take(key_parts.len())
+        .copied()
+        .collect();
+    if group_cols.len() != key_parts.len() {
+        return Vec::new();
+    }
+    crate::views::filtered_sorted_pairs(state)
+        .into_iter()
+        .filter(|(_, row)| {
+            group_cols.iter().zip(&key_parts).all(|(col, want)| {
+                state
+                    .columns
+                    .iter()
+                    .find(|c| c.id == *col)
+                    .is_some_and(|c| (c.accessor)(row).to_csv_string() == **want)
+            })
+        })
+        .map(|(id, _)| id)
+        .collect()
+}
+
+/// Whether a group's rows are fully / partly / not selected — drives a tri-state group-header
+/// checkbox. Empty group reports [`GroupSelectionState::None`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupSelectionState {
+    /// No row in the group is selected.
+    None,
+    /// Some but not all rows in the group are selected (indeterminate checkbox).
+    Partial,
+    /// Every row in the group is selected.
+    All,
+}
+
+/// Compute the [`GroupSelectionState`] for a group (filter-aware).
+#[must_use]
+pub fn group_selection_state<TRow: Clone>(
+    state: &TableState<TRow>,
+    group_key: &GroupKey,
+) -> GroupSelectionState {
+    let members = group_member_ids(state, group_key);
+    if members.is_empty() {
+        return GroupSelectionState::None;
+    }
+    let selected: std::collections::HashSet<RowId> = state.selection.iter().copied().collect();
+    let n_selected = members.iter().filter(|id| selected.contains(id)).count();
+    if n_selected == 0 {
+        GroupSelectionState::None
+    } else if n_selected == members.len() {
+        GroupSelectionState::All
+    } else {
+        GroupSelectionState::Partial
+    }
+}
+
+/// Toggle selection for every row in a group (filter-aware). If all of the group's visible
+/// rows are already selected, they are deselected; otherwise every visible row in the group is
+/// added to the selection (other groups' selections are untouched). Mirrors the
+/// `select_all_filtered` filter-awareness so a group "select all" never selects filtered-out
+/// rows.
+#[must_use]
+pub fn toggle_select_group<TRow: Clone>(
+    state: &TableState<TRow>,
+    group_key: &GroupKey,
+) -> TableState<TRow> {
+    let members = group_member_ids(state, group_key);
+    if members.is_empty() {
+        return state.clone();
+    }
+    let mut selected: std::collections::HashSet<RowId> = state.selection.iter().copied().collect();
+    let all_selected = members.iter().all(|id| selected.contains(id));
+    if all_selected {
+        for id in &members {
+            selected.remove(id);
+        }
+    } else {
+        for id in &members {
+            selected.insert(*id);
+        }
+    }
+    TableState {
+        selection: selected.into_iter().collect(),
+        ..state.clone()
+    }
+}
+
 /// Deselect every row currently on the visible page, leaving other-page selections intact.
 #[must_use]
 pub fn deselect_all_visible_page<TRow: Clone>(state: &TableState<TRow>) -> TableState<TRow> {
@@ -1650,6 +1744,69 @@ mod tests {
             columns: make_columns(),
             ..TableState::new(vec![], vec![])
         }
+    }
+
+    #[test]
+    fn toggle_select_group_selects_filtered_group_members() {
+        use crate::types::GroupKey;
+        let ids: Vec<RowId> = (0..3).map(|_| RowId::new()).collect();
+        let rows = vec![
+            (
+                ids[0],
+                TestRow {
+                    name: "Eng".into(),
+                    score: 1.0,
+                },
+            ),
+            (
+                ids[1],
+                TestRow {
+                    name: "Eng".into(),
+                    score: 2.0,
+                },
+            ),
+            (
+                ids[2],
+                TestRow {
+                    name: "Sales".into(),
+                    score: 3.0,
+                },
+            ),
+        ];
+        let state = TableState {
+            rows: Arc::new(rows),
+            columns: make_columns(),
+            grouping: vec![col_name()],
+            ..TableState::new(vec![], vec![])
+        };
+        let eng = GroupKey::from_values(&["Eng"]);
+        let sales = GroupKey::from_values(&["Sales"]);
+
+        assert_eq!(
+            group_selection_state(&state, &eng),
+            GroupSelectionState::None
+        );
+
+        // Select-all the Eng group -> All; Sales untouched.
+        let s2 = toggle_select_group(&state, &eng);
+        assert_eq!(group_selection_state(&s2, &eng), GroupSelectionState::All);
+        assert_eq!(
+            group_selection_state(&s2, &sales),
+            GroupSelectionState::None
+        );
+        assert!(s2.selection.contains(&ids[0]) && s2.selection.contains(&ids[1]));
+        assert!(!s2.selection.contains(&ids[2]));
+
+        // Toggle again -> deselected.
+        let s3 = toggle_select_group(&s2, &eng);
+        assert_eq!(group_selection_state(&s3, &eng), GroupSelectionState::None);
+
+        // One of two selected -> Partial (tri-state).
+        let s4 = set_selection(&state, ids[0], true);
+        assert_eq!(
+            group_selection_state(&s4, &eng),
+            GroupSelectionState::Partial
+        );
     }
 
     fn make_editable_columns() -> Vec<ColumnDef<TestRow>> {
