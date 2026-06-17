@@ -1,0 +1,10 @@
+[application]
+name = "nested-collapse-qa"
+default_platform = "web"
+
+[web.app]
+title = "Chorale — Nested Collapse QA (#36)"
+
+[web.watcher]
+reload_html = true
+watch_path = ["src"]
