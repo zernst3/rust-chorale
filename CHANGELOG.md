@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _No unreleased changes._
 
+## [0.2.3] — 2026-06-17
+
+Dogfooding fixes + a small feature surface, surfaced while using chorale in a real consumer.
+
+### Fixed
+
+- **Nested-grouping collapse no longer corrupts the parent (#36).** With two-level grouping, collapsing a depth-1 (child) group header corrupted the depth-0 (parent) render — the parent appeared collapsed/indented and counts jumbled. Root cause: the grouped render loop emitted each row's `<tr>` without a Dioxus `key`, so the list diffed positionally and, when a collapse removed a contiguous run of rows, patched a header `<tr>` (one colspan cell) against a data `<tr>` (N cells) in place. Each grouped row now keys on its identity (group headers on their `GroupKey`, data rows on their `RowId`). Ships with a dedicated `examples/nested-collapse-qa` harness and a core invariant test. (Leptos builds a fresh view each render and was unaffected.)
+
+### Added
+
+- **Badge palette: `blue`, `purple`, `orange` + a custom-color escape hatch (#33).** The built-in palette was green/yellow/red/gray only; other colors silently rendered as gray. Added three first-class CSS-variable-backed colors (`--chorale-badge-<color>-bg/-text`) and an escape hatch — any other key resolves to `--chorale-badge-<key>-bg/-text` with the neutral default as the nested fallback, so consumers extend the palette via CSS without forking. Dioxus + Leptos.
+- **Per-row conditional styling hook `row_class` (#32).** New `Table` prop taking a `Fn(&TRow) -> Option<String>` whose class is appended to each data row's `<tr>`; composes with selection, grouping, and virtualization. The predicate is consumer code; the core stays I/O-free. Dioxus + Leptos.
+- **Set-filter with OR-contains for list-valued cells (#35).** New `FilterKind::MultiSelectContains { options, separator }` (+ matching `FilterValue`). The cell text is split on `separator` and a row matches when ANY token is among the picked options (per-value OR / set-intersection), so a list column like "Applies to: a, b, c" gets a real per-value picker — distinct from `Text`'s raw substring. Same checkbox UI as `MultiSelect`. Dioxus + Leptos.
+- **Per-group "select all" (#31).** New filter-aware `chorale-core` transitions `toggle_select_group` and `group_selection_state` (None/Partial/All), driving a tri-state checkbox in the group header when selection is enabled (Dioxus sets the native `indeterminate` property; Leptos uses `prop:indeterminate`). Selecting a group never touches filtered-out rows or other groups.
+
+### Docs
+
+- **`CellRenderer` `Send + Sync` + interactive cells (#34).** Documented why a cell renderer cannot capture a Dioxus signal (signals are `!Sync`) and the working pattern: return a small component that reads the signal from context instead of capturing it.
+
 ## [0.2.2] — 2026-06-14
 
 ### Added
