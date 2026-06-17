@@ -3636,6 +3636,12 @@ fn badge_span(text: &str, map: &BadgeVariantMap) -> Element {
     }
 }
 
+/// Inline style for a badge of the given color key. Built-in keys: `green`, `yellow`, `red`,
+/// `gray`, `blue`, `purple`, `orange`. Each resolves to a CSS-variable pair the consumer can
+/// override: `--chorale-badge-<color>-bg` / `--chorale-badge-<color>-text`. ANY other
+/// (non-empty) key is a custom-color escape hatch: it resolves to
+/// `--chorale-badge-<key>-bg/-text` and falls back to the neutral default when those are
+/// undefined — so consumers can extend the palette via CSS without forking.
 fn badge_style(color: &str) -> String {
     let (bg, fg) = match color {
         "green" => (
@@ -3654,6 +3660,30 @@ fn badge_style(color: &str) -> String {
             "var(--chorale-badge-gray-bg, #f3f4f6)",
             "var(--chorale-badge-gray-text, #374151)",
         ),
+        "blue" => (
+            "var(--chorale-badge-blue-bg, #dbeafe)",
+            "var(--chorale-badge-blue-text, #1e40af)",
+        ),
+        "purple" => (
+            "var(--chorale-badge-purple-bg, #ede9fe)",
+            "var(--chorale-badge-purple-text, #5b21b6)",
+        ),
+        "orange" => (
+            "var(--chorale-badge-orange-bg, #ffedd5)",
+            "var(--chorale-badge-orange-text, #9a3412)",
+        ),
+        // Any other key resolves to consumer-defined `--chorale-badge-<key>-bg/-text`
+        // variables, falling back to the neutral default when those are undefined. This is
+        // the custom-color escape hatch: a consumer can add palette entries via CSS without
+        // forking, and an unknown/unstyled key degrades to gray rather than breaking.
+        other if !other.is_empty() => {
+            return format!(
+                "display:inline-block;padding:0.125rem 0.5rem;border-radius:9999px;\
+                 background:var(--chorale-badge-{other}-bg, var(--chorale-badge-default-bg, #e5e7eb));\
+                 color:var(--chorale-badge-{other}-text, var(--chorale-badge-default-text, #1f2937));\
+                 font-size:0.75rem;font-weight:500;"
+            );
+        }
         _ => (
             "var(--chorale-badge-default-bg, #e5e7eb)",
             "var(--chorale-badge-default-text, #1f2937)",
@@ -4456,6 +4486,30 @@ mod tests {
             s.contains("var(--chorale-badge-default-text, #1f2937)"),
             "unknown color should use fallback fg"
         );
+    }
+
+    #[test]
+    fn badge_style_supports_blue_purple_orange() {
+        for color in ["blue", "purple", "orange"] {
+            let s = super::badge_style(color);
+            assert!(
+                s.contains(&format!("var(--chorale-badge-{color}-bg")),
+                "{color} should resolve to its own bg var"
+            );
+            assert!(
+                s.contains(&format!("var(--chorale-badge-{color}-text")),
+                "{color} should resolve to its own text var"
+            );
+        }
+    }
+
+    #[test]
+    fn badge_style_custom_key_uses_escape_hatch_var_then_default() {
+        // A consumer-defined key resolves to its own var, with the neutral default as the
+        // nested fallback when the consumer hasn't defined it.
+        let s = super::badge_style("brand");
+        assert!(s.contains("var(--chorale-badge-brand-bg, var(--chorale-badge-default-bg"));
+        assert!(s.contains("var(--chorale-badge-brand-text, var(--chorale-badge-default-text"));
     }
 
     // ---- additional visible_view correctness (adapter-level) ---------------

@@ -403,6 +403,29 @@ fn badge_style(color: &str) -> String {
             "var(--chorale-badge-gray-bg, #f3f4f6)",
             "var(--chorale-badge-gray-text, #374151)",
         ),
+        "blue" => (
+            "var(--chorale-badge-blue-bg, #dbeafe)",
+            "var(--chorale-badge-blue-text, #1e40af)",
+        ),
+        "purple" => (
+            "var(--chorale-badge-purple-bg, #ede9fe)",
+            "var(--chorale-badge-purple-text, #5b21b6)",
+        ),
+        "orange" => (
+            "var(--chorale-badge-orange-bg, #ffedd5)",
+            "var(--chorale-badge-orange-text, #9a3412)",
+        ),
+        // Custom-color escape hatch: any other key resolves to consumer-defined
+        // `--chorale-badge-<key>-bg/-text`, falling back to the neutral default when those
+        // are undefined (so an unknown key degrades to gray rather than breaking).
+        other if !other.is_empty() => {
+            return format!(
+                "display:inline-block;padding:0.125rem 0.5rem;border-radius:9999px;\
+                 background:var(--chorale-badge-{other}-bg, var(--chorale-badge-default-bg, #e5e7eb));\
+                 color:var(--chorale-badge-{other}-text, var(--chorale-badge-default-text, #1f2937));\
+                 font-size:0.75rem;font-weight:500;"
+            );
+        }
         _ => (
             "var(--chorale-badge-default-bg, #e5e7eb)",
             "var(--chorale-badge-default-text, #1f2937)",
