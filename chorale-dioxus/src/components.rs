@@ -2359,6 +2359,31 @@ fn filter_th<TRow: Clone + PartialEq + 'static>(
                 }
             }
         }
+        FilterKind::MultiSelectContains { options, separator } => {
+            // Same checkbox picker as MultiSelect; the separator makes it emit a
+            // MultiSelectContains filter (OR-match over the cell's tokenized list).
+            let has_filter = current.is_some();
+            rsx! {
+                th { key: "{col_id}", style: "{th_style}",
+                    div {
+                        style: "display: flex; align-items: center; gap: 2px;",
+                        div { style: "flex: 1; min-width: 0;",
+                            MultiSelectFilter::<TRow> {
+                                col_id,
+                                options: options.clone(),
+                                current: current.clone(),
+                                handle,
+                                all_label: all_label.clone(),
+                                separator: separator.clone(),
+                            }
+                        }
+                        if has_filter {
+                            {clear_filter_button(col_id, handle, &clear_label)}
+                        }
+                    }
+                }
+            }
+        }
         FilterKind::NumericRange { min, max, step } => {
             let has_filter = current.is_some();
             rsx! {
@@ -2464,6 +2489,9 @@ fn MultiSelectFilter<TRow: Clone + PartialEq + 'static>(
     current: Option<FilterValue>,
     handle: UseTableHandle<TRow>,
     all_label: String,
+    // When `Some`, this picker drives a `MultiSelectContains` filter over list-valued cells
+    // (tokens split on this separator); when `None`, a plain exact-match `MultiSelect`.
+    #[props(default)] separator: Option<String>,
 ) -> Element {
     // Install a one-time document-level pointerdown listener that closes any
     // open chorale dropdown when the click lands outside it. We tag each
@@ -2492,6 +2520,7 @@ fn MultiSelectFilter<TRow: Clone + PartialEq + 'static>(
 
     let selected: HashSet<String> = match &current {
         Some(FilterValue::MultiSelect(s)) => s.clone(),
+        Some(FilterValue::MultiSelectContains { selected, .. }) => selected.clone(),
         _ => HashSet::new(),
     };
     let summary_label = if selected.is_empty() || selected.len() == options.len() {
@@ -2516,7 +2545,7 @@ fn MultiSelectFilter<TRow: Clone + PartialEq + 'static>(
                         box-shadow: var(--chorale-popover-shadow, 0 2px 6px rgba(0,0,0,0.08)); max-height: 240px; \
                         overflow-y: auto;",
                 for opt in options.iter() {
-                    {multi_select_option(col_id, opt.clone(), selected.clone(), handle)}
+                    {multi_select_option(col_id, opt.clone(), selected.clone(), handle, separator.clone())}
                 }
             }
         }
@@ -2528,6 +2557,7 @@ fn multi_select_option<TRow: Clone + PartialEq + 'static>(
     opt: String,
     selected: HashSet<String>,
     handle: UseTableHandle<TRow>,
+    separator: Option<String>,
 ) -> Element {
     let is_checked = selected.contains(&opt);
     let opt_label = opt.clone();
@@ -2547,6 +2577,14 @@ fn multi_select_option<TRow: Clone + PartialEq + 'static>(
                     }
                     if next.is_empty() {
                         handle.set_filter(col_id, None);
+                    } else if let Some(sep) = &separator {
+                        handle.set_filter(
+                            col_id,
+                            Some(FilterValue::MultiSelectContains {
+                                selected: next,
+                                separator: sep.clone(),
+                            }),
+                        );
                     } else {
                         handle.set_filter(col_id, Some(FilterValue::MultiSelect(next)));
                     }

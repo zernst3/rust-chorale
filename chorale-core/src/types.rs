@@ -327,6 +327,17 @@ pub enum FilterValue {
     /// Set of allowed text values. Paired with `FilterKind::MultiSelect`. An empty
     /// set passes all rows (treated as "no filter active").
     MultiSelect(HashSet<String>),
+    /// Set-membership over a LIST-valued cell. Paired with `FilterKind::MultiSelectContains`.
+    /// The cell text is split on `separator` into tokens (each trimmed); the row matches when
+    /// ANY token is in `selected` (OR / set-intersection), so picking one value surfaces every
+    /// row whose list contains it regardless of the other values in the cell. Empty `selected`
+    /// passes all rows. Per-VALUE matching, distinct from `Text`'s raw substring.
+    MultiSelectContains {
+        /// The picked values; a row matches if any of its cell tokens is in this set.
+        selected: HashSet<String>,
+        /// The delimiter the cell's list is joined on (e.g. `", "` or `","`).
+        separator: String,
+    },
     /// Match cells whose boolean value equals `want`. Paired with `FilterKind::Boolean`.
     Boolean(bool),
 }
@@ -413,6 +424,18 @@ impl CellValue {
         match (self, filter) {
             (Self::Text(s), FilterValue::Text(q)) => s.to_lowercase().contains(&q.to_lowercase()),
             (Self::Text(s), FilterValue::MultiSelect(set)) => set.is_empty() || set.contains(s),
+            (
+                Self::Text(s),
+                FilterValue::MultiSelectContains {
+                    selected,
+                    separator,
+                },
+            ) => {
+                selected.is_empty()
+                    || s.split(separator.as_str())
+                        .map(str::trim)
+                        .any(|tok| selected.contains(tok))
+            }
             (Self::Integer(n), FilterValue::NumericRange { min, max }) => {
                 #[allow(clippy::cast_precision_loss)]
                 let n = *n as f64;
@@ -477,6 +500,27 @@ mod tests {
         set.insert("Active".to_string());
         set.insert("Pending".to_string());
         assert!(!cell.matches_filter(&FilterValue::MultiSelect(set)));
+    }
+
+    #[test]
+    fn multi_select_contains_matches_any_token_in_list_cell() {
+        // A list-valued cell: three repos joined with ", ".
+        let cell = CellValue::Text("owner/api, owner/ui, owner/worker".into());
+        let mk = |vals: &[&str]| FilterValue::MultiSelectContains {
+            selected: vals.iter().map(|s| (*s).to_string()).collect(),
+            separator: ", ".to_string(),
+        };
+        // Picking one repo matches because the cell CONTAINS it (regardless of the others).
+        assert!(cell.matches_filter(&mk(&["owner/ui"])));
+        assert!(cell.matches_filter(&mk(&["owner/api"])));
+        // A repo not in the cell does not match.
+        assert!(!cell.matches_filter(&mk(&["owner/other"])));
+        // OR semantics: any overlap matches.
+        assert!(cell.matches_filter(&mk(&["owner/other", "owner/worker"])));
+        // Empty selection = no filter active.
+        assert!(cell.matches_filter(&mk(&[])));
+        // Per-VALUE, not substring: a partial token does NOT match.
+        assert!(!cell.matches_filter(&mk(&["owner/ap"])));
     }
 
     #[test]

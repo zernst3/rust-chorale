@@ -888,9 +888,15 @@ fn multiselect_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
     handle: UseTableHandle<TRow>,
     clear_label: &str,
     open_filter_col: RwSignal<Option<ColumnId>>,
+    // `Some` → drives a `MultiSelectContains` filter (OR-match over list-valued cells split on
+    // this separator); `None` → a plain exact-match `MultiSelect`.
+    separator: Option<String>,
 ) -> AnyView {
     let selected: HashSet<String> = match current {
         Some(FilterValue::MultiSelect(v)) => v.iter().cloned().collect(),
+        Some(FilterValue::MultiSelectContains { selected, .. }) => {
+            selected.iter().cloned().collect()
+        }
         _ => HashSet::new(),
     };
     let has_filter = current.is_some();
@@ -958,6 +964,7 @@ fn multiselect_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
                             let opt_clone = opt.clone();
                             let sel_clone = selected.clone();
                             let is_checked = sel_clone.contains(opt);
+                            let sep = separator.clone();
                             view! {
                                 <label style="display:flex;align-items:center;gap:0.25rem;\
                                              padding:0.2rem 0.25rem;cursor:pointer;font-size:0.8rem;">
@@ -973,6 +980,8 @@ fn multiselect_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
                                             let mut cur_set: HashSet<String> = match cur {
                                                 Some(FilterValue::MultiSelect(v)) =>
                                                     v.into_iter().collect(),
+                                                Some(FilterValue::MultiSelectContains { selected, .. }) =>
+                                                    selected.into_iter().collect(),
                                                 _ => HashSet::new(),
                                             };
                                             if checked {
@@ -982,6 +991,11 @@ fn multiselect_filter<TRow: Clone + PartialEq + Send + Sync + 'static>(
                                             }
                                             let filter = if cur_set.is_empty() {
                                                 None
+                                            } else if let Some(sep) = &sep {
+                                                Some(FilterValue::MultiSelectContains {
+                                                    selected: cur_set,
+                                                    separator: sep.clone(),
+                                                })
                                             } else {
                                                 Some(FilterValue::MultiSelect(cur_set))
                                             };
@@ -1314,6 +1328,21 @@ fn filter_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 handle,
                 &labels.clear_filter_label,
                 open_filter_col,
+                None,
+            )
+        }
+        FilterKind::MultiSelectContains { options, separator } => {
+            // Same checkbox picker; the separator makes it emit a MultiSelectContains filter
+            // (OR-match over the cell's tokenized list).
+            let opts: Vec<&str> = options.iter().map(String::as_str).collect();
+            multiselect_filter(
+                col_id,
+                &opts,
+                current,
+                handle,
+                &labels.clear_filter_label,
+                open_filter_col,
+                Some(separator.clone()),
             )
         }
         _ => view! { <span /> }.into_any(),

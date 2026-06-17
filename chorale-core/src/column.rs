@@ -172,6 +172,17 @@ pub enum FilterKind {
         /// The list of allowed option strings shown in the filter dropdown.
         options: Vec<String>,
     },
+    /// Like [`FilterKind::MultiSelect`], but for LIST-valued cells: the cell text is split on
+    /// `separator` and a row matches when ANY of its tokens is among the picked options
+    /// (OR / set-intersection). Use this when one cell holds several values ("a, b, c") and
+    /// the user wants "show every row containing X regardless of the others". Renders the same
+    /// checkbox picker as `MultiSelect`.
+    MultiSelectContains {
+        /// The distinct values shown in the picker (per-value options, not cell combos).
+        options: Vec<String>,
+        /// The delimiter the cell's list is joined on (e.g. `", "`).
+        separator: String,
+    },
     /// Numeric range bounded by `min..=max` with the given UI step.
     /// `min` / `max` configure the slider extents AND the default unset state
     /// (an unset filter equals `NumericRange { min: None, max: None }`).
