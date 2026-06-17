@@ -23,6 +23,34 @@ use dioxus::prelude::*;
 use crate::hooks::UseTableHandle;
 
 /// Type-erased cell renderer: maps a [`CellValue`] to a rendered [`Element`].
+///
+/// # The `Send + Sync` bound and interactive cells
+///
+/// The closure is `Send + Sync` because the renderer map is stored on the table
+/// state and threaded across the component tree. Dioxus signals use
+/// `UnsyncStorage` (they are `!Sync`), so **a renderer closure cannot CAPTURE a
+/// signal** — the natural "click this cell to open a modal / mutate state"
+/// pattern (capturing a `Signal` in the cell's `onclick`) fails to compile with
+/// a confusing `Sync` error.
+///
+/// The working pattern: have the renderer return a small `#[component]` that
+/// reads the signal from **context** ([`use_context`]) rather than capturing
+/// it. The closure then captures only plain data and stays `Send + Sync`, while
+/// the component does the reactive work on click:
+///
+/// ```ignore
+/// // Host provides the signal once, above the table:
+/// use_context_provider(|| Signal::new(None::<MyRow>));
+///
+/// // Renderer captures only plain data; the inner component reads context:
+/// let r: CellRenderer = Arc::new(|val: &CellValue| {
+///     let label = val.to_string();
+///     rsx! { OpenDetailCell { label } } // component calls use_context::<Signal<_>>()
+/// });
+/// ```
+///
+/// This is also the cleaner Dioxus idiom — long-lived `Arc` closures that
+/// capture signals are discouraged. For row-aware needs use [`RowCellRenderer`].
 pub type CellRenderer = Arc<dyn Fn(&CellValue) -> Element + Send + Sync + 'static>;
 
 /// Per-process counter for scroll-container DOM ids. Each mounted `<Table>`
