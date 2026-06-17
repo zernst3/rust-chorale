@@ -107,6 +107,50 @@ impl<TRow> PartialEq for RowCellRenderers<TRow> {
     }
 }
 
+/// Consumer predicate mapping a row to an optional CSS class, for data-driven row styling.
+/// Predicate is consumer code; the adapter applies the returned class to the row. Theming
+/// stays in CSS.
+pub type RowClassFn<TRow> = Arc<dyn Fn(&TRow) -> Option<String> + Send + Sync + 'static>;
+
+/// Per-row conditional styling hook (a `Table` prop). The returned class is appended to each
+/// data row's `<tr>`, composing with selection, grouping, and virtualization. Default: no
+/// extra class. Compared by pointer identity for prop diffing.
+pub struct RowClass<TRow>(Option<RowClassFn<TRow>>);
+
+impl<TRow> RowClass<TRow> {
+    /// Build from a predicate `Fn(&TRow) -> Option<String>` (None = no class for that row).
+    pub fn new(f: impl Fn(&TRow) -> Option<String> + Send + Sync + 'static) -> Self {
+        Self(Some(Arc::new(f)))
+    }
+
+    /// The class for a given row, if the predicate returned one.
+    fn class_for(&self, row: &TRow) -> Option<String> {
+        self.0.as_ref().and_then(|f| f(row))
+    }
+}
+
+impl<TRow> Default for RowClass<TRow> {
+    fn default() -> Self {
+        Self(None)
+    }
+}
+
+impl<TRow> Clone for RowClass<TRow> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<TRow> PartialEq for RowClass<TRow> {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+
 /// Input passed to the `validate_edit` callback before a cell edit is committed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EditValidation {
@@ -1757,6 +1801,7 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
     handle: UseTableHandle<TRow>,
     cell_renderers: &CellRenderers,
     row_cell_renderers: &RowCellRenderers<TRow>,
+    row_class: &RowClass<TRow>,
     editing_col: Option<ColumnId>,
     editing_text: RwSignal<String>,
     edit_error: RwSignal<Option<String>>,
@@ -1778,6 +1823,8 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
     } else {
         "var(--chorale-surface, white)"
     };
+    // Consumer-provided per-row class (#32); composes with the selection background above.
+    let row_class_attr = row_class.class_for(row).unwrap_or_default();
     let cells: Vec<AnyView> = visible_cols
         .iter()
         .map(|col| {
@@ -1815,6 +1862,7 @@ fn render_data_row<TRow: Clone + PartialEq + Send + Sync + 'static>(
 
     view! {
         <tr
+            class=row_class_attr
             data-chorale-index=row_index.to_string()
             style=format!(
                 "background:{bg};cursor:default;\
@@ -2226,6 +2274,11 @@ pub fn Table<TRow>(
     /// precedence over `cell_renderers` and the column's `RenderKind`.
     #[prop(default = RowCellRenderers::default())]
     row_cell_renderers: RowCellRenderers<TRow>,
+    /// Per-row conditional styling: a predicate mapping each row to an optional CSS class,
+    /// appended to that row's `<tr>`. Build with `RowClass::new(|row| ...)`. Composes with
+    /// selection, grouping, and virtualization. Default: no extra class.
+    #[prop(default = RowClass::default())]
+    row_class: RowClass<TRow>,
     #[prop(default = false)] column_toolbar: bool,
     #[prop(default = false)] csv_export: bool,
     #[prop(default = false)] xlsx_export: bool,
@@ -3375,6 +3428,7 @@ where
                                         handle,
                                         &cell_renderers,
                                         &row_cell_renderers,
+                                        &row_class,
                                         editing_target
                                             .filter(|t| t.row_id == row_id)
                                             .map(|t| t.column_id),
@@ -3514,6 +3568,7 @@ where
                                             handle,
                                             &cell_renderers,
                                             &row_cell_renderers,
+                                            &row_class,
                                             editing_col,
                                             editing_text,
                                             edit_error,

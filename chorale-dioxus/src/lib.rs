@@ -144,6 +144,11 @@ pub use components::RowCellRenderer;
 /// ```
 pub use components::RowCellRenderers;
 
+/// Per-row conditional styling hook for the [`Table`]'s `row_class` prop, plus its closure
+/// type. Build with `RowClass::new(|row| condition.then(|| "my-class".into()))`; the returned
+/// class is appended to that row's `<tr>` and composes with selection/grouping/virtualization.
+pub use components::{RowClass, RowClassFn};
+
 /// Create a reactive Chorale table handle backed by a Dioxus signal.
 ///
 /// Call inside a component to obtain a [`UseTableHandle<TRow>`]. Pass the

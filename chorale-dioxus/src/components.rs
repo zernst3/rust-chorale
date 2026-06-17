@@ -128,6 +128,53 @@ impl<TRow> PartialEq for RowCellRenderers<TRow> {
     }
 }
 
+/// Consumer predicate mapping a row to an optional CSS class, for data-driven row styling
+/// (e.g. tint rows that match a condition). The predicate is consumer code (data -> style
+/// intent); the adapter applies the returned class to the rendered row. Theming stays in
+/// CSS — style the class via your own stylesheet or `--chorale-*` variables.
+pub type RowClassFn<TRow> = Arc<dyn Fn(&TRow) -> Option<String> + Send + Sync + 'static>;
+
+/// Per-row conditional styling hook (a `Table` prop). Default: no extra class. The returned
+/// class is appended to each data row's `<tr>`, composing with selection (the selection
+/// background still applies), grouping, and virtualization (only visible rows are styled).
+/// Compared by pointer identity for prop diffing.
+pub struct RowClass<TRow>(Option<RowClassFn<TRow>>);
+
+impl<TRow> RowClass<TRow> {
+    /// Build from a predicate `Fn(&TRow) -> Option<String>` (None = no class for that row).
+    pub fn new(f: impl Fn(&TRow) -> Option<String> + Send + Sync + 'static) -> Self {
+        Self(Some(Arc::new(f)))
+    }
+
+    /// The class for a given row, if the predicate returned one.
+    fn class_for(&self, row: &TRow) -> Option<String> {
+        self.0.as_ref().and_then(|f| f(row))
+    }
+}
+
+// Manual impls (see RowCellRenderers): avoid spurious TRow bounds.
+impl<TRow> Default for RowClass<TRow> {
+    fn default() -> Self {
+        Self(None)
+    }
+}
+
+impl<TRow> Clone for RowClass<TRow> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<TRow> PartialEq for RowClass<TRow> {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+
 /// Input passed to the `validate_edit` callback before a cell edit is committed.
 ///
 /// Return `Ok(())` to allow the commit, or `Err(msg)` to show `msg` as an inline
@@ -310,6 +357,12 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     /// `HashMap<ColumnId, RowCellRenderer<TRow>>`. Default: empty.
     #[props(default)]
     row_cell_renderers: RowCellRenderers<TRow>,
+    /// Per-row conditional styling: a predicate mapping each row to an optional CSS class,
+    /// appended to that row's `<tr>`. Build with `RowClass::new(|row| ...)`. Composes with
+    /// selection (selection background still applies), grouping, and virtualization. Default:
+    /// no extra class.
+    #[props(default)]
+    row_class: RowClass<TRow>,
     /// Show a column visibility toolbar above the table. Each column gets
     /// a toggle checkbox.
     #[props(default = false)]
@@ -1591,7 +1644,7 @@ dioxus.send(parts.join('\n'));"
                                         }
                                     }
                                     for (offset, grouped_row) in grouped_view_read[start_idx..end_idx].iter().cloned().enumerate() {
-                                        {render_grouped_row(grouped_row, start_idx + offset, effective_col_count, selection_enabled, has_detail, handle, &group_header_class, &visible_cols, row_height, &widths, variable_row_height, &cell_renderers, &row_cell_renderers, editing_target, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, &selection_set, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover, on_row_click, &kb_id)}
+                                        {render_grouped_row(grouped_row, start_idx + offset, effective_col_count, selection_enabled, has_detail, handle, &group_header_class, &visible_cols, row_height, &widths, variable_row_height, &cell_renderers, &row_cell_renderers, &row_class, editing_target, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, &selection_set, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover, on_row_click, &kb_id)}
                                     }
                                     if bottom_pad_px > 0.0 {
                                         tr {
@@ -1631,7 +1684,7 @@ dioxus.send(parts.join('\n'));"
                                             let editing_col = editing_target
                                                 .filter(|t| t.row_id == row_id)
                                                 .map(|t| t.column_id);
-                                            data_tr(row, row_id, win.start_index + i, variable_row_height, &visible_cols, row_height, &widths, selection_enabled, selection_set.contains(&row_id), handle, &cell_renderers, &row_cell_renderers, editing_col, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover, has_detail, is_expanded, on_row_click, &kb_id)
+                                            data_tr(row, row_id, win.start_index + i, variable_row_height, &visible_cols, row_height, &widths, selection_enabled, selection_set.contains(&row_id), handle, &cell_renderers, &row_cell_renderers, &row_class, editing_col, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover, has_detail, is_expanded, on_row_click, &kb_id)
                                         }
                                         RenderRow::DetailPanel { parent_row_id } => {
                                             let pid = *parent_row_id;
@@ -2777,6 +2830,7 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
     handle: UseTableHandle<TRow>,
     cell_renderers: &CellRenderers,
     row_cell_renderers: &RowCellRenderers<TRow>,
+    row_class: &RowClass<TRow>,
     editing_col: Option<ColumnId>,
     editing_text: Signal<String>,
     edit_error: Signal<Option<String>>,
@@ -2822,6 +2876,10 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
         "var(--chorale-button-disabled-bg, #f0f0f0)"
     };
     let row_style = format!("--chorale-separator-color: {separator_color};");
+    // Consumer-provided per-row class (#32). Applied to the row's <tr>; the consumer styles
+    // it via their own CSS. Composes with selection (the selection background is driven by
+    // the data-chorale-row-selected attribute, not this class).
+    let row_class_attr = row_class.class_for(row).unwrap_or_default();
     // Focus ring on the chevron when the active cell is on the detail-expander
     // column of this row (keyboard navigation, issue #17).
     let chevron_focused = active_cell.is_some_and(|ac| {
@@ -2840,6 +2898,7 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
             // each other, corrupting the render (a parent header showing a child's indent /
             // jumbled counts). Data rows key on their RowId.
             key: "row-{row_id:?}",
+            class: "{row_class_attr}",
             style: "{row_style}",
             "data-chorale-index": "{row_index}",
             "data-chorale-row-selected": "{row_selected}",
@@ -2914,6 +2973,7 @@ fn render_grouped_row<TRow: Clone + PartialEq + 'static>(
     variable_row_height: bool,
     cell_renderers: &CellRenderers,
     row_cell_renderers: &RowCellRenderers<TRow>,
+    row_class: &RowClass<TRow>,
     editing_target: Option<chorale_core::EditTarget>,
     editing_text: Signal<String>,
     edit_error: Signal<Option<String>>,
@@ -2970,6 +3030,7 @@ fn render_grouped_row<TRow: Clone + PartialEq + 'static>(
                 handle,
                 cell_renderers,
                 row_cell_renderers,
+                row_class,
                 editing_col,
                 editing_text,
                 edit_error,
@@ -4538,6 +4599,19 @@ mod tests {
         let s = super::badge_style("brand");
         assert!(s.contains("var(--chorale-badge-brand-bg, var(--chorale-badge-default-bg"));
         assert!(s.contains("var(--chorale-badge-brand-text, var(--chorale-badge-default-text"));
+    }
+
+    // ---- row_class (#32) ---------------------------------------------------
+
+    #[test]
+    fn row_class_applies_predicate_per_row() {
+        let rc: super::RowClass<i64> =
+            super::RowClass::new(|n: &i64| (*n > 5).then(|| "big".to_string()));
+        assert_eq!(rc.class_for(&10), Some("big".to_string()));
+        assert_eq!(rc.class_for(&3), None);
+        // Default (no hook) never adds a class.
+        let none: super::RowClass<i64> = super::RowClass::default();
+        assert_eq!(none.class_for(&10), None);
     }
 
     // ---- additional visible_view correctness (adapter-level) ---------------
