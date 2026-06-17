@@ -113,6 +113,9 @@ pub use components::RowCellRenderer;
 /// [`RowCellRenderer`] closures. Pass to the `row_cell_renderers` prop of
 /// [`Table`]. Entries take precedence over `cell_renderers` and `RenderKind`.
 pub use components::RowCellRenderers;
+/// Per-row conditional styling hook for the [`Table`]'s `row_class` prop, plus its closure
+/// type. Build with `RowClass::new(|row| ...)`; the class is appended to that row's `<tr>`.
+pub use components::{RowClass, RowClassFn};
 
 /// Optional synchronous validation function for in-cell editing.
 ///
