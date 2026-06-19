@@ -350,13 +350,28 @@ fn paginate_grouped<TRow: Clone>(
                 let d = *depth;
                 // Collapsed headers always appear (user needs them to expand).
                 let include = *is_collapsed || {
-                    // Include expanded header when any data row in its subtree is on the page.
+                    // Include an EXPANDED header when any row in its subtree will
+                    // render on this page. Two cases count:
+                    //   1. a data row in the subtree that falls on the page, OR
+                    //   2. a COLLAPSED descendant header — which always renders,
+                    //      so its ancestors must render too.
+                    // Checking only (1) dropped an expanded parent whose children
+                    // were all collapsed: its subtree had no visible data rows, so
+                    // the parent header vanished while its collapsed child headers
+                    // stayed (issue #36). Because every rendered descendant is
+                    // ultimately either an on-page data row or a collapsed header,
+                    // "(1) OR (2)" is exactly "some descendant renders".
                     let mut j = i + 1;
                     let mut found = false;
                     while j < n {
                         match &flat[j] {
                             // Subtree ends at any header with depth <= d.
                             GroupedRow::Header { depth: jd, .. } if *jd <= d => break,
+                            // A collapsed descendant header always renders.
+                            GroupedRow::Header { is_collapsed, .. } if *is_collapsed => {
+                                found = true;
+                                break;
+                            }
                             GroupedRow::Data(..) if page_flat_indices.contains(&j) => {
                                 found = true;
                                 break;
@@ -982,6 +997,98 @@ mod tests {
         // The collapsed child is depth 1 + collapsed; its sibling stays depth 1 + expanded.
         assert_eq!(find(&after, &eng_1), Some((1, 2, true)));
         assert_eq!(find(&after, &eng_2), Some((1, 1, false)));
+    }
+
+    #[test]
+    fn paginated_grouped_keeps_expanded_parent_with_all_children_collapsed() {
+        // Regression for #36: in DataRowsOnly grouped pagination, an EXPANDED
+        // depth-0 header whose children are ALL collapsed has no visible data
+        // rows in its subtree. paginate_grouped previously kept an expanded
+        // header only when its subtree had an on-page data row, so the parent
+        // vanished from the view while its collapsed child headers stayed (you
+        // expanded a rule and its header disappeared, the file headers taking
+        // its slot). It must stay, above its children.
+        use crate::transitions::{collapse_all_groups, toggle_group};
+
+        let rows = vec![
+            (
+                RowId::new(),
+                R {
+                    name: "Eng".into(),
+                    score: 1,
+                },
+            ),
+            (
+                RowId::new(),
+                R {
+                    name: "Eng".into(),
+                    score: 1,
+                },
+            ),
+            (
+                RowId::new(),
+                R {
+                    name: "Eng".into(),
+                    score: 2,
+                },
+            ),
+            (
+                RowId::new(),
+                R {
+                    name: "Sales".into(),
+                    score: 1,
+                },
+            ),
+        ];
+        let columns = vec![
+            ColumnDef::new(ColumnId("name"), "Name", |r: &R| {
+                CellValue::Text(r.name.clone())
+            }),
+            ColumnDef::new(ColumnId("score"), "Score", |r: &R| {
+                CellValue::Integer(r.score)
+            }),
+        ];
+        // grouped_pagination defaults to DataRowsOnly (the paginated path).
+        let state = TableState {
+            rows: Arc::new(rows),
+            columns,
+            grouping: vec![ColumnId("name"), ColumnId("score")],
+            page_size: 100,
+            ..TableState::new(vec![], vec![])
+        };
+
+        // Collapse everything, then expand ONLY the depth-0 "Eng" group, so its
+        // depth-1 children stay collapsed.
+        let collapsed = collapse_all_groups(&state);
+        let eng = GroupKey::from_values(&["Eng"]);
+        let eng_1 = GroupKey::from_values(&["Eng", "1"]);
+        let view = visible_grouped_view(&toggle_group(&collapsed, &eng));
+
+        let pos = |k: &GroupKey| {
+            view.iter()
+                .position(|r| matches!(r, GroupedRow::Header { key, .. } if key == k))
+        };
+        // The expanded parent header is present (depth 0, expanded)...
+        assert!(
+            view.iter().any(|r| matches!(
+                r,
+                GroupedRow::Header { key, depth: 0, is_collapsed: false, .. } if *key == eng
+            )),
+            "expanded depth-0 parent with all-collapsed children must still render its header"
+        );
+        // ...its collapsed child header is present...
+        assert!(
+            view.iter().any(|r| matches!(
+                r,
+                GroupedRow::Header { key, is_collapsed: true, .. } if *key == eng_1
+            )),
+            "collapsed child header should render"
+        );
+        // ...and the parent precedes its child.
+        assert!(
+            pos(&eng) < pos(&eng_1),
+            "parent header must precede its child"
+        );
     }
 
     // ---- visible_rows ------------------------------------------------------
