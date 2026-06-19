@@ -956,6 +956,7 @@ fn App() -> impl IntoView {
                         cell_renderers=renderers
                         row_cell_renderers=row_renderers_val
                         column_toolbar=toolbar
+                        group_expand_toggle=true
                         csv_export=csv
                         xlsx_export=xlsx
                         resize_enabled=resize
