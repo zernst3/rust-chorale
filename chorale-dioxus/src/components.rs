@@ -367,6 +367,12 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     /// a toggle checkbox.
     #[props(default = false)]
     column_toolbar: bool,
+    /// Show an expand-all / collapse-all toggle in the first column header
+    /// when the table is grouped. Clicking it expands every group (all
+    /// depths); clicking again collapses them all. No-op when the table is
+    /// not grouped. Off by default.
+    #[props(default = false)]
+    group_expand_toggle: bool,
     /// Show an "Export CSV" button in the pagination footer. Exports the
     /// full post-filter / post-sort dataset (not just the current page) in
     /// RFC 4180 format.
@@ -1028,6 +1034,12 @@ dioxus.send(parts.join('\n'));"
     let is_grouped = !state.grouping.is_empty();
     let is_virtualized_grouped =
         is_grouped && state.grouped_pagination == GroupedPaginationMode::Virtualized;
+    // Expand-all / collapse-all header toggle (opt-in via `group_expand_toggle`).
+    // Only meaningful when grouped. `all_groups_expanded` drives both the icon
+    // and the action: when nothing is collapsed, the next click collapses all;
+    // otherwise it expands all.
+    let show_group_toggle = group_expand_toggle && is_grouped;
+    let all_groups_expanded = state.collapsed_groups.is_empty();
     let col_count = visible_cols.len();
     let effective_col_count = col_count + usize::from(selection_enabled) + usize::from(has_detail);
     let row_height = state.row_height;
@@ -1582,8 +1594,8 @@ dioxus.send(parts.join('\n'));"
                                     }
                                 }
                             }
-                            for col in &visible_cols {
-                                {header_th(col, widths.get(&col.id).copied(), handle, sort_enabled, current_sort, resize_enabled, drag_state, column_reorder_enabled, drag_col_id, drag_over_col, on_column_order_change, sticky_header_css.get(&col.id).map_or("", String::as_str), sticky_header)}
+                            for (col_i, col) in visible_cols.iter().enumerate() {
+                                {header_th(col, widths.get(&col.id).copied(), handle, sort_enabled, current_sort, resize_enabled, drag_state, column_reorder_enabled, drag_col_id, drag_over_col, on_column_order_change, sticky_header_css.get(&col.id).map_or("", String::as_str), sticky_header, show_group_toggle && col_i == 0, all_groups_expanded)}
                             }
                         }
                         if filter_enabled {
@@ -2039,6 +2051,11 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
     on_column_order_change: Option<EventHandler<Vec<ColumnId>>>,
     sticky_css: &str,
     sticky_header: bool,
+    // When true (first column of a grouped table with the toggle enabled), prepend
+    // an expand-all / collapse-all control to this header. `all_groups_expanded`
+    // selects the icon + action.
+    show_group_toggle: bool,
+    all_groups_expanded: bool,
 ) -> Element {
     let w = col_width_style(override_width, col.initial_width);
     let align = alignment_css(col.alignment);
@@ -2207,6 +2224,35 @@ fn header_th<TRow: Clone + PartialEq + 'static>(
                     style: "position: absolute; inset: 0; \
                             outline: 2px dashed var(--chorale-accent, #4a90e2); outline-offset: -2px; \
                             pointer-events: none; z-index: 3;",
+                }
+            }
+            if show_group_toggle {
+                span {
+                    class: "chorale-group-expand-all",
+                    role: "button",
+                    tabindex: "0",
+                    title: if all_groups_expanded { "Collapse all groups" } else { "Expand all groups" },
+                    "aria-label": if all_groups_expanded { "Collapse all groups" } else { "Expand all groups" },
+                    // Absolutely positioned at the cell's left edge so it sits directly
+                    // above the per-row group chevrons (which render at the group cell's
+                    // left, 1rem left of this header's padded text) without shifting the
+                    // column header label. A touch larger than the row chevrons so the
+                    // "all" control reads as distinct from them.
+                    style: "position: absolute; left: 0; top: 0; bottom: 0; \
+                            display: flex; align-items: center; \
+                            cursor: pointer; user-select: none; font-weight: 700; \
+                            font-size: 1.1rem; line-height: 1; \
+                            color: var(--chorale-accent, #4a90e2);",
+                    onclick: move |e| {
+                        // Don't let the click also trigger this column's sort.
+                        e.stop_propagation();
+                        if all_groups_expanded {
+                            handle.collapse_all_groups();
+                        } else {
+                            handle.expand_all_groups();
+                        }
+                    },
+                    if all_groups_expanded { "\u{25bc}" } else { "\u{25b6}" }
                 }
             }
             "{header}{sort_arrow}"

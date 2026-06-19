@@ -278,7 +278,10 @@ items land via opt-in props or transitions; nothing was removed.
   ranges are for general selection.
 - **Grouping and aggregation.** Group by one or more columns; collapse and
   expand groups. Per-column aggregators (sum, average, min, max, count)
-  appear in group header rows.
+  appear in group header rows. Opt into a header **expand-all / collapse-all
+  toggle** with the `group_expand_toggle` prop: a chevron at the left of the
+  first column header opens every group (all depths) on click and closes them
+  all on the next click.
 - **Custom cells.** `RenderKind::Badge` (declarative pill rendering) or
   `CellRenderers` (per-column arbitrary framework markup).
 - **Row-aware custom cells.** `RowCellRenderers` hands the renderer the full

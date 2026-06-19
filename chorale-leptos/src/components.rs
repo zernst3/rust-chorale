@@ -1126,6 +1126,10 @@ fn header_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
     drag_col_id: RwSignal<Option<ColumnId>>,
     sticky_css: &str,
     sticky_header: bool,
+    // When true (first column of a grouped table with the toggle enabled), prepend
+    // an expand-all / collapse-all control. `all_groups_expanded` picks icon+action.
+    show_group_toggle: bool,
+    all_groups_expanded: bool,
 ) -> AnyView {
     let w = col_width_style(override_width, col.initial_width);
     let align = alignment_css(col.alignment);
@@ -1251,6 +1255,32 @@ fn header_th<TRow: Clone + PartialEq + Send + Sync + 'static>(
                 }
             }
         >
+            {show_group_toggle.then(|| {
+                let label = if all_groups_expanded { "Collapse all groups" } else { "Expand all groups" };
+                let icon = if all_groups_expanded { "\u{25bc}" } else { "\u{25b6}" };
+                view! {
+                    <span
+                        class="chorale-group-expand-all"
+                        role="button"
+                        tabindex="0"
+                        title=label
+                        aria-label=label
+                        style="position:absolute;left:0;top:0;bottom:0;\
+                               display:flex;align-items:center;\
+                               cursor:pointer;user-select:none;font-weight:700;\
+                               font-size:1.1rem;line-height:1;\
+                               color:var(--chorale-accent, #4a90e2);"
+                        on:click=move |ev| {
+                            ev.stop_propagation();
+                            if all_groups_expanded {
+                                handle.collapse_all_groups();
+                            } else {
+                                handle.expand_all_groups();
+                            }
+                        }
+                    >{icon}</span>
+                }
+            })}
             {header.clone()}
             {sort_arrow.to_owned()}
             {sort_badge.map(|b| view! {
@@ -2333,6 +2363,11 @@ pub fn Table<TRow>(
     #[prop(default = RowClass::default())]
     row_class: RowClass<TRow>,
     #[prop(default = false)] column_toolbar: bool,
+    /// Show an expand-all / collapse-all toggle in the first column header when
+    /// the table is grouped. Click expands every group (all depths); click again
+    /// collapses them all. No-op when not grouped. Off by default.
+    #[prop(default = false)]
+    group_expand_toggle: bool,
     #[prop(default = false)] csv_export: bool,
     #[prop(default = false)] xlsx_export: bool,
     #[prop(default = false)] resize_enabled: bool,
@@ -3395,9 +3430,14 @@ where
                         };
 
                         // ---- table header ----
+                        // Expand-all / collapse-all header toggle (opt-in via
+                        // `group_expand_toggle`); only meaningful when grouped.
+                        let show_group_toggle = group_expand_toggle && !s.grouping.is_empty();
+                        let all_groups_expanded = s.collapsed_groups.is_empty();
                         let header_row: Vec<AnyView> = visible_cols
                             .iter()
-                            .map(|col| {
+                            .enumerate()
+                            .map(|(col_i, col)| {
                                 header_th(
                                     col,
                                     widths.get(&col.id).copied(),
@@ -3412,6 +3452,8 @@ where
                                         .get(&col.id)
                                         .map_or("", String::as_str),
                                     sticky_header,
+                                    show_group_toggle && col_i == 0,
+                                    all_groups_expanded,
                                 )
                             })
                             .collect();
