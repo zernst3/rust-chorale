@@ -15,16 +15,20 @@ planned for future releases. Inspired by
 
 ## Status
 
-The current release is **v0.2.2**: `chorale-core`, `chorale-dioxus`, and
-`chorale-leptos` are published at v0.2.2 (and `chorale-derive` at v0.2.0 — its
-macro is unchanged since 0.2.0) on crates.io. v0.2.2 adds a **row-set mutation
-API** (`set_rows` / `insert_row` / `append_rows` / `remove_row` / `remove_rows`
-for live and streaming data) and **full keyboard navigation for master/detail
-child tables** (the expand chevron is a navigable column — arrow onto it, Enter
-to expand, Tab to descend into the sub-table, Esc to return). The 0.2.x line
-also adds the Leptos adapter, the `chorale-derive` macro, built-in light/dark
-theming, grouping with rendered aggregates, and a large batch of table features
-over v0.1.0 (see `CHANGELOG.md`).
+The current release is **v0.2.3**: `chorale-core`, `chorale-dioxus`, and
+`chorale-leptos` are published at v0.2.3 (and `chorale-derive` at v0.2.0 — its
+macro is unchanged since 0.2.0) on crates.io. v0.2.3 is a dogfooding pass:
+it fixes nested-grouping expand/collapse dropping the parent header (#36, a
+shared `chorale-core` bug affecting both adapters) and adds an **expand-all /
+collapse-all group toggle**, a **per-row conditional styling hook** (`row_class`,
+#32), a **set-filter for list-valued cells** (`MultiSelectContains`, #35),
+**per-group "select all"** with a tri-state header checkbox (#31), and three
+more badge colors plus a custom-color escape hatch (#33). v0.2.2 added the
+**row-set mutation API** (`set_rows` / `insert_row` / `append_rows` / `remove_row`
+/ `remove_rows` for live and streaming data) and **full keyboard navigation for
+master/detail child tables**. The 0.2.x line also adds the Leptos adapter, the
+`chorale-derive` macro, built-in light/dark theming, grouping with rendered
+aggregates, and a large batch of table features over v0.1.0 (see `CHANGELOG.md`).
 
 All six `chorale-*` crate names are reserved on crates.io:
 [chorale](https://crates.io/crates/chorale),
@@ -462,9 +466,12 @@ reflects the full dataset.
 
 **PERF-1 (two-level memo):** a cheap `view_key` memo tracks only the fields
 that affect `visible_view` output. The expensive pipeline subscribes to
-`view_key`, not to the full signal — scroll and selection never retrigger
-filter/sort/paginate. At 1M rows this eliminates ~30 MB of allocation per
-scroll tick.
+`view_key`, not to the full signal — so scroll and selection do not retrigger
+the filter/sort/paginate pipeline. The `virtualized-1m-rows` example is the
+manual stress case for this; see
+[`docs/perf-2026-06-04-fine-grained-reactivity.md`](docs/perf-2026-06-04-fine-grained-reactivity.md)
+for the design rationale (its per-scroll allocation figure is an estimate from
+the row count, not a recorded benchmark).
 
 Three non-obvious requirements both adapters handle for you:
 
