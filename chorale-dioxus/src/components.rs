@@ -452,7 +452,12 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     /// In `GroupedPaginationMode::Virtualized` the header row is given a
     /// fixed `height` of `row_height` px and the content span clips, so host
     /// content must fit one row height. A `Callback` may capture host
-    /// signals and callbacks. Default `None` renders exactly what 0.2.3 did.
+    /// signals and callbacks. Build it with `use_callback` so its identity is
+    /// stable across renders. Focus outlines inside host content may clip in
+    /// virtualized mode. Tab moves among the header controls (selection
+    /// checkbox, chevron, host controls) once focus is inside the header, for
+    /// example after a click; Tab from a grid cell does not enter the header.
+    /// Default `None` renders exactly what 0.2.3 did.
     #[props(default)]
     group_header_renderer: Option<Callback<GroupHeaderContext, Element>>,
     /// Fired with the row's [`RowId`] when a data row receives a plain
@@ -3064,9 +3069,26 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
 /// A remounted table passes its saved `state.scroll_top`; page changes pass 0
 /// because `set_page` already reset it.
 fn sync_scroll_js(scroll_id: &str, scroll_top: f64) -> String {
+    // `inf` / `NaN` would format into invalid JS.
+    let scroll_top = if scroll_top.is_finite() {
+        scroll_top
+    } else {
+        0.0
+    };
     format!(
         "const el = document.getElementById('{scroll_id}'); if (el) el.scrollTop = {scroll_top};"
     )
+}
+
+/// Whether the group chevron button swallows this key. Only the keys that
+/// activate it or move focus away; the rest reach the grid so arrows and
+/// Ctrl+C / Ctrl+A keep working after a chevron click leaves focus on it.
+fn chevron_keydown_stops(key: &Key) -> bool {
+    match key {
+        Key::Enter | Key::Tab => true,
+        Key::Character(c) => c == " ",
+        _ => false,
+    }
 }
 
 /// Read-only description of one group header, passed to the host's
@@ -3295,10 +3317,21 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
         // Virtualized: the content span clips so host content cannot grow the row
         // (the scroll math assumes one fixed row height).
         let content_style = if virtualized {
-            "display: inline-block; vertical-align: middle; max-width: 90%; overflow: hidden; \
-             white-space: nowrap;"
+            format!(
+                "display: inline-block; vertical-align: middle; max-width: calc(100% - 1.5rem); \
+                 max-height: {row_height}px; overflow: hidden; white-space: nowrap;"
+            )
         } else {
-            "display: inline-block; vertical-align: middle;"
+            "display: inline-block; vertical-align: middle;".to_owned()
+        };
+        // `height` on a <tr> is only a minimum: pin the cell too, as data cells do.
+        let fixed_td = if virtualized {
+            format!(
+                "height: {row_height}px; box-sizing: border-box; white-space: nowrap; \
+                 padding-block: 0;"
+            )
+        } else {
+            String::new()
         };
         let expanded = if is_collapsed { "false" } else { "true" };
         let toggle_key = key.clone();
@@ -3314,6 +3347,8 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
                             id: "{cb_id}",
                             r#type: "checkbox",
                             checked: group_all,
+                            // Tab must move natively among the header controls.
+                            onkeydown: move |e: KeyboardEvent| { e.stop_propagation(); },
                             onmounted: move |_| {
                                 if group_partial {
                                     let _ = dioxus::document::eval(&format!(
@@ -3328,7 +3363,7 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
                 td {
                     colspan: "{col_count - usize::from(selection_enabled)}",
                     style: "padding: 0.4rem 1rem 0.4rem {indent}px; \
-                            border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem;",
+                            border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem; {fixed_td}",
                     button {
                         class: "chorale-group-toggle",
                         r#type: "button",
@@ -3337,9 +3372,14 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
                         style: "margin-right: 0.5rem; padding: 0; border: 0; background: transparent; \
                                 cursor: pointer; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2); \
                                 vertical-align: middle;",
-                        // Enter/Space on the focused button must reach the button's own
-                        // click, not the grid's key handler.
-                        onkeydown: move |e: KeyboardEvent| { e.stop_propagation(); },
+                        // Enter/Space must reach the button's own click and Tab must move
+                        // focus natively, not hit the grid's handler. Other keys (arrows,
+                        // Ctrl+C / Ctrl+A) still reach the grid.
+                        onkeydown: move |e: KeyboardEvent| {
+                            if chevron_keydown_stops(&e.key()) {
+                                e.stop_propagation();
+                            }
+                        },
                         onclick: move |_| { handle.toggle_group(toggle_key.clone()); },
                         "{toggle_icon}"
                     }
@@ -5162,10 +5202,12 @@ mod tests {
     const BASELINE_TBODY_0_2_3: &str = "<tbody><tr class=\"chorale-group-header\" style=\"background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;\"><td colspan=\"2\" style=\"padding: 0.4rem 1rem 0.4rem 0px; border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem;\"><span style=\"margin-right: 0.5rem; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2);\">\u{25b6}</span>g0<span style=\"margin-left: 0.5rem; font-size: 0.75rem; font-weight: 400; color: var(--chorale-text-subtle, #888);\">(2)</span></td></tr><tr class=\"chorale-group-header\" style=\"background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;\"><td colspan=\"2\" style=\"padding: 0.4rem 1rem 0.4rem 0px; border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem;\"><span style=\"margin-right: 0.5rem; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2);\">\u{25b6}</span>g1<span style=\"margin-left: 0.5rem; font-size: 0.75rem; font-weight: 400; color: var(--chorale-text-subtle, #888);\">(2)</span></td></tr></tbody>";
 
     #[derive(Clone, PartialEq)]
+    #[allow(clippy::struct_excessive_bools)]
     struct SsrCfg {
         collapse_first: bool,
         virtualized: bool,
         host: bool,
+        selection: bool,
     }
 
     #[allow(clippy::needless_pass_by_value)]
@@ -5215,20 +5257,22 @@ mod tests {
                 }
             })
         });
-        rsx! { super::Table::<R> { handle: table, group_header_renderer: renderer } }
+        rsx! { super::Table::<R> { handle: table, selection_enabled: cfg.selection, group_header_renderer: renderer } }
     }
 
     /// Render the fixture; returns the markup and the names of every event
     /// listener the first render attached.
     fn render_ssr(collapse_first: bool, virtualized: bool, host: bool) -> (String, Vec<String>) {
-        let mut dom = VirtualDom::new_with_props(
-            ssr_app,
-            SsrCfg {
-                collapse_first,
-                virtualized,
-                host,
-            },
-        );
+        render_ssr_cfg(SsrCfg {
+            collapse_first,
+            virtualized,
+            host,
+            selection: false,
+        })
+    }
+
+    fn render_ssr_cfg(cfg: SsrCfg) -> (String, Vec<String>) {
+        let mut dom = VirtualDom::new_with_props(ssr_app, cfg);
         let muts = dom.rebuild_to_vec();
         let listeners = muts
             .edits
@@ -5320,6 +5364,38 @@ mod tests {
     }
 
     #[test]
+    fn group_header_host_checkbox_keydown_is_isolated() {
+        let keydowns = |l: &[String]| l.iter().filter(|n| *n == "keydown").count();
+        let cfg = |host| SsrCfg {
+            collapse_first: true,
+            virtualized: false,
+            host,
+            selection: true,
+        };
+        let (_, default_listeners) = render_ssr_cfg(cfg(false));
+        let (_, host_listeners) = render_ssr_cfg(cfg(true));
+        // Two headers, each: wrapper span + chevron + selection checkbox.
+        assert_eq!(keydowns(&host_listeners), keydowns(&default_listeners) + 6);
+    }
+
+    #[test]
+    fn chevron_stops_only_enter_space_tab() {
+        assert!(super::chevron_keydown_stops(&Key::Enter));
+        assert!(super::chevron_keydown_stops(&Key::Tab));
+        assert!(super::chevron_keydown_stops(&Key::Character(" ".into())));
+        assert!(!super::chevron_keydown_stops(&Key::ArrowDown));
+        assert!(!super::chevron_keydown_stops(&Key::Character("c".into())));
+        assert!(!super::chevron_keydown_stops(&Key::Character("a".into())));
+    }
+
+    #[test]
+    fn sync_scroll_js_non_finite_writes_zero() {
+        for bad in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            assert!(super::sync_scroll_js("t-1", bad).contains("el.scrollTop = 0;"));
+        }
+    }
+
+    #[test]
     fn group_header_height_style_only_when_virtualized() {
         let row_height = TableState::<R>::new(vec![], vec![]).row_height;
         let (virt, _) = render_ssr(true, true, true);
@@ -5328,7 +5404,13 @@ mod tests {
             "{}",
             tbody(&virt)
         );
-        assert!(tbody(&virt).contains("overflow: hidden"));
+        let body = tbody(&virt);
+        assert!(body.contains(&format!(
+            "height: {row_height}px; box-sizing: border-box; white-space: nowrap; padding-block: 0;"
+        )));
+        assert!(body.contains(&format!("max-height: {row_height}px; overflow: hidden;")));
+        assert!(body.contains("max-width: calc(100% - 1.5rem);"));
+        assert!(!body.contains("max-width: 90%"));
         let (flat, _) = render_ssr(true, false, true);
         assert!(!tbody(&flat).contains("height:"), "{}", tbody(&flat));
         assert!(!tbody(&flat).contains("overflow: hidden"));

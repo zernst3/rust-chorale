@@ -505,11 +505,29 @@ fn App() -> Element {
 
     // ── Effect: grouped pagination mode ──────────────────────────────────────
     use_effect(move || {
-        table.signal().write().grouped_pagination = if *grouped_pagination_virt.read() {
+        table.set_grouped_pagination(if *grouped_pagination_virt.read() {
             GroupedPaginationMode::Virtualized
         } else {
             GroupedPaginationMode::DataRowsOnly
-        };
+        });
+    });
+
+    // Stable-identity host renderer for group headers (`use_callback`).
+    let group_header_cb = use_callback(move |ctx: GroupHeaderContext| {
+        let key = ctx.key.clone();
+        rsx! {
+            span { "{ctx.label} " }
+            select {
+                aria_label: "Group action",
+                option { "Keep" }
+                option { "Review" }
+            }
+            button {
+                r#type: "button",
+                onclick: move |_| table.toggle_group(key.clone()),
+                "Toggle ({ctx.row_count})"
+            }
+        }
     });
 
     // ── Computed props for the Table ─────────────────────────────────────────
@@ -999,22 +1017,7 @@ fn App() -> Element {
                 },
                 on_row_click: row_click_handler,
                 group_header_renderer: if *group_header_content_on.read() {
-                    Some(Callback::new(move |ctx: GroupHeaderContext| {
-                        let key = ctx.key.clone();
-                        rsx! {
-                            span { "{ctx.label} " }
-                            select {
-                                aria_label: "Group action",
-                                option { "Keep" }
-                                option { "Review" }
-                            }
-                            button {
-                                r#type: "button",
-                                onclick: move |_| table.toggle_group(key.clone()),
-                                "Toggle ({ctx.row_count})"
-                            }
-                        }
-                    }))
+                    Some(group_header_cb)
                 } else {
                     None
                 },

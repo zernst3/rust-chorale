@@ -278,15 +278,9 @@ impl<TRow: Clone + 'static> UseTableHandle<TRow> {
     /// Set how pagination treats group-header rows (`DataRowsOnly` pages data
     /// rows only; `Virtualized` windows the whole grouped view by scroll).
     ///
-    /// Resets the page and scroll position, as `set_grouping` callers expect.
+    /// Resets the page and scroll position, like `set_grouping`.
     pub fn set_grouped_pagination(&self, mode: chorale_core::GroupedPaginationMode) {
-        self.dispatch(|s| {
-            let mut next = s.clone();
-            next.grouped_pagination = mode;
-            next.page = 0;
-            next.scroll_top = 0.0;
-            next
-        });
+        self.dispatch(|s| with_grouped_pagination(s, mode));
     }
 
     /// Toggle selection for every (filter-visible) row in a group. If the group is fully
@@ -375,9 +369,36 @@ pub fn use_table<TRow: Clone + 'static>(
     }
 }
 
+/// Pure state change behind `UseTableHandle::set_grouped_pagination`.
+fn with_grouped_pagination<TRow: Clone>(
+    state: &TableState<TRow>,
+    mode: chorale_core::GroupedPaginationMode,
+) -> TableState<TRow> {
+    let mut next = state.clone();
+    next.grouped_pagination = mode;
+    next.page = 0;
+    next.scroll_top = 0.0;
+    next
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn with_grouped_pagination_sets_mode_and_resets_page_and_scroll() {
+        let mut s = TableState::<String>::new(vec![], vec![]);
+        s.page = 3;
+        s.scroll_top = 480.0;
+        let next = with_grouped_pagination(&s, chorale_core::GroupedPaginationMode::Virtualized);
+        assert_eq!(
+            next.grouped_pagination,
+            chorale_core::GroupedPaginationMode::Virtualized
+        );
+        assert_eq!(next.page, 0);
+        assert!(next.scroll_top.abs() < f64::EPSILON);
+    }
+
     use chorale_core::{ColumnDef, ColumnId, PaginationMode, TableState};
 
     fn assert_copy<T: Copy>() {}

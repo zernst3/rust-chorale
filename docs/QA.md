@@ -388,12 +388,16 @@ then **Group header content**. Not available in `leptos-qa-harness`.
    chevron is a button (`aria-expanded` follows the state).
 4. Click the `Toggle (n)` button: the group toggles (host calls
    `handle.toggle_group`).
-5. Press `Tab` from a data cell: focus reaches the chevron, then the select,
-   then the `Toggle` button. `Enter` or `Space` on the chevron toggles it.
+5. Click the chevron to put focus in the header, then press `Tab`: focus moves
+   to the select, then the `Toggle` button (with **Selection** on, `Shift+Tab`
+   from the chevron reaches the group checkbox). `Tab` from a grid cell does
+   not enter the header. `Enter` or `Space` on the chevron toggles it; arrow
+   keys, `Ctrl+C` and `Ctrl+A` still reach the grid.
 6. Focus the select and press arrow keys, letters, `Enter`: the grid's active
    cell and selection do not move (the content span stops `keydown`).
 7. Switch **Grouped pagination** to `Virtualized`: every header row keeps the
-   same fixed height and content never grows the row.
+   same fixed height and content never grows the row (focus outlines inside
+   host content may clip).
 
 **Edge cases:**
 - Toggle **Group header content** off: headers return to the default look and
