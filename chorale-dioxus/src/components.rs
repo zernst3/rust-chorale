@@ -3097,8 +3097,8 @@ fn page_scroll_target(prev_page: Option<usize>, page: usize, saved: f64) -> Opti
 }
 
 /// JS that snaps the scroll container's native `scrollTop` to `scroll_top`.
-/// A remounted table passes its saved `state.scroll_top`; page changes pass 0
-/// because `set_page` already reset it.
+/// A remounted table passes its saved `state.scroll_top`; a page change passes a
+/// literal 0.
 fn sync_scroll_js(scroll_id: &str, scroll_top: f64) -> String {
     // `inf` / `NaN` would format into invalid JS.
     let scroll_top = if scroll_top.is_finite() {
@@ -3397,7 +3397,7 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
         let checkbox_label = format!("Select group {label}");
         // DOM id so the chevron can focus itself on click (Safari and macOS
         // Firefox do not focus a button on click).
-        let tg_id = cb_id.replacen("chorale-grp-cb-", "chorale-grp-tg-", 1);
+        let tg_id = group_toggle_dom_id(kb_id, &key.to_string());
         let tg_id_click = tg_id.clone();
         let kb_id_key = kb_id.to_owned();
         return rsx! {
@@ -3533,6 +3533,21 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
 /// blur — the browser silently drops focus to `<body>`, so arrow keys would
 /// scroll the page instead of navigating cells. Deliberately NOT called from
 /// onblur — blur is an intentional click-away and must not steal focus back.
+/// DOM id of a group header's chevron button. Scoped by the table-unique `kb_id`
+/// so two tables (or a nested sub-table) with the same group keys never share an
+/// id, and suffixed with an FNV-1a hash of the raw key so keys that sanitize alike
+/// (`"a b"`, `"a_b"`) stay distinct. ASCII alphanumeric, `-` and `_` only.
+fn group_toggle_dom_id(kb_id: &str, key: &str) -> String {
+    let sanitized: String = key
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    let hash = key.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    });
+    format!("{kb_id}-tg-{sanitized}-{hash:x}")
+}
+
 fn refocus_keyboard_container(kb_id: &str) {
     dioxus::document::eval(&format!(
         "var el=document.getElementById('{kb_id}');if(el)el.focus();"
@@ -5505,10 +5520,31 @@ mod tests {
     fn group_header_chevron_has_focus_id() {
         let (html, _) = render_ssr(true, false, true);
         let body = tbody(&html);
-        assert!(body.contains("id=\"chorale-grp-tg-g0\""), "{body}");
-        let js = super::focus_element_js("chorale-grp-tg-g0");
-        assert!(js.contains("getElementById('chorale-grp-tg-g0')"), "{js}");
+        // The id carries the table-unique keyboard-container id as its prefix.
+        let Some(at) = body.find("-kb-tg-g0-") else {
+            panic!("{body}");
+        };
+        let from = body[..at].rfind('"').unwrap() + 1;
+        let tg_id = body[from..].split('"').next().unwrap().to_owned();
+        assert!(tg_id.starts_with("chorale-"), "{tg_id}");
+        let js = super::focus_element_js(&tg_id);
+        assert!(js.contains(&format!("getElementById('{tg_id}')")), "{js}");
         assert!(js.contains(".focus()"), "{js}");
+    }
+
+    #[test]
+    fn group_toggle_ids_are_table_scoped_and_collision_free() {
+        let a = super::group_toggle_dom_id("t-1-kb", "a b");
+        let b = super::group_toggle_dom_id("t-1-kb", "a_b");
+        assert_ne!(a, b);
+        assert_ne!(
+            super::group_toggle_dom_id("t-1-kb", "g0"),
+            super::group_toggle_dom_id("t-2-kb", "g0")
+        );
+        assert!(a.starts_with("t-1-kb-tg-a_b-"), "{a}");
+        assert!(a
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     }
 
     #[test]
