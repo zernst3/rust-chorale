@@ -85,9 +85,11 @@ every level.
 
 When `group_header_renderer` is set, the group chevron is a real
 `<button class="chorale-group-toggle">` and the header row no longer toggles on
-click. Tab does NOT enter a header from a grid cell: click into the header
-(the chevron, a host control or the group checkbox) first. From there `Tab` and
-`Shift+Tab` move natively among the header controls, left to right:
+click. The header controls are focusable, reached by click, or `Shift+Tab` from
+below; `Tab` does NOT enter a header from a grid cell. Once focus is inside,
+`Tab` and `Shift+Tab` move natively among the header controls, left to right.
+Each header adds its own tab stops (checkbox, chevron and every focusable host
+element):
 
 1. The per-group selection checkbox (only when selection is enabled).
 2. The chevron button: `Enter` or `Space` collapses or expands the group.
@@ -97,7 +99,13 @@ click. Tab does NOT enter a header from a grid cell: click into the header
 Keys pressed inside the host content or on the checkbox, and `Enter`, `Space`
 and `Tab` on the chevron, do not reach the grid's key handler, so they never
 move the active cell or start an edit. Other keys on the chevron (arrows,
-`Ctrl+C`, `Ctrl+A`) still reach the grid. In virtualized mode, focus outlines
+`Ctrl+C`, `Ctrl+A`) still reach the grid, and focus moves back to the grid's
+keyboard container first, so a header that scrolls out of the virtualized
+window cannot leave focus on `<body>`. The chevron focuses itself on click
+(Safari and macOS Firefox do not focus a button on click). After a click on a
+button inside the host content, focus stays in the header and every key goes
+to the host content (arrows and `Ctrl+A` do nothing) until a data cell is
+clicked. In virtualized mode, focus outlines
 inside host content may clip at the fixed row height. Hosts that want a label
 to toggle the group call `handle.toggle_group(ctx.key)`.
 

@@ -52,6 +52,18 @@ async fn sleep_ms(ms: u32) {
     .await;
 }
 
+/// The table's scroll container `scrollTop` as the DOM reports it (not the
+/// state value), or `None` when the container is not mounted.
+async fn dom_scroll_top() -> Option<f64> {
+    dioxus::document::eval(
+        r#"const el = document.querySelector('[id^="chorale-scroll-"]:not([id$="-kb"])');
+           return el ? el.scrollTop : null;"#,
+    )
+    .await
+    .ok()
+    .and_then(|v| v.as_f64())
+}
+
 #[component]
 fn App() -> Element {
     let table = use_table(|| {
@@ -167,13 +179,18 @@ fn App() -> Element {
                     r#type: "button",
                     onclick: move |_| {
                         spawn(async move {
-                            let before = table.signal().read().scroll_top;
+                            let state_before = table.signal().read().scroll_top;
+                            let dom_before = dom_scroll_top().await;
                             mounted.set(false);
                             sleep_ms(300).await;
                             mounted.set(true);
                             sleep_ms(500).await;
-                            let after = table.signal().read().scroll_top;
-                            remount_log.set(format!("scroll_top before: {before}, after remount: {after}"));
+                            let state_after = table.signal().read().scroll_top;
+                            let dom_after = dom_scroll_top().await;
+                            remount_log.set(format!(
+                                "DOM scrollTop before: {dom_before:?}, after remount: {dom_after:?}; \
+                                 state scroll_top before: {state_before}, after: {state_after}"
+                            ));
                         });
                     },
                     "Unmount and remount table"
