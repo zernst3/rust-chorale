@@ -436,6 +436,25 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     /// render as `<tr><td colspan>` containing the returned `Element`.
     #[props(default)]
     detail_renderer: Option<Callback<TRow, Element>>,
+    /// Optional host renderer for the content of every group-header row.
+    ///
+    /// When `Some`, chorale keeps the header `<tr>` (its key, class,
+    /// selection checkbox cell and depth indentation) and replaces the label,
+    /// row count and aggregates with the returned `Element`, wrapped in
+    /// `span.chorale-group-header-content`. The collapse chevron becomes a
+    /// real `<button class="chorale-group-toggle" aria-expanded>` (reachable
+    /// with Tab, activated with Enter or Space). The row-level click toggle
+    /// is NOT attached: a host that wants its own element to collapse the
+    /// group calls `handle.toggle_group(ctx.key.clone())`. The wrapper span
+    /// stops `keydown` propagation, so keys typed in host `<select>` or
+    /// `<input>` elements never reach the grid's key handler.
+    ///
+    /// In `GroupedPaginationMode::Virtualized` the header row is given a
+    /// fixed `height` of `row_height` px and the content span clips, so host
+    /// content must fit one row height. A `Callback` may capture host
+    /// signals and callbacks. Default `None` renders exactly what 0.2.3 did.
+    #[props(default)]
+    group_header_renderer: Option<Callback<GroupHeaderContext, Element>>,
     /// Fired with the row's [`RowId`] when a data row receives a plain
     /// (unmodified) left-click on one of its data cells. Not fired for:
     /// clicks on the selection checkbox or its cell, the detail-expander
@@ -1656,7 +1675,7 @@ dioxus.send(parts.join('\n'));"
                                         }
                                     }
                                     for (offset, grouped_row) in grouped_view_read[start_idx..end_idx].iter().cloned().enumerate() {
-                                        {render_grouped_row(grouped_row, start_idx + offset, effective_col_count, selection_enabled, has_detail, handle, &group_header_class, &visible_cols, row_height, &widths, variable_row_height, &cell_renderers, &row_cell_renderers, &row_class, editing_target, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, &selection_set, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover, on_row_click, &kb_id)}
+                                        {render_grouped_row(grouped_row, start_idx + offset, effective_col_count, selection_enabled, has_detail, handle, &group_header_class, &visible_cols, row_height, &widths, variable_row_height, &cell_renderers, &row_cell_renderers, &row_class, editing_target, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, &selection_set, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover, on_row_click, &kb_id, group_header_renderer.as_ref(), is_virtualized_grouped)}
                                     }
                                     if bottom_pad_px > 0.0 {
                                         tr {
@@ -3041,6 +3060,26 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
     }
 }
 
+/// Read-only description of one group header, passed to the host's
+/// `group_header_renderer` callback on [`Table`].
+///
+/// `#[non_exhaustive]`: fields may be added in a minor release, so hosts read
+/// it and never construct it.
+#[derive(Clone, PartialEq, Debug)]
+#[non_exhaustive]
+pub struct GroupHeaderContext {
+    /// Opaque key of the group; pass to `UseTableHandle::toggle_group`.
+    pub key: GroupKey,
+    /// Display label of the group (the grouped value, formatted).
+    pub label: String,
+    /// Nesting depth, 0 for the outermost group.
+    pub depth: usize,
+    /// Number of rows in the group.
+    pub row_count: usize,
+    /// Whether the group is currently collapsed.
+    pub is_collapsed: bool,
+}
+
 /// Dispatch a single `GroupedRow` to either `group_header_tr` or `data_tr`.
 #[allow(clippy::too_many_arguments)]
 fn render_grouped_row<TRow: Clone + PartialEq + 'static>(
@@ -3074,6 +3113,10 @@ fn render_grouped_row<TRow: Clone + PartialEq + 'static>(
     // DOM id of the table's tabindex="0" keyboard container, threaded down to
     // editor_td so editors can refocus it after a keyboard commit/cancel.
     kb_id: &str,
+    // Host renderer for group-header content and whether the grouped view is
+    // virtualized (fixed header row height).
+    group_header_renderer: Option<&Callback<GroupHeaderContext, Element>>,
+    is_virtualized_grouped: bool,
 ) -> Element {
     match grouped_row {
         GroupedRow::Header {
@@ -3096,6 +3139,7 @@ fn render_grouped_row<TRow: Clone + PartialEq + 'static>(
             selection_enabled,
             handle,
             group_header_class,
+            group_header_renderer.map(|r| (r, is_virtualized_grouped, row_height)),
         ),
         GroupedRow::Data(row_id, row) => {
             let editing_col = editing_target
@@ -3152,7 +3196,8 @@ fn aggregator_prefix<TRow>(kind: Option<&AggregatorKind<TRow>>) -> &'static str 
 
 /// Render a single group-header `<tr>`.
 ///
-/// Clicking the row (or the toggle button) calls `toggle_group` on the handle.
+/// Clicking the row calls `toggle_group` on the handle. With a host renderer
+/// (`host`), only the chevron button toggles and the row has no click handler.
 /// Depth is expressed as left-padding on the first cell (8px per level).
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 fn group_header_tr<TRow: Clone + PartialEq + 'static>(
@@ -3168,6 +3213,8 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
     selection_enabled: bool,
     handle: UseTableHandle<TRow>,
     extra_class: &str,
+    // `(renderer, virtualized, row_height)`; `None` = default 0.2.3 markup.
+    host: Option<(&Callback<GroupHeaderContext, Element>, bool, f64)>,
 ) -> Element {
     let indent = depth * 16;
     let toggle_icon = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
@@ -3220,6 +3267,83 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
             })
         })
         .collect();
+    if let Some((renderer, virtualized, row_height)) = host {
+        let host_el = renderer.call(GroupHeaderContext {
+            key: key.clone(),
+            label: label.clone(),
+            depth,
+            row_count,
+            is_collapsed,
+        });
+        let tr_style = if virtualized {
+            format!(
+                "background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; \
+                 height: {row_height}px;"
+            )
+        } else {
+            "background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600;".to_owned()
+        };
+        // Virtualized: the content span clips so host content cannot grow the row
+        // (the scroll math assumes one fixed row height).
+        let content_style = if virtualized {
+            "display: inline-block; vertical-align: middle; max-width: 90%; overflow: hidden; \
+             white-space: nowrap;"
+        } else {
+            "display: inline-block; vertical-align: middle;"
+        };
+        let expanded = if is_collapsed { "false" } else { "true" };
+        let toggle_key = key.clone();
+        return rsx! {
+            tr {
+                key: "grp-{key}",
+                class: "{extra_class}",
+                style: "{tr_style}",
+                if selection_enabled {
+                    td {
+                        style: "padding: 0.25rem 0.5rem; width: 2.5rem; text-align: center;",
+                        input {
+                            id: "{cb_id}",
+                            r#type: "checkbox",
+                            checked: group_all,
+                            onmounted: move |_| {
+                                if group_partial {
+                                    let _ = dioxus::document::eval(&format!(
+                                        "var e=document.getElementById('{cb_id_mount}');if(e)e.indeterminate=true;"
+                                    ));
+                                }
+                            },
+                            onchange: move |_| { handle.toggle_select_group(key_for_select.clone()); },
+                        }
+                    }
+                }
+                td {
+                    colspan: "{col_count - usize::from(selection_enabled)}",
+                    style: "padding: 0.4rem 1rem 0.4rem {indent}px; \
+                            border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem;",
+                    button {
+                        class: "chorale-group-toggle",
+                        r#type: "button",
+                        aria_expanded: "{expanded}",
+                        aria_label: "{label}",
+                        style: "margin-right: 0.5rem; padding: 0; border: 0; background: transparent; \
+                                cursor: pointer; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2); \
+                                vertical-align: middle;",
+                        // Enter/Space on the focused button must reach the button's own
+                        // click, not the grid's key handler.
+                        onkeydown: move |e: KeyboardEvent| { e.stop_propagation(); },
+                        onclick: move |_| { handle.toggle_group(toggle_key.clone()); },
+                        "{toggle_icon}"
+                    }
+                    span {
+                        class: "chorale-group-header-content",
+                        style: "{content_style}",
+                        onkeydown: move |e: KeyboardEvent| { e.stop_propagation(); },
+                        {host_el}
+                    }
+                }
+            }
+        };
+    }
     rsx! {
         tr {
             // Stable identity key (see data_tr): group headers key on their GroupKey so a
@@ -4096,6 +4220,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::compute_window_slice;
+    use super::GroupHeaderContext;
     use chorale_core::{
         visible_row_ids, visible_view, visible_window_for_state, Alignment, CellValue, ColumnDef,
         ColumnId, RenderKind, RenderRow, RowId, SortDirection, SortState, TableState,
@@ -5016,5 +5141,187 @@ mod tests {
         assert!(!super::should_fire_row_click(true, false));
         assert!(!super::should_fire_row_click(false, true));
         assert!(!super::should_fire_row_click(true, true));
+    }
+
+    // ---- group_header_renderer (SSR) --------------------------------------
+
+    use dioxus::prelude::*;
+
+    /// Byte-for-byte `<tbody>` rendered by 0.2.3 for the SSR fixture below
+    /// (two collapsed groups of two rows, no selection, no host renderer).
+    /// Captured from the unmodified v0.2.3 source before the hook existed.
+    const BASELINE_TBODY_0_2_3: &str = "<tbody><tr class=\"chorale-group-header\" style=\"background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;\"><td colspan=\"2\" style=\"padding: 0.4rem 1rem 0.4rem 0px; border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem;\"><span style=\"margin-right: 0.5rem; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2);\">\u{25b6}</span>g0<span style=\"margin-left: 0.5rem; font-size: 0.75rem; font-weight: 400; color: var(--chorale-text-subtle, #888);\">(2)</span></td></tr><tr class=\"chorale-group-header\" style=\"background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;\"><td colspan=\"2\" style=\"padding: 0.4rem 1rem 0.4rem 0px; border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem;\"><span style=\"margin-right: 0.5rem; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2);\">\u{25b6}</span>g1<span style=\"margin-left: 0.5rem; font-size: 0.75rem; font-weight: 400; color: var(--chorale-text-subtle, #888);\">(2)</span></td></tr></tbody>";
+
+    #[derive(Clone, PartialEq)]
+    struct SsrCfg {
+        collapse_first: bool,
+        virtualized: bool,
+        host: bool,
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn ssr_app(cfg: SsrCfg) -> Element {
+        let table = crate::use_table(move || {
+            let rows: Vec<(RowId, R)> = (0..4)
+                .map(|i| {
+                    (
+                        RowId::new(),
+                        R {
+                            name: format!("g{}", i % 2),
+                            score: i,
+                        },
+                    )
+                })
+                .collect();
+            let columns = vec![
+                ColumnDef::new(ColumnId("name"), "Name", |r: &R| {
+                    CellValue::Text(r.name.clone())
+                }),
+                ColumnDef::new(ColumnId("score"), "Score", |r: &R| {
+                    CellValue::Integer(r.score)
+                }),
+            ];
+            let mut s = TableState::new(rows, columns);
+            s.grouping = vec![ColumnId("name")];
+            if cfg.virtualized {
+                s.grouped_pagination = chorale_core::GroupedPaginationMode::Virtualized;
+                s.viewport_height = 400.0;
+            }
+            if cfg.collapse_first {
+                for row in chorale_core::visible_grouped_view(&s) {
+                    if let chorale_core::GroupedRow::Header { key, .. } = row {
+                        s.collapsed_groups.insert(key);
+                    }
+                }
+            }
+            s
+        });
+        let renderer = cfg.host.then(|| {
+            Callback::new(|ctx: GroupHeaderContext| {
+                rsx! {
+                    em {
+                        class: "host-content",
+                        "{ctx.label}|{ctx.depth}|{ctx.row_count}|{ctx.is_collapsed}"
+                    }
+                }
+            })
+        });
+        rsx! { super::Table::<R> { handle: table, group_header_renderer: renderer } }
+    }
+
+    /// Render the fixture; returns the markup and the names of every event
+    /// listener the first render attached.
+    fn render_ssr(collapse_first: bool, virtualized: bool, host: bool) -> (String, Vec<String>) {
+        let mut dom = VirtualDom::new_with_props(
+            ssr_app,
+            SsrCfg {
+                collapse_first,
+                virtualized,
+                host,
+            },
+        );
+        let muts = dom.rebuild_to_vec();
+        let listeners = muts
+            .edits
+            .iter()
+            .filter_map(|m| match m {
+                dioxus::dioxus_core::Mutation::NewEventListener { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+        (dioxus_ssr::render(&dom), listeners)
+    }
+
+    fn tbody(html: &str) -> &str {
+        let Some(start) = html.find("<tbody>") else {
+            return "";
+        };
+        let Some(end) = html.find("</tbody>").map(|i| i + "</tbody>".len()) else {
+            return "";
+        };
+        &html[start..end]
+    }
+
+    #[test]
+    fn group_header_default_markup_matches_0_2_3() {
+        for virtualized in [false, true] {
+            let (html, _) = render_ssr(true, virtualized, false);
+            assert_eq!(
+                tbody(&html),
+                BASELINE_TBODY_0_2_3,
+                "virtualized={virtualized}"
+            );
+        }
+    }
+
+    #[test]
+    fn group_header_host_content_gets_context_values() {
+        let (html, _) = render_ssr(true, false, true);
+        let body = tbody(&html);
+        assert!(
+            body.contains("class=\"chorale-group-header-content\""),
+            "{body}"
+        );
+        assert!(body.contains("g0|0|2|true"), "{body}");
+        assert!(body.contains("g1|0|2|true"), "{body}");
+        // Replaced: no built-in label markup or count span.
+        assert!(!body.contains("(2)"), "{body}");
+        // Expanded groups report is_collapsed=false.
+        let (html, _) = render_ssr(false, false, true);
+        assert!(tbody(&html).contains("g0|0|2|false"));
+    }
+
+    #[test]
+    fn group_header_host_has_toggle_button_and_no_row_toggle() {
+        let (html, listeners) = render_ssr(true, false, true);
+        let body = tbody(&html);
+        assert_eq!(
+            body.matches("class=\"chorale-group-toggle\"").count(),
+            2,
+            "{body}"
+        );
+        assert_eq!(body.matches("aria-expanded=\"false\"").count(), 2, "{body}");
+        assert!(body.contains("class=\"chorale-group-header\""), "{body}");
+        // The row toggle's pointer cursor is gone from the <tr>.
+        assert!(!body.contains("cursor: pointer; font-weight"), "{body}");
+        let tr_style_has_pointer = body.split("<tr ").skip(1).any(|tr| {
+            tr.split('>')
+                .next()
+                .unwrap_or("")
+                .contains("cursor: pointer")
+        });
+        assert!(!tr_style_has_pointer, "{body}");
+        // One click listener per header (the button), same count as the
+        // default's per-row listener: the row onclick was replaced, not added.
+        let (_, default_listeners) = render_ssr(true, false, false);
+        let clicks = |l: &[String]| l.iter().filter(|n| *n == "click").count();
+        assert_eq!(clicks(&listeners), clicks(&default_listeners));
+        let (html_exp, _) = render_ssr(false, false, true);
+        assert!(tbody(&html_exp).contains("aria-expanded=\"true\""));
+    }
+
+    #[test]
+    fn group_header_host_keydown_is_isolated() {
+        let keydowns = |l: &[String]| l.iter().filter(|n| *n == "keydown").count();
+        let (_, default_listeners) = render_ssr(true, false, false);
+        let (_, host_listeners) = render_ssr(true, false, true);
+        // Two headers, each with a keydown stopper on the wrapper span and on
+        // the toggle button.
+        assert_eq!(keydowns(&host_listeners), keydowns(&default_listeners) + 4);
+    }
+
+    #[test]
+    fn group_header_height_style_only_when_virtualized() {
+        let row_height = TableState::<R>::new(vec![], vec![]).row_height;
+        let (virt, _) = render_ssr(true, true, true);
+        assert!(
+            tbody(&virt).contains(&format!("height: {row_height}px;")),
+            "{}",
+            tbody(&virt)
+        );
+        assert!(tbody(&virt).contains("overflow: hidden"));
+        let (flat, _) = render_ssr(true, false, true);
+        assert!(!tbody(&flat).contains("height:"), "{}", tbody(&flat));
+        assert!(!tbody(&flat).contains("overflow: hidden"));
     }
 }

@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_No unreleased changes._
+### Added
+
+- **`group_header_renderer` prop on the Dioxus `<Table>` (dioxus only).** An optional `Callback<GroupHeaderContext, Element>` that renders the content of each group header: the host element replaces the label, row count and aggregates inside `span.chorale-group-header-content`, while chorale keeps the `<tr>`, its key and class, the selection checkbox and the indentation. The chevron becomes a `<button class="chorale-group-toggle" aria-expanded>` (Tab, Enter and Space work), the row-level click toggle is not attached (a host calls `handle.toggle_group(ctx.key)`), and the content stops `keydown` propagation so host selects and inputs never reach the grid's key handler. In `Virtualized` grouped mode the header row gets a fixed `row_height` and the content clips, so host content must fit one row height. New `#[non_exhaustive]` `GroupHeaderContext { key, label, depth, row_count, is_collapsed }`, re-exported from `chorale-dioxus`. Default `None` renders exactly what 0.2.3 did. `chorale-core` and `chorale-leptos` are unchanged.
+- **`UseTableHandle::set_grouped_pagination(mode)`.** Sets `GroupedPaginationMode` through the handle (resets page and scroll), so a host no longer writes the state signal directly.
 
 ## [0.2.3] — 2026-06-17
 

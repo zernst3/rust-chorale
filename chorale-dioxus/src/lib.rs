@@ -70,6 +70,9 @@ mod hooks;
 /// visual effect.
 pub use components::Table;
 
+/// Context passed to [`Table`]'s `group_header_renderer` prop for each group header.
+pub use components::GroupHeaderContext;
+
 /// Button component that exports the current filtered+sorted view as an XLSX
 /// file. Requires the `xlsx` feature on both `chorale-dioxus` and
 /// `chorale-core`. See [`components::ExportXlsxButton`] for prop details.

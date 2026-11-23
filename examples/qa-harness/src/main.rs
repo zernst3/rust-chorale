@@ -13,7 +13,8 @@ use chorale_core::{
 };
 use chorale_derive::TableRow;
 use chorale_dioxus::{
-    use_table, CellRenderer, CellRenderers, RowCellRenderer, RowCellRenderers, Table,
+    use_table, CellRenderer, CellRenderers, GroupHeaderContext, RowCellRenderer, RowCellRenderers,
+    Table,
 };
 use chrono::NaiveDate;
 use dioxus::prelude::*;
@@ -424,6 +425,7 @@ fn App() -> Element {
     let mut editing_on = use_signal(|| false);
     let mut grouping_on = use_signal(|| false);
     let mut grouped_pagination_virt = use_signal(|| false);
+    let mut group_header_content_on = use_signal(|| false);
     let mut column_reorder_on = use_signal(|| false);
     let mut frozen_columns_on = use_signal(|| false);
     let mut selection_toolbar_on = use_signal(|| false);
@@ -822,6 +824,17 @@ fn App() -> Element {
                     " Grouping & Aggregation"
                 }
                 label {
+                    input {
+                        r#type: "checkbox",
+                        checked: *group_header_content_on.read(),
+                        onchange: move |_| {
+                            let v = *group_header_content_on.read();
+                            group_header_content_on.set(!v);
+                        },
+                    }
+                    " Group header content"
+                }
+                label {
                     style: "display: flex; align-items: center; gap: 0.25rem;",
                     " Grouped pagination: "
                     select {
@@ -985,6 +998,26 @@ fn App() -> Element {
                     None
                 },
                 on_row_click: row_click_handler,
+                group_header_renderer: if *group_header_content_on.read() {
+                    Some(Callback::new(move |ctx: GroupHeaderContext| {
+                        let key = ctx.key.clone();
+                        rsx! {
+                            span { "{ctx.label} " }
+                            select {
+                                aria_label: "Group action",
+                                option { "Keep" }
+                                option { "Review" }
+                            }
+                            button {
+                                r#type: "button",
+                                onclick: move |_| table.toggle_group(key.clone()),
+                                "Toggle ({ctx.row_count})"
+                            }
+                        }
+                    }))
+                } else {
+                    None
+                },
             }
         }
     }

@@ -271,6 +271,20 @@ impl<TRow: Clone + 'static> UseTableHandle<TRow> {
         self.dispatch(|s| toggle_group(s, &key));
     }
 
+    /// Set how pagination treats group-header rows (`DataRowsOnly` pages data
+    /// rows only; `Virtualized` windows the whole grouped view by scroll).
+    ///
+    /// Resets the page and scroll position, as `set_grouping` callers expect.
+    pub fn set_grouped_pagination(&self, mode: chorale_core::GroupedPaginationMode) {
+        self.dispatch(|s| {
+            let mut next = s.clone();
+            next.grouped_pagination = mode;
+            next.page = 0;
+            next.scroll_top = 0.0;
+            next
+        });
+    }
+
     /// Toggle selection for every (filter-visible) row in a group. If the group is fully
     /// selected it is deselected; otherwise all its rows are selected. Drives the per-group
     /// "select all" checkbox in the group header (#31).

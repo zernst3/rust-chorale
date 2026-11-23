@@ -372,6 +372,35 @@ toggle in `leptos-qa-harness`.
 
 ---
 
+### 16a. Group header content (`group_header_renderer`, dioxus only)
+
+**Setup:** `dx serve --package qa-harness` — enable **Grouping & Aggregation**,
+then **Group header content**. Not available in `leptos-qa-harness`.
+
+**Happy path:**
+1. Each group header shows the role label, a small select and a
+   `Toggle (n)` button instead of the built-in label, count and aggregates.
+   The selection checkbox cell (with **Selection** on) and the depth
+   indentation are unchanged.
+2. Click the header row background or the label text. The group does NOT
+   collapse (no row-level click toggle).
+3. Click the `▼` chevron: the group collapses; click `▶`: it expands. The
+   chevron is a button (`aria-expanded` follows the state).
+4. Click the `Toggle (n)` button: the group toggles (host calls
+   `handle.toggle_group`).
+5. Press `Tab` from a data cell: focus reaches the chevron, then the select,
+   then the `Toggle` button. `Enter` or `Space` on the chevron toggles it.
+6. Focus the select and press arrow keys, letters, `Enter`: the grid's active
+   cell and selection do not move (the content span stops `keydown`).
+7. Switch **Grouped pagination** to `Virtualized`: every header row keeps the
+   same fixed height and content never grows the row.
+
+**Edge cases:**
+- Toggle **Group header content** off: headers return to the default look and
+  the whole row toggles on click again.
+
+---
+
 ### 17. Column reorder (v0.2.0, Item 9)
 
 **Setup:** `dx serve --package qa-harness` — enable the **Column Reorder** toggle
@@ -518,6 +547,7 @@ Run this after any change to either adapter to confirm behavioral equivalence:
 | Virtualization (10k) | `virtualized-10k-rows` | `leptos-virtualized-10k-rows` | parity expected |
 | Virtualization (1M) | `virtualized-1m-rows` | `leptos-virtualized-1m-rows` | parity expected |
 | Grouping | `qa-harness` | `leptos-qa-harness` | parity expected |
+| Group header content (`group_header_renderer`) | `qa-harness` | — | dioxus only |
 | Column reorder | `qa-harness` | `leptos-qa-harness` | parity expected |
 | Frozen columns | `qa-harness` | `leptos-qa-harness` | parity expected |
 | `selection_toolbar` slot | `qa-harness` | `leptos-qa-harness` | parity expected |

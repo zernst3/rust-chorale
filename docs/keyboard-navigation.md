@@ -81,6 +81,22 @@ column** — it participates in arrow-key navigation exactly like a data column.
 Sub-tables nest arbitrarily: the same `Tab`-in / `Esc`-out model applies at
 every level.
 
+## Group headers with a host renderer
+
+When `group_header_renderer` is set, the group chevron is a real
+`<button class="chorale-group-toggle">` and the header row no longer toggles on
+click. Tab order inside a header row, left to right:
+
+1. The per-group selection checkbox (only when selection is enabled).
+2. The chevron button: `Enter` or `Space` collapses or expands the group.
+3. Each focusable element the host renders (selects, buttons, inputs), in DOM
+   order.
+
+Keys pressed inside the host content, and `Enter` or `Space` on the chevron,
+do not reach the grid's key handler, so they never move the active cell or
+start an edit. `Tab` and `Shift+Tab` still follow the normal focus order. Hosts
+that want a label to toggle the group call `handle.toggle_group(ctx.key)`.
+
 ## Why the chevron-only entry rule
 
 Tab is also the ordinary "next cell" key, so it has to mean something
