@@ -262,7 +262,9 @@ impl<TRow: Clone + 'static> UseTableHandle<TRow> {
 
     /// Set the columns to group by (outermost-first). Clears collapsed state.
     ///
-    /// Pass an empty vec to remove all grouping. Resets page and scroll.
+    /// Pass an empty vec to remove all grouping. Clears `collapsed_groups`
+    /// and nothing else: page, scroll position and `row_heights` are left as
+    /// they were.
     pub fn set_grouping(&self, columns: Vec<ColumnId>) {
         self.dispatch(|s| set_grouping(s, columns));
     }
@@ -278,7 +280,9 @@ impl<TRow: Clone + 'static> UseTableHandle<TRow> {
     /// Set how pagination treats group-header rows (`DataRowsOnly` pages data
     /// rows only; `Virtualized` windows the whole grouped view by scroll).
     ///
-    /// Resets the page and scroll position, like `set_grouping`.
+    /// Resets `page` to 0, `scroll_top` to 0 and clears the `row_heights`
+    /// cache (it is keyed by visible-row index, which the mode changes);
+    /// leaves `collapsed_groups` and the grouping columns as they were.
     pub fn set_grouped_pagination(&self, mode: chorale_core::GroupedPaginationMode) {
         self.dispatch(|s| with_grouped_pagination(s, mode));
     }
@@ -378,6 +382,9 @@ fn with_grouped_pagination<TRow: Clone>(
     next.grouped_pagination = mode;
     next.page = 0;
     next.scroll_top = 0.0;
+    // `row_heights` is keyed by visible-row index, and the mode changes which
+    // rows sit at which index, so the cache is stale.
+    next.row_heights = std::collections::HashMap::new();
     next
 }
 
@@ -390,6 +397,8 @@ mod tests {
         let mut s = TableState::<String>::new(vec![], vec![]);
         s.page = 3;
         s.scroll_top = 480.0;
+        // Visible-index keyed cache: the mode changes which rows sit at which index.
+        s.row_heights.insert(2, 31.0);
         let next = with_grouped_pagination(&s, chorale_core::GroupedPaginationMode::Virtualized);
         assert_eq!(
             next.grouped_pagination,
@@ -397,6 +406,7 @@ mod tests {
         );
         assert_eq!(next.page, 0);
         assert!(next.scroll_top.abs() < f64::EPSILON);
+        assert!(next.row_heights.is_empty());
     }
 
     use chorale_core::{ColumnDef, ColumnId, PaginationMode, TableState};

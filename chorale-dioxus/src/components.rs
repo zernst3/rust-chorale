@@ -442,8 +442,8 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     /// selection checkbox cell and depth indentation) and replaces the label,
     /// row count and aggregates with the returned `Element`, wrapped in
     /// `span.chorale-group-header-content`. The collapse chevron becomes a
-    /// real `<button class="chorale-group-toggle" aria-expanded>` (reachable
-    /// with Tab, activated with Enter or Space). The row-level click toggle
+    /// real `<button class="chorale-group-toggle" aria-expanded>` (activated
+    /// with Enter or Space). The row-level click toggle
     /// is NOT attached: a host that wants its own element to collapse the
     /// group calls `handle.toggle_group(ctx.key.clone())`. The wrapper span
     /// stops `keydown` propagation, so keys typed in host `<select>` or
@@ -454,10 +454,17 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     /// content must fit one row height. A `Callback` may capture host
     /// signals and callbacks. Build it with `use_callback` so its identity is
     /// stable across renders. Focus outlines inside host content may clip in
-    /// virtualized mode. Tab moves among the header controls (selection
-    /// checkbox, chevron, host controls) once focus is inside the header, for
-    /// example after a click; Tab from a grid cell does not enter the header.
-    /// Default `None` renders exactly what 0.2.3 did.
+    /// virtualized mode. The header controls are focusable, reached by click,
+    /// or Shift+Tab from below, then Tab moves among the header controls
+    /// (selection checkbox, chevron, host controls); Tab from a grid cell does
+    /// not enter the header, and each header adds its own tab stops. After a
+    /// click on a button inside the host content, focus stays there and every
+    /// key goes to it until a data cell is clicked. In this mode the host
+    /// replaces the column aggregates in the header too, so the host renders
+    /// its own. The class names `chorale-group-toggle` and
+    /// `chorale-group-header-content` are a styling contract and will not
+    /// change in a patch release. Default `None` renders exactly what 0.2.3
+    /// did.
     #[props(default)]
     group_header_renderer: Option<Callback<GroupHeaderContext, Element>>,
     /// Fired with the row's [`RowId`] when a data row receives a plain
@@ -623,12 +630,19 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     // would see blank `bottom_pad` until they manually scrolled.
     let page_memo = use_memo(move || sig.read().page);
     let scroll_id_for_effect = scroll_id.clone();
+    let prev_page = use_hook(|| std::rc::Rc::new(std::cell::Cell::new(None::<usize>)));
     use_effect(move || {
-        let _p = page_memo.read();
-        // Peek, not read: only a page change re-runs the effect. On mount this
-        // restores a saved offset (remounted table) instead of blanking it.
-        let top = sig.peek().scroll_top;
-        dioxus::document::eval(&sync_scroll_js(&scroll_id_for_effect, top));
+        let page = *page_memo.read();
+        // Peek, not read: only a page change re-runs the effect. The saved offset
+        // applies on mount only; a later page change always lands at the top, even
+        // if a late scroll event or a host write through `handle.signal()` left a
+        // stale `scroll_top` in state.
+        let saved = sig.peek().scroll_top;
+        let target = page_scroll_target(prev_page.get(), page, saved);
+        prev_page.set(Some(page));
+        if let Some(top) = target {
+            dioxus::document::eval(&sync_scroll_js(&scroll_id_for_effect, top));
+        }
     });
 
     // Column reorder cleanup: when state.column_order changes (= a drop just
@@ -3065,6 +3079,23 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
     }
 }
 
+/// JS that focuses the element with DOM id `id` (the chevron focuses itself on
+/// click, since Safari and macOS Firefox do not focus a button on click).
+fn focus_element_js(id: &str) -> String {
+    format!("var b=document.getElementById('{id}');if(b)b.focus();")
+}
+
+/// What the page effect writes to the DOM `scrollTop`: the saved offset on the
+/// first run (mount), a literal 0 on a later page change, nothing when the page
+/// did not change.
+fn page_scroll_target(prev_page: Option<usize>, page: usize, saved: f64) -> Option<f64> {
+    match prev_page {
+        None => Some(saved),
+        Some(p) if p == page => None,
+        Some(_) => Some(0.0),
+    }
+}
+
 /// JS that snaps the scroll container's native `scrollTop` to `scroll_top`.
 /// A remounted table passes its saved `state.scroll_top`; page changes pass 0
 /// because `set_page` already reset it.
@@ -3087,6 +3118,25 @@ fn chevron_keydown_stops(key: &Key) -> bool {
     match key {
         Key::Enter | Key::Tab => true,
         Key::Character(c) => c == " ",
+        _ => false,
+    }
+}
+
+/// Whether a key the chevron lets through is one the grid acts on, so focus
+/// must move to the keyboard container first. Modifier-only presses (Shift,
+/// Control, Alt, Meta) are excluded: refocusing on a bare Shift would break
+/// Shift+Tab out of the chevron.
+fn chevron_keydown_refocuses(key: &Key, ctrl: bool) -> bool {
+    match key {
+        Key::ArrowDown
+        | Key::ArrowUp
+        | Key::ArrowLeft
+        | Key::ArrowRight
+        | Key::Home
+        | Key::End
+        | Key::PageUp
+        | Key::PageDown => true,
+        Key::Character(_) => ctrl,
         _ => false,
     }
 }
@@ -3170,7 +3220,7 @@ fn render_grouped_row<TRow: Clone + PartialEq + 'static>(
             selection_enabled,
             handle,
             group_header_class,
-            group_header_renderer.map(|r| (r, is_virtualized_grouped, row_height)),
+            group_header_renderer.map(|r| (r, is_virtualized_grouped, row_height, kb_id)),
         ),
         GroupedRow::Data(row_id, row) => {
             let editing_col = editing_target
@@ -3244,8 +3294,9 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
     selection_enabled: bool,
     handle: UseTableHandle<TRow>,
     extra_class: &str,
-    // `(renderer, virtualized, row_height)`; `None` = default 0.2.3 markup.
-    host: Option<(&Callback<GroupHeaderContext, Element>, bool, f64)>,
+    // `(renderer, virtualized, row_height, kb_id)`; `None` = default 0.2.3 markup.
+    // `kb_id` is the DOM id of the table's keyboard container.
+    host: Option<(&Callback<GroupHeaderContext, Element>, bool, f64, &str)>,
 ) -> Element {
     let indent = depth * 16;
     let toggle_icon = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
@@ -3298,7 +3349,7 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
             })
         })
         .collect();
-    if let Some((renderer, virtualized, row_height)) = host {
+    if let Some((renderer, virtualized, row_height, kb_id)) = host {
         let host_el = renderer.call(GroupHeaderContext {
             key: key.clone(),
             label: label.clone(),
@@ -3335,6 +3386,20 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
         };
         let expanded = if is_collapsed { "false" } else { "true" };
         let toggle_key = key.clone();
+        // Accessible names: the chevron falls back to "Group" for an empty label;
+        // the group checkbox is named after the group.
+        let chevron_label = if label.is_empty() {
+            "Group"
+        } else {
+            label.as_str()
+        }
+        .to_owned();
+        let checkbox_label = format!("Select group {label}");
+        // DOM id so the chevron can focus itself on click (Safari and macOS
+        // Firefox do not focus a button on click).
+        let tg_id = cb_id.replacen("chorale-grp-cb-", "chorale-grp-tg-", 1);
+        let tg_id_click = tg_id.clone();
+        let kb_id_key = kb_id.to_owned();
         return rsx! {
             tr {
                 key: "grp-{key}",
@@ -3347,6 +3412,7 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
                             id: "{cb_id}",
                             r#type: "checkbox",
                             checked: group_all,
+                            aria_label: "{checkbox_label}",
                             // Tab must move natively among the header controls.
                             onkeydown: move |e: KeyboardEvent| { e.stop_propagation(); },
                             onmounted: move |_| {
@@ -3365,22 +3431,37 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
                     style: "padding: 0.4rem 1rem 0.4rem {indent}px; \
                             border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem; {fixed_td}",
                     button {
+                        id: "{tg_id}",
                         class: "chorale-group-toggle",
                         r#type: "button",
                         aria_expanded: "{expanded}",
-                        aria_label: "{label}",
+                        aria_label: "{chevron_label}",
                         style: "margin-right: 0.5rem; padding: 0; border: 0; background: transparent; \
                                 cursor: pointer; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2); \
-                                vertical-align: middle;",
+                                vertical-align: middle; min-width: 24px; min-height: 24px;",
                         // Enter/Space must reach the button's own click and Tab must move
                         // focus natively, not hit the grid's handler. Other keys (arrows,
-                        // Ctrl+C / Ctrl+A) still reach the grid.
+                        // Ctrl+C / Ctrl+A) still reach the grid, so first move focus to the
+                        // keyboard container: in Virtualized mode the header can scroll out
+                        // and unmount, which would drop focus to <body> and kill the keys.
                         onkeydown: move |e: KeyboardEvent| {
                             if chevron_keydown_stops(&e.key()) {
                                 e.stop_propagation();
+                            } else {
+                                let m = e.modifiers();
+                                let ctrl = m.contains(Modifiers::CONTROL) || m.contains(Modifiers::META);
+                                if chevron_keydown_refocuses(&e.key(), ctrl) {
+                                    refocus_keyboard_container(&kb_id_key);
+                                }
                             }
                         },
-                        onclick: move |_| { handle.toggle_group(toggle_key.clone()); },
+                        onclick: move |_| {
+                            // Focus the button explicitly: Safari and macOS Firefox do not
+                            // focus it on click, and the grid's click handler would then
+                            // move focus to the container.
+                            dioxus::document::eval(&focus_element_js(&tg_id_click));
+                            handle.toggle_group(toggle_key.clone());
+                        },
                         "{toggle_icon}"
                     }
                     span {
@@ -5201,13 +5282,31 @@ mod tests {
     /// Captured from the unmodified v0.2.3 source before the hook existed.
     const BASELINE_TBODY_0_2_3: &str = "<tbody><tr class=\"chorale-group-header\" style=\"background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;\"><td colspan=\"2\" style=\"padding: 0.4rem 1rem 0.4rem 0px; border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem;\"><span style=\"margin-right: 0.5rem; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2);\">\u{25b6}</span>g0<span style=\"margin-left: 0.5rem; font-size: 0.75rem; font-weight: 400; color: var(--chorale-text-subtle, #888);\">(2)</span></td></tr><tr class=\"chorale-group-header\" style=\"background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;\"><td colspan=\"2\" style=\"padding: 0.4rem 1rem 0.4rem 0px; border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem;\"><span style=\"margin-right: 0.5rem; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2);\">\u{25b6}</span>g1<span style=\"margin-left: 0.5rem; font-size: 0.75rem; font-weight: 400; color: var(--chorale-text-subtle, #888);\">(2)</span></td></tr></tbody>";
 
-    #[derive(Clone, PartialEq)]
+    /// 0.2.3 `<tbody>` for the "selection" fixture variant (see `SsrCfg`).
+    const BASELINE_SELECTION_0_2_3: &str = "<tbody><tr class=\"chorale-group-header\" style=\"background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;\"><td style=\"padding: 0.25rem 0.5rem; width: 2.5rem; text-align: center;\"><input id=\"chorale-grp-cb-g0\" type=\"checkbox\"/></td><td colspan=\"2\" style=\"padding: 0.4rem 1rem 0.4rem 0px; border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem;\"><span style=\"margin-right: 0.5rem; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2);\">\u{25b6}</span>g0<span style=\"margin-left: 0.5rem; font-size: 0.75rem; font-weight: 400; color: var(--chorale-text-subtle, #888);\">(2)</span></td></tr><tr class=\"chorale-group-header\" style=\"background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;\"><td style=\"padding: 0.25rem 0.5rem; width: 2.5rem; text-align: center;\"><input id=\"chorale-grp-cb-g1\" type=\"checkbox\"/></td><td colspan=\"2\" style=\"padding: 0.4rem 1rem 0.4rem 0px; border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem;\"><span style=\"margin-right: 0.5rem; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2);\">\u{25b6}</span>g1<span style=\"margin-left: 0.5rem; font-size: 0.75rem; font-weight: 400; color: var(--chorale-text-subtle, #888);\">(2)</span></td></tr></tbody>";
+
+    /// 0.2.3 `<tbody>` for the "nested" fixture variant (see `SsrCfg`).
+    const BASELINE_NESTED_0_2_3: &str = "<tbody><tr class=\"chorale-group-header\" style=\"background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;\"><td colspan=\"2\" style=\"padding: 0.4rem 1rem 0.4rem 0px; border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem;\"><span style=\"margin-right: 0.5rem; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2);\">\u{25bc}</span>g0<span style=\"margin-left: 0.5rem; font-size: 0.75rem; font-weight: 400; color: var(--chorale-text-subtle, #888);\">(2)</span></td></tr><tr class=\"chorale-group-header\" style=\"background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;\"><td colspan=\"2\" style=\"padding: 0.4rem 1rem 0.4rem 16px; border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem;\"><span style=\"margin-right: 0.5rem; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2);\">\u{25bc}</span>0<span style=\"margin-left: 0.5rem; font-size: 0.75rem; font-weight: 400; color: var(--chorale-text-subtle, #888);\">(1)</span></td></tr><tr class=\"\" style=\"--chorale-separator-color: var(--chorale-button-disabled-bg, #f0f0f0);\" data-chorale-index=\"2\" data-chorale-row-selected=\"false\"><td style=\"position: relative; padding: 0.5rem 1rem; height: 40px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; box-shadow: inset 0 -1px 0 var(--chorale-button-disabled-bg, #f0f0f0); cursor: default;  \"><span>g0</span></td><td style=\"position: relative; padding: 0.5rem 1rem; height: 40px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; box-shadow: inset 0 -1px 0 var(--chorale-button-disabled-bg, #f0f0f0); cursor: default;  \"><span>0</span></td></tr><tr class=\"chorale-group-header\" style=\"background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;\"><td colspan=\"2\" style=\"padding: 0.4rem 1rem 0.4rem 16px; border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem;\"><span style=\"margin-right: 0.5rem; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2);\">\u{25bc}</span>2<span style=\"margin-left: 0.5rem; font-size: 0.75rem; font-weight: 400; color: var(--chorale-text-subtle, #888);\">(1)</span></td></tr><tr class=\"\" style=\"--chorale-separator-color: var(--chorale-button-disabled-bg, #f0f0f0);\" data-chorale-index=\"4\" data-chorale-row-selected=\"false\"><td style=\"position: relative; padding: 0.5rem 1rem; height: 40px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; box-shadow: inset 0 -1px 0 var(--chorale-button-disabled-bg, #f0f0f0); cursor: default;  \"><span>g0</span></td><td style=\"position: relative; padding: 0.5rem 1rem; height: 40px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; box-shadow: inset 0 -1px 0 var(--chorale-button-disabled-bg, #f0f0f0); cursor: default;  \"><span>2</span></td></tr><tr class=\"chorale-group-header\" style=\"background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;\"><td colspan=\"2\" style=\"padding: 0.4rem 1rem 0.4rem 0px; border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem;\"><span style=\"margin-right: 0.5rem; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2);\">\u{25bc}</span>g1<span style=\"margin-left: 0.5rem; font-size: 0.75rem; font-weight: 400; color: var(--chorale-text-subtle, #888);\">(2)</span></td></tr><tr class=\"chorale-group-header\" style=\"background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;\"><td colspan=\"2\" style=\"padding: 0.4rem 1rem 0.4rem 16px; border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem;\"><span style=\"margin-right: 0.5rem; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2);\">\u{25bc}</span>1<span style=\"margin-left: 0.5rem; font-size: 0.75rem; font-weight: 400; color: var(--chorale-text-subtle, #888);\">(1)</span></td></tr><tr class=\"\" style=\"--chorale-separator-color: var(--chorale-button-disabled-bg, #f0f0f0);\" data-chorale-index=\"7\" data-chorale-row-selected=\"false\"><td style=\"position: relative; padding: 0.5rem 1rem; height: 40px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; box-shadow: inset 0 -1px 0 var(--chorale-button-disabled-bg, #f0f0f0); cursor: default;  \"><span>g1</span></td><td style=\"position: relative; padding: 0.5rem 1rem; height: 40px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; box-shadow: inset 0 -1px 0 var(--chorale-button-disabled-bg, #f0f0f0); cursor: default;  \"><span>1</span></td></tr><tr class=\"chorale-group-header\" style=\"background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;\"><td colspan=\"2\" style=\"padding: 0.4rem 1rem 0.4rem 16px; border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem;\"><span style=\"margin-right: 0.5rem; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2);\">\u{25bc}</span>3<span style=\"margin-left: 0.5rem; font-size: 0.75rem; font-weight: 400; color: var(--chorale-text-subtle, #888);\">(1)</span></td></tr><tr class=\"\" style=\"--chorale-separator-color: var(--chorale-button-disabled-bg, #f0f0f0);\" data-chorale-index=\"9\" data-chorale-row-selected=\"false\"><td style=\"position: relative; padding: 0.5rem 1rem; height: 40px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; box-shadow: inset 0 -1px 0 var(--chorale-button-disabled-bg, #f0f0f0); cursor: default;  \"><span>g1</span></td><td style=\"position: relative; padding: 0.5rem 1rem; height: 40px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; box-shadow: inset 0 -1px 0 var(--chorale-button-disabled-bg, #f0f0f0); cursor: default;  \"><span>3</span></td></tr></tbody>";
+
+    /// 0.2.3 `<tbody>` for the "aggregates" fixture variant (see `SsrCfg`).
+    const BASELINE_AGGREGATES_0_2_3: &str = "<tbody><tr class=\"chorale-group-header\" style=\"background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;\"><td colspan=\"2\" style=\"padding: 0.4rem 1rem 0.4rem 0px; border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem;\"><span style=\"margin-right: 0.5rem; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2);\">\u{25b6}</span>g0<span style=\"margin-left: 0.5rem; font-size: 0.75rem; font-weight: 400; color: var(--chorale-text-subtle, #888);\">(2)</span><span style=\"margin-left: 1.25rem; font-weight: 400; font-size: 0.8125rem; color: var(--chorale-text-muted, #6b7280);\">\u{3a3} Score: </span><span style=\"font-weight: 600; font-size: 0.8125rem;\">2</span></td></tr><tr class=\"chorale-group-header\" style=\"background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;\"><td colspan=\"2\" style=\"padding: 0.4rem 1rem 0.4rem 0px; border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem;\"><span style=\"margin-right: 0.5rem; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2);\">\u{25b6}</span>g1<span style=\"margin-left: 0.5rem; font-size: 0.75rem; font-weight: 400; color: var(--chorale-text-subtle, #888);\">(2)</span><span style=\"margin-left: 1.25rem; font-weight: 400; font-size: 0.8125rem; color: var(--chorale-text-muted, #6b7280);\">\u{3a3} Score: </span><span style=\"font-weight: 600; font-size: 0.8125rem;\">4</span></td></tr></tbody>";
+
+    /// 0.2.3 `<tbody>` for the "expanded" fixture variant (see `SsrCfg`).
+    const BASELINE_EXPANDED_0_2_3: &str = "<tbody><tr class=\"chorale-group-header\" style=\"background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;\"><td colspan=\"2\" style=\"padding: 0.4rem 1rem 0.4rem 0px; border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem;\"><span style=\"margin-right: 0.5rem; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2);\">\u{25bc}</span>g0<span style=\"margin-left: 0.5rem; font-size: 0.75rem; font-weight: 400; color: var(--chorale-text-subtle, #888);\">(2)</span></td></tr><tr class=\"\" style=\"--chorale-separator-color: var(--chorale-button-disabled-bg, #f0f0f0);\" data-chorale-index=\"1\" data-chorale-row-selected=\"false\"><td style=\"position: relative; padding: 0.5rem 1rem; height: 40px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; box-shadow: inset 0 -1px 0 var(--chorale-button-disabled-bg, #f0f0f0); cursor: default;  \"><span>g0</span></td><td style=\"position: relative; padding: 0.5rem 1rem; height: 40px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; box-shadow: inset 0 -1px 0 var(--chorale-button-disabled-bg, #f0f0f0); cursor: default;  \"><span>0</span></td></tr><tr class=\"\" style=\"--chorale-separator-color: var(--chorale-button-disabled-bg, #f0f0f0);\" data-chorale-index=\"2\" data-chorale-row-selected=\"false\"><td style=\"position: relative; padding: 0.5rem 1rem; height: 40px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; box-shadow: inset 0 -1px 0 var(--chorale-button-disabled-bg, #f0f0f0); cursor: default;  \"><span>g0</span></td><td style=\"position: relative; padding: 0.5rem 1rem; height: 40px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; box-shadow: inset 0 -1px 0 var(--chorale-button-disabled-bg, #f0f0f0); cursor: default;  \"><span>2</span></td></tr><tr class=\"chorale-group-header\" style=\"background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;\"><td colspan=\"2\" style=\"padding: 0.4rem 1rem 0.4rem 0px; border-bottom: 1px solid var(--chorale-group-header-border, #dce4ff); font-size: 0.875rem;\"><span style=\"margin-right: 0.5rem; font-size: 0.75rem; color: var(--chorale-accent, #4a90e2);\">\u{25bc}</span>g1<span style=\"margin-left: 0.5rem; font-size: 0.75rem; font-weight: 400; color: var(--chorale-text-subtle, #888);\">(2)</span></td></tr><tr class=\"\" style=\"--chorale-separator-color: var(--chorale-button-disabled-bg, #f0f0f0);\" data-chorale-index=\"4\" data-chorale-row-selected=\"false\"><td style=\"position: relative; padding: 0.5rem 1rem; height: 40px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; box-shadow: inset 0 -1px 0 var(--chorale-button-disabled-bg, #f0f0f0); cursor: default;  \"><span>g1</span></td><td style=\"position: relative; padding: 0.5rem 1rem; height: 40px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; box-shadow: inset 0 -1px 0 var(--chorale-button-disabled-bg, #f0f0f0); cursor: default;  \"><span>1</span></td></tr><tr class=\"\" style=\"--chorale-separator-color: var(--chorale-button-disabled-bg, #f0f0f0);\" data-chorale-index=\"5\" data-chorale-row-selected=\"false\"><td style=\"position: relative; padding: 0.5rem 1rem; height: 40px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; box-shadow: inset 0 -1px 0 var(--chorale-button-disabled-bg, #f0f0f0); cursor: default;  \"><span>g1</span></td><td style=\"position: relative; padding: 0.5rem 1rem; height: 40px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; box-shadow: inset 0 -1px 0 var(--chorale-button-disabled-bg, #f0f0f0); cursor: default;  \"><span>3</span></td></tr></tbody>";
+
+    #[derive(Clone, PartialEq, Default)]
     #[allow(clippy::struct_excessive_bools)]
     struct SsrCfg {
         collapse_first: bool,
         virtualized: bool,
         host: bool,
         selection: bool,
+        /// Group by name, then score (depth-1 headers).
+        nested: bool,
+        /// Sum aggregator on the score column.
+        aggregates: bool,
+        /// First row has an empty group label.
+        empty_label: bool,
     }
 
     #[allow(clippy::needless_pass_by_value)]
@@ -5218,22 +5317,36 @@ mod tests {
                     (
                         RowId::new(),
                         R {
-                            name: format!("g{}", i % 2),
+                            name: if cfg.empty_label {
+                                String::new()
+                            } else {
+                                format!("g{}", i % 2)
+                            },
                             score: i,
                         },
                     )
                 })
                 .collect();
+            let score = ColumnDef::new(ColumnId("score"), "Score", |r: &R| {
+                CellValue::Integer(r.score)
+            });
+            let score = if cfg.aggregates {
+                score.aggregator(chorale_core::AggregatorKind::Sum)
+            } else {
+                score
+            };
             let columns = vec![
                 ColumnDef::new(ColumnId("name"), "Name", |r: &R| {
                     CellValue::Text(r.name.clone())
                 }),
-                ColumnDef::new(ColumnId("score"), "Score", |r: &R| {
-                    CellValue::Integer(r.score)
-                }),
+                score,
             ];
             let mut s = TableState::new(rows, columns);
-            s.grouping = vec![ColumnId("name")];
+            s.grouping = if cfg.nested {
+                vec![ColumnId("name"), ColumnId("score")]
+            } else {
+                vec![ColumnId("name")]
+            };
             if cfg.virtualized {
                 s.grouped_pagination = chorale_core::GroupedPaginationMode::Virtualized;
                 s.viewport_height = 400.0;
@@ -5267,7 +5380,7 @@ mod tests {
             collapse_first,
             virtualized,
             host,
-            selection: false,
+            ..SsrCfg::default()
         })
     }
 
@@ -5305,6 +5418,97 @@ mod tests {
                 "virtualized={virtualized}"
             );
         }
+    }
+
+    #[test]
+    fn group_header_default_markup_matches_0_2_3_variants() {
+        let cases = [
+            (
+                "selection cell",
+                SsrCfg {
+                    collapse_first: true,
+                    selection: true,
+                    ..SsrCfg::default()
+                },
+                BASELINE_SELECTION_0_2_3,
+            ),
+            (
+                "nested groups",
+                SsrCfg {
+                    nested: true,
+                    ..SsrCfg::default()
+                },
+                BASELINE_NESTED_0_2_3,
+            ),
+            (
+                "aggregates",
+                SsrCfg {
+                    collapse_first: true,
+                    aggregates: true,
+                    ..SsrCfg::default()
+                },
+                BASELINE_AGGREGATES_0_2_3,
+            ),
+            (
+                "expanded with data rows",
+                SsrCfg::default(),
+                BASELINE_EXPANDED_0_2_3,
+            ),
+        ];
+        let mismatched: Vec<&str> = cases
+            .into_iter()
+            .filter(|(_, cfg, baseline)| tbody(&render_ssr_cfg(cfg.clone()).0) != *baseline)
+            .map(|(name, _, _)| name)
+            .collect();
+        assert!(mismatched.is_empty(), "differs from 0.2.3: {mismatched:?}");
+    }
+
+    #[test]
+    fn group_header_host_accessible_names_and_target_size() {
+        let (html, _) = render_ssr_cfg(SsrCfg {
+            collapse_first: true,
+            host: true,
+            selection: true,
+            ..SsrCfg::default()
+        });
+        let body = tbody(&html);
+        assert!(body.contains("aria-label=\"g0\""), "{body}");
+        assert!(body.contains("aria-label=\"Select group g0\""), "{body}");
+        assert!(body.contains("aria-label=\"Select group g1\""), "{body}");
+        assert_eq!(
+            body.matches("min-width: 24px; min-height: 24px;").count(),
+            2,
+            "{body}"
+        );
+        // Empty label: the chevron falls back to "Group".
+        let (html, _) = render_ssr_cfg(SsrCfg {
+            collapse_first: true,
+            host: true,
+            empty_label: true,
+            ..SsrCfg::default()
+        });
+        let body = tbody(&html);
+        assert!(body.contains("aria-label=\"Group\""), "{body}");
+        assert!(!body.contains("aria-label=\"\""), "{body}");
+        // The default (None) markup carries none of these.
+        let (html, _) = render_ssr_cfg(SsrCfg {
+            collapse_first: true,
+            selection: true,
+            ..SsrCfg::default()
+        });
+        let body = tbody(&html);
+        assert!(!body.contains("aria-label"), "{body}");
+        assert!(!body.contains("min-width"), "{body}");
+    }
+
+    #[test]
+    fn group_header_chevron_has_focus_id() {
+        let (html, _) = render_ssr(true, false, true);
+        let body = tbody(&html);
+        assert!(body.contains("id=\"chorale-grp-tg-g0\""), "{body}");
+        let js = super::focus_element_js("chorale-grp-tg-g0");
+        assert!(js.contains("getElementById('chorale-grp-tg-g0')"), "{js}");
+        assert!(js.contains(".focus()"), "{js}");
     }
 
     #[test]
@@ -5368,9 +5572,9 @@ mod tests {
         let keydowns = |l: &[String]| l.iter().filter(|n| *n == "keydown").count();
         let cfg = |host| SsrCfg {
             collapse_first: true,
-            virtualized: false,
             host,
             selection: true,
+            ..SsrCfg::default()
         };
         let (_, default_listeners) = render_ssr_cfg(cfg(false));
         let (_, host_listeners) = render_ssr_cfg(cfg(true));
@@ -5386,6 +5590,24 @@ mod tests {
         assert!(!super::chevron_keydown_stops(&Key::ArrowDown));
         assert!(!super::chevron_keydown_stops(&Key::Character("c".into())));
         assert!(!super::chevron_keydown_stops(&Key::Character("a".into())));
+    }
+
+    #[test]
+    fn chevron_refocuses_grid_only_for_grid_keys() {
+        assert!(super::chevron_keydown_refocuses(&Key::ArrowDown, false));
+        assert!(super::chevron_keydown_refocuses(&Key::PageUp, false));
+        assert!(super::chevron_keydown_refocuses(
+            &Key::Character("a".into()),
+            true
+        ));
+        // A bare modifier or plain letter must not steal focus (Shift+Tab).
+        assert!(!super::chevron_keydown_refocuses(&Key::Shift, false));
+        assert!(!super::chevron_keydown_refocuses(&Key::Control, true));
+        assert!(!super::chevron_keydown_refocuses(
+            &Key::Character("a".into()),
+            false
+        ));
+        assert!(!super::chevron_keydown_refocuses(&Key::Tab, false));
     }
 
     #[test]
@@ -5412,8 +5634,21 @@ mod tests {
         assert!(body.contains("max-width: calc(100% - 1.5rem);"));
         assert!(!body.contains("max-width: 90%"));
         let (flat, _) = render_ssr(true, false, true);
-        assert!(!tbody(&flat).contains("height:"), "{}", tbody(&flat));
+        // The chevron's 24px target size (`min-height`) is not a row height.
+        let flat_body = tbody(&flat).replace("min-height:", "");
+        assert!(!flat_body.contains("height:"), "{flat_body}");
         assert!(!tbody(&flat).contains("overflow: hidden"));
+    }
+
+    #[test]
+    fn page_scroll_target_saved_on_mount_zero_on_page_change() {
+        // Mount: restore the saved offset.
+        assert_eq!(super::page_scroll_target(None, 0, 240.0), Some(240.0));
+        // Later page change: literal 0 even when state still holds an old offset.
+        assert_eq!(super::page_scroll_target(Some(0), 1, 240.0), Some(0.0));
+        assert_eq!(super::page_scroll_target(Some(3), 2, 99.0), Some(0.0));
+        // Same page: no write.
+        assert_eq!(super::page_scroll_target(Some(1), 1, 240.0), None);
     }
 
     #[test]
