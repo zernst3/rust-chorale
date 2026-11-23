@@ -191,6 +191,10 @@ impl<TRow: Clone + 'static> UseTableHandle<TRow> {
 
     /// Replace the entire row set (streaming full-refresh). Drops selection,
     /// editing, expanded-rows, active-cell and range state for the old rows.
+    ///
+    /// It also drops the scroll position. A host that only changes some rows
+    /// should patch them one at a time with [`UseTableHandle::update_row`],
+    /// which keeps selection and scroll.
     pub fn set_rows(&self, rows: Vec<(RowId, TRow)>) {
         self.dispatch(|s| set_rows(s, rows));
     }

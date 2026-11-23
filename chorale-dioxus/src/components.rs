@@ -620,10 +620,10 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     let scroll_id_for_effect = scroll_id.clone();
     use_effect(move || {
         let _p = page_memo.read();
-        let id = scroll_id_for_effect.clone();
-        dioxus::document::eval(&format!(
-            "const el = document.getElementById('{id}'); if (el) el.scrollTop = 0;"
-        ));
+        // Peek, not read: only a page change re-runs the effect. On mount this
+        // restores a saved offset (remounted table) instead of blanking it.
+        let top = sig.peek().scroll_top;
+        dioxus::document::eval(&sync_scroll_js(&scroll_id_for_effect, top));
     });
 
     // Column reorder cleanup: when state.column_order changes (= a drop just
@@ -3060,6 +3060,15 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
     }
 }
 
+/// JS that snaps the scroll container's native `scrollTop` to `scroll_top`.
+/// A remounted table passes its saved `state.scroll_top`; page changes pass 0
+/// because `set_page` already reset it.
+fn sync_scroll_js(scroll_id: &str, scroll_top: f64) -> String {
+    format!(
+        "const el = document.getElementById('{scroll_id}'); if (el) el.scrollTop = {scroll_top};"
+    )
+}
+
 /// Read-only description of one group header, passed to the host's
 /// `group_header_renderer` callback on [`Table`].
 ///
@@ -5323,5 +5332,13 @@ mod tests {
         let (flat, _) = render_ssr(true, false, true);
         assert!(!tbody(&flat).contains("height:"), "{}", tbody(&flat));
         assert!(!tbody(&flat).contains("overflow: hidden"));
+    }
+
+    #[test]
+    fn sync_scroll_js_writes_saved_offset() {
+        let js = super::sync_scroll_js("t-1", 240.0);
+        assert!(js.contains("getElementById('t-1')"), "{js}");
+        assert!(js.contains("el.scrollTop = 240;"), "{js}");
+        assert!(super::sync_scroll_js("t-1", 0.0).contains("el.scrollTop = 0;"));
     }
 }
