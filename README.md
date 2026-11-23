@@ -490,6 +490,7 @@ Install once: `cargo install dioxus-cli`. Run: `dx serve --package <name>`
 | `with-column-resize` | Drag-to-resize column borders. |
 | `virtualized-10k-rows` | 10 010-row dataset through fixed-row-height virtualization. |
 | `virtualized-1m-rows` | 1 000 000-row stress test isolating scroll performance. |
+| `group-header-hook` | The `group_header_renderer` hook: 300 groups, host header content, focus and scroll restore checks. |
 | `qa-harness` | All v0.2.0 features behind runtime toggles; the exhaustive smoke test. |
 
 ### Leptos examples

@@ -1,0 +1,10 @@
+[application]
+name = "group-header-hook"
+default_platform = "web"
+
+[web.app]
+title = "chorale group header hook"
+
+[web.watcher]
+reload_html = true
+watch_path = ["src"]
