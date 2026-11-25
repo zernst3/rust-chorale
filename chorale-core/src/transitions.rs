@@ -3376,7 +3376,7 @@ mod tests {
         // Start with a multi-cell range, then arrow-down.
         let s = start_range_selection(&make_state(), 0, col_name());
         let s = extend_range_to(&s, 2, col_score());
-        assert!(s.range_selection[0].anchor != s.range_selection[0].focus);
+        assert_ne!(s.range_selection[0].anchor, s.range_selection[0].focus);
         let s2 = move_active_cell(&s, NavDirection::Down);
         assert_range_collapsed_to_active(&s2);
     }
