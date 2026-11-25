@@ -24,3 +24,9 @@ dioxus = { version = "0.7", default-features = false, features = ["macro", "html
 
 [dev-dependencies]
 dioxus-ssr = "0.7"
+# tests/group_header_keyboard.rs sends real keydown events through the
+# VirtualDom. `SerializedKeyboardData` and `SerializedHtmlEventConverter` sit
+# behind dioxus-html's `serialize` feature; serde_json builds the fake
+# document's eval replies.
+dioxus-html = { version = "0.7", features = ["serialize"] }
+serde_json = "1"

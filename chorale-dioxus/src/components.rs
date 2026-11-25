@@ -1023,6 +1023,19 @@ dioxus.send(parts.join('\n'));"
         .iter()
         .filter(|r| matches!(r, RenderRow::Data { .. }))
         .count();
+    // Grouped-mode navigable columns: the same set the core transitions use
+    // (the detail-expander column leads when a detail renderer is set).
+    let grouped_nav_cols: Vec<ColumnId> = if has_detail {
+        std::iter::once(chorale_core::DETAIL_EXPANDER_COLUMN)
+            .chain(visible_col_ids_for_kb.iter().copied())
+            .collect()
+    } else {
+        visible_col_ids_for_kb.clone()
+    };
+    // A header row holds focusable controls when it renders the chevron (host
+    // renderer) or the group checkbox (selection on); Tab from a header moves
+    // focus into them.
+    let header_has_controls = group_header_renderer.is_some() || selection_enabled;
     // Pre-compute the set of all (row, col) cells covered by any range rectangle so that
     // per-cell rendering is O(1) lookup rather than O(ranges * cells).
     let range_cells: HashSet<(usize, ColumnId)> = {
@@ -1278,6 +1291,45 @@ dioxus.send(parts.join('\n'));"
                 let shift = e.modifiers().contains(Modifiers::SHIFT);
                 let ctrl = e.modifiers().contains(Modifiers::CONTROL)
                     || e.modifiers().contains(Modifiers::META);
+                // Grouped tables navigate in the grouped index space, with
+                // header rows as treegrid stops (issue #51).
+                if is_grouped {
+                    let outcome = grouped_keydown(
+                        handle,
+                        &grouped_view.peek(),
+                        &grouped_nav_cols,
+                        &e.key(),
+                        shift,
+                        ctrl,
+                        &scroll_id_kb,
+                        header_has_controls,
+                    );
+                    match outcome {
+                        GroupedKeyOutcome::NotHandled => {}
+                        GroupedKeyOutcome::Handled => {
+                            e.prevent_default();
+                            return;
+                        }
+                        GroupedKeyOutcome::Moved => {
+                            e.prevent_default();
+                            ensure_active_row_visible(
+                                handle, &scroll_id_kb, variable_row_height, inline,
+                            );
+                            return;
+                        }
+                        GroupedKeyOutcome::TabMoved(ac) => {
+                            e.prevent_default();
+                            if let Some(cb) = on_tab_to_editable {
+                                let editable = handle.signal().peek().columns.iter()
+                                    .any(|c| c.id == ac.column_id && c.editor.is_some());
+                                if editable {
+                                    cb.call(ac);
+                                }
+                            }
+                            return;
+                        }
+                    }
+                }
                 let dir_opt: Option<NavDirection> = match e.key() {
                     Key::ArrowDown => Some(NavDirection::Down),
                     Key::ArrowUp => Some(NavDirection::Up),
@@ -1598,6 +1650,10 @@ dioxus.send(parts.join('\n'));"
 
                 table {
                     style: "width: 100%; border-collapse: collapse; table-layout: fixed;",
+                    // Grouped rows form a tree: expose the ARIA treegrid
+                    // pattern (rows carry aria-level and, for headers,
+                    // aria-expanded). Ungrouped tables keep no role.
+                    role: is_grouped.then_some("treegrid"),
 
                     thead {
                         tr {
@@ -1694,7 +1750,7 @@ dioxus.send(parts.join('\n'));"
                                         }
                                     }
                                     for (offset, grouped_row) in grouped_view_read[start_idx..end_idx].iter().cloned().enumerate() {
-                                        {render_grouped_row(grouped_row, start_idx + offset, effective_col_count, selection_enabled, has_detail, handle, &group_header_class, &visible_cols, row_height, &widths, variable_row_height, &cell_renderers, &row_cell_renderers, &row_class, editing_target, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, &selection_set, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover, on_row_click, &kb_id, group_header_renderer.as_ref(), is_virtualized_grouped)}
+                                        {render_grouped_row(grouped_row, start_idx + offset, effective_col_count, selection_enabled, has_detail, handle, &group_header_class, &visible_cols, row_height, &widths, variable_row_height, &cell_renderers, &row_cell_renderers, &row_class, editing_target, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, &selection_set, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover, on_row_click, &kb_id, group_header_renderer.as_ref(), is_virtualized_grouped, state.grouping.len() + 1)}
                                     }
                                     if bottom_pad_px > 0.0 {
                                         tr {
@@ -1734,7 +1790,7 @@ dioxus.send(parts.join('\n'));"
                                             let editing_col = editing_target
                                                 .filter(|t| t.row_id == row_id)
                                                 .map(|t| t.column_id);
-                                            data_tr(row, row_id, win.start_index + i, variable_row_height, &visible_cols, row_height, &widths, selection_enabled, selection_set.contains(&row_id), handle, &cell_renderers, &row_cell_renderers, &row_class, editing_col, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover, has_detail, is_expanded, on_row_click, &kb_id)
+                                            data_tr(row, row_id, win.start_index + i, variable_row_height, &visible_cols, row_height, &widths, selection_enabled, selection_set.contains(&row_id), handle, &cell_renderers, &row_cell_renderers, &row_class, editing_col, editing_text, edit_error, &validate_edit, on_commit_edit, &sticky_body_css, active_cell, &range_cells, fill_focus_cell, fill_drag_active, fill_hover, has_detail, is_expanded, on_row_click, &kb_id, None)
                                         }
                                         RenderRow::DetailPanel { parent_row_id } => {
                                             let pid = *parent_row_id;
@@ -2970,6 +3026,8 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
     // DOM id of the table's tabindex="0" keyboard container, threaded down to
     // editor_td so editors can refocus it after a keyboard commit/cancel.
     kb_id: &str,
+    // Treegrid `aria-level` in a grouped table; `None` (no attribute) otherwise.
+    aria_level: Option<usize>,
 ) -> Element {
     // Row separator is rendered as a 1px inset box-shadow on each TD instead
     // of `border-bottom: 1px` on the TR. Reason: with `border-collapse: collapse`
@@ -3024,6 +3082,7 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
             style: "{row_style}",
             "data-chorale-index": "{row_index}",
             "data-chorale-row-selected": "{row_selected}",
+            "aria-level": aria_level.map(|l| l.to_string()),
             if selection_enabled {
                 td {
                     style: "padding: 0.25rem 0.5rem; width: 2.5rem; text-align: center; \
@@ -3141,6 +3200,261 @@ fn chevron_keydown_refocuses(key: &Key, ctrl: bool) -> bool {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Grouped-mode keyboard navigation (issue #51)
+// ---------------------------------------------------------------------------
+//
+// In a grouped table the body renders `visible_grouped_view`, so a row index
+// (the one clicks write into `active_cell.row_idx` and the one the cursor
+// highlight compares against) counts group header rows too. The core
+// `move_active_cell*` transitions count `visible_view` rows instead (data rows
+// of one page), which let the cursor land on a header with nothing drawn and
+// clamped it at the page size in Virtualized mode. Grouped tables therefore
+// navigate here, in the grouped index space, with header rows as stops (the
+// ARIA treegrid pattern).
+
+/// One cursor move in grouped mode.
+#[derive(Clone, Copy, Debug)]
+enum GroupedMove {
+    /// Arrow key: one row or one column.
+    Step(NavDirection),
+    /// Ctrl+Arrow: to the first or last row or column.
+    Edge(NavDirection),
+    /// Page Up or Page Down by this many rows (horizontal directions do nothing).
+    Page(NavDirection, usize),
+    /// Home: first column of the current row.
+    RowStart,
+    /// End: last column of the current row.
+    RowEnd,
+    /// Ctrl+Home: first column of the first row.
+    First,
+    /// Ctrl+End: last column of the last row.
+    Last,
+}
+
+/// Where `mv` takes the cursor in a grouped view of `rows` rows and the
+/// navigable columns `cols`, or `None` when there is nothing to move over
+/// (or a Page move is horizontal).
+///
+/// Mirrors the core transitions: clamps at the edges without wrapping, and
+/// with no active cell a Step Up or Left starts at the last cell while every
+/// other move starts from the first. The column is kept when moving onto and
+/// off a header row, so arrowing through a header returns to the same column.
+fn grouped_move_target(
+    current: Option<ActiveCell>,
+    rows: usize,
+    cols: &[ColumnId],
+    mv: GroupedMove,
+) -> Option<ActiveCell> {
+    if rows == 0 || cols.is_empty() {
+        return None;
+    }
+    let last_row = rows - 1;
+    let last_col = cols.len() - 1;
+    let Some(ac) = current else {
+        let (r, c) = match mv {
+            GroupedMove::Step(NavDirection::Up | NavDirection::Left) | GroupedMove::Last => {
+                (last_row, last_col)
+            }
+            GroupedMove::Edge(NavDirection::Down) => (last_row, 0),
+            GroupedMove::Edge(NavDirection::Right) | GroupedMove::RowEnd => (0, last_col),
+            _ => (0, 0),
+        };
+        return Some(ActiveCell::new(r, cols[c]));
+    };
+    let row = ac.row_idx.min(last_row);
+    let col = cols
+        .iter()
+        .position(|c| *c == ac.column_id)
+        .unwrap_or(0)
+        .min(last_col);
+    let (r, c) = match mv {
+        GroupedMove::Step(NavDirection::Up) => (row.saturating_sub(1), col),
+        GroupedMove::Step(NavDirection::Down) => ((row + 1).min(last_row), col),
+        GroupedMove::Step(NavDirection::Left) => (row, col.saturating_sub(1)),
+        GroupedMove::Step(NavDirection::Right) => (row, (col + 1).min(last_col)),
+        GroupedMove::Edge(NavDirection::Up) => (0, col),
+        GroupedMove::Edge(NavDirection::Down) => (last_row, col),
+        GroupedMove::Edge(NavDirection::Left) | GroupedMove::RowStart => (row, 0),
+        GroupedMove::Edge(NavDirection::Right) | GroupedMove::RowEnd => (row, last_col),
+        GroupedMove::Page(NavDirection::Up, n) => (row.saturating_sub(n), col),
+        GroupedMove::Page(NavDirection::Down, n) => ((row + n).min(last_row), col),
+        // `NavDirection` is non-exhaustive; any future direction is a no-op.
+        GroupedMove::Step(_) | GroupedMove::Edge(_) | GroupedMove::Page(..) => return None,
+        GroupedMove::First => (0, 0),
+        GroupedMove::Last => (last_row, last_col),
+    };
+    Some(ActiveCell::new(r, cols[c]))
+}
+
+/// What the grid keydown handler must still do after [`grouped_keydown`].
+#[derive(Debug, PartialEq)]
+enum GroupedKeyOutcome {
+    /// Not a grouped-mode key; the ungrouped handling runs.
+    NotHandled,
+    /// Handled; prevent the browser default and stop.
+    Handled,
+    /// The cursor moved; prevent the default and scroll it into view.
+    Moved,
+    /// Tab moved the cursor to this cell; prevent the default and fire
+    /// `on_tab_to_editable` when the column has an editor.
+    TabMoved(ActiveCell),
+}
+
+/// Grouped-mode handling of one grid keydown. `view` is the rendered grouped
+/// view (the memo the body iterates), `cols` the navigable columns and
+/// `header_has_controls` whether a header row holds focusable controls (the
+/// chevron with a host renderer, or the group checkbox with selection on).
+///
+/// Header rows are treegrid rows: Left collapses, Right expands, Enter and
+/// Space toggle, Tab moves focus into the header's own controls and Shift+Tab
+/// does nothing. Every move stays in the grouped index space. Shift+Arrow
+/// (range extension), Escape and the Ctrl+A/C/V shortcuts keep their
+/// ungrouped handling.
+#[allow(clippy::too_many_arguments)]
+fn grouped_keydown<TRow: Clone + PartialEq + 'static>(
+    handle: UseTableHandle<TRow>,
+    view: &[GroupedRow<TRow>],
+    cols: &[ColumnId],
+    key: &Key,
+    shift: bool,
+    ctrl: bool,
+    scroll_id: &str,
+    header_has_controls: bool,
+) -> GroupedKeyOutcome {
+    let mut sig = handle.signal();
+    let (active, editing, page_size) = {
+        let s = sig.peek();
+        (s.active_cell, s.editing.is_some(), s.page_size)
+    };
+    // Open editors stop their own keydowns; anything that still bubbles while
+    // an edit is open keeps the ungrouped behavior.
+    if editing {
+        return GroupedKeyOutcome::NotHandled;
+    }
+    let row = active.and_then(|ac| view.get(ac.row_idx).map(|r| (ac, r)));
+    let header = match row {
+        Some((
+            ac,
+            GroupedRow::Header {
+                key, is_collapsed, ..
+            },
+        )) => Some((ac, key.clone(), *is_collapsed)),
+        _ => None,
+    };
+    let data_row_id = match row {
+        Some((_, GroupedRow::Data(id, _))) => Some(*id),
+        _ => None,
+    };
+    let is_space = matches!(key, Key::Character(c) if c == " ");
+
+    if let Some((ac, group_key, is_collapsed)) = header {
+        match key {
+            Key::ArrowLeft if !shift && !ctrl => {
+                if !is_collapsed {
+                    handle.toggle_group(group_key);
+                }
+                return GroupedKeyOutcome::Handled;
+            }
+            Key::ArrowRight if !shift && !ctrl => {
+                if is_collapsed {
+                    handle.toggle_group(group_key);
+                }
+                return GroupedKeyOutcome::Handled;
+            }
+            Key::Enter => {
+                handle.toggle_group(group_key);
+                return GroupedKeyOutcome::Handled;
+            }
+            _ if is_space && !ctrl => {
+                handle.toggle_group(group_key);
+                return GroupedKeyOutcome::Handled;
+            }
+            Key::F2 => return GroupedKeyOutcome::Handled,
+            Key::Tab => {
+                if !shift && header_has_controls {
+                    focus_header_controls(scroll_id, ac.row_idx);
+                }
+                return GroupedKeyOutcome::Handled;
+            }
+            _ => {}
+        }
+    }
+
+    let mv = match key {
+        Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight if !shift => {
+            let dir = match key {
+                Key::ArrowUp => NavDirection::Up,
+                Key::ArrowDown => NavDirection::Down,
+                Key::ArrowLeft => NavDirection::Left,
+                _ => NavDirection::Right,
+            };
+            if ctrl {
+                GroupedMove::Edge(dir)
+            } else {
+                GroupedMove::Step(dir)
+            }
+        }
+        Key::Home if ctrl => GroupedMove::First,
+        Key::Home => GroupedMove::RowStart,
+        Key::End if ctrl => GroupedMove::Last,
+        Key::End => GroupedMove::RowEnd,
+        Key::PageUp => GroupedMove::Page(NavDirection::Up, page_size),
+        Key::PageDown => GroupedMove::Page(NavDirection::Down, page_size),
+        Key::Tab => GroupedMove::Step(if shift {
+            NavDirection::Left
+        } else {
+            NavDirection::Right
+        }),
+        Key::Enter | Key::F2 => {
+            // Edit the data row under the cursor, looked up in the grouped
+            // view (the ungrouped lookup would pick a different row).
+            if let (Some(ac), Some(row_id)) = (active, data_row_id) {
+                let started = chorale_core::start_edit(&*sig.peek(), row_id, ac.column_id);
+                if let Ok(new_s) = started {
+                    sig.set(new_s);
+                }
+            }
+            return GroupedKeyOutcome::Handled;
+        }
+        _ => return GroupedKeyOutcome::NotHandled,
+    };
+    let Some(target) = grouped_move_target(active, view.len(), cols, mv) else {
+        return GroupedKeyOutcome::Handled;
+    };
+    // Like the core moves, a plain move collapses any range to the new cell.
+    let mut new_s = sig.peek().clone();
+    new_s.active_cell = Some(target);
+    new_s.range_selection = vec![chorale_core::RangeSelection::single(
+        target.row_idx,
+        target.column_id,
+    )];
+    sig.set(new_s);
+    if matches!(key, Key::Tab) {
+        GroupedKeyOutcome::TabMoved(target)
+    } else {
+        GroupedKeyOutcome::Moved
+    }
+}
+
+/// Move focus to the first focusable control inside grouped row `row_idx` of
+/// this table (the group checkbox, the chevron or host content). The
+/// `:scope > table > tbody > tr` chain keeps the lookup inside this table's
+/// own rows, not a nested child's.
+fn focus_header_controls(scroll_id: &str, row_idx: usize) {
+    dioxus::document::eval(&focus_header_controls_js(scroll_id, row_idx));
+}
+
+fn focus_header_controls_js(scroll_id: &str, row_idx: usize) -> String {
+    format!(
+        "var sc=document.getElementById('{scroll_id}');\
+         var row=sc?sc.querySelector(':scope > table > tbody > tr[data-chorale-index=\"{row_idx}\"]'):null;\
+         var c=row?row.querySelector('input:not([disabled]),button:not([disabled]),select:not([disabled]),\
+         textarea:not([disabled]),a[href],[tabindex]:not([tabindex=\"-1\"])'):null;\
+         if(c)c.focus();"
+    )
+}
+
 /// Read-only description of one group header, passed to the host's
 /// `group_header_renderer` callback on [`Table`].
 ///
@@ -3198,6 +3512,8 @@ fn render_grouped_row<TRow: Clone + PartialEq + 'static>(
     // virtualized (fixed header row height).
     group_header_renderer: Option<&Callback<GroupHeaderContext, Element>>,
     is_virtualized_grouped: bool,
+    // `aria-level` of a data row: one below the deepest group header.
+    leaf_level: usize,
 ) -> Element {
     match grouped_row {
         GroupedRow::Header {
@@ -3214,6 +3530,8 @@ fn render_grouped_row<TRow: Clone + PartialEq + 'static>(
             row_count,
             is_collapsed,
             aggregates,
+            row_index,
+            active_cell.is_some_and(|ac| ac.row_idx == row_index),
             visible_cols,
             cell_renderers,
             effective_col_count,
@@ -3255,6 +3573,7 @@ fn render_grouped_row<TRow: Clone + PartialEq + 'static>(
                 false,
                 on_row_click,
                 kb_id,
+                Some(leaf_level),
             )
         }
         _ => rsx! {},
@@ -3288,6 +3607,10 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
     row_count: usize,
     is_collapsed: bool,
     aggregates: Vec<Option<CellValue>>,
+    // Index of this row in the grouped view, and whether the keyboard cursor
+    // is on it.
+    row_index: usize,
+    is_active: bool,
     visible_cols: &[ColumnDef<TRow>],
     cell_renderers: &CellRenderers,
     col_count: usize,
@@ -3300,6 +3623,9 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
 ) -> Element {
     let indent = depth * 16;
     let toggle_icon = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
+    // Treegrid row state (issue #51), on both the default and the host header.
+    let aria_level = depth + 1;
+    let expanded = if is_collapsed { "false" } else { "true" };
     let extra_class = extra_class.to_owned();
     // Per-group select-all (#31): tri-state checkbox in the header's selection cell. The key
     // is moved into the collapse onclick below, so clone the pieces the checkbox needs first.
@@ -3384,7 +3710,6 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
         } else {
             String::new()
         };
-        let expanded = if is_collapsed { "false" } else { "true" };
         let toggle_key = key.clone();
         // Accessible names: the chevron falls back to "Group" for an empty label;
         // the group checkbox is named after the group.
@@ -3405,6 +3730,10 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
                 key: "grp-{key}",
                 class: "{extra_class}",
                 style: "{tr_style}",
+                "aria-level": "{aria_level}",
+                "aria-expanded": "{expanded}",
+                "data-chorale-index": "{row_index}",
+                "data-chorale-active-row": "{is_active}",
                 if selection_enabled {
                     td {
                         style: "padding: 0.25rem 0.5rem; width: 2.5rem; text-align: center;",
@@ -3482,6 +3811,13 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
             key: "grp-{key}",
             class: "{extra_class}",
             style: "background: var(--chorale-group-header-bg, #f0f4ff); font-weight: 600; cursor: pointer;",
+            // Treegrid state and the keyboard cursor (issue #51). The cursor
+            // outline is a stylesheet rule keyed on `data-chorale-active-row`:
+            // Dioxus 0.7 drops some inline-style changes on a <tr> (see data_tr).
+            "aria-level": "{aria_level}",
+            "aria-expanded": "{expanded}",
+            "data-chorale-index": "{row_index}",
+            "data-chorale-active-row": "{is_active}",
             onclick: move |_| { handle.toggle_group(key.clone()); },
             if selection_enabled {
                 td {
@@ -5423,16 +5759,89 @@ mod tests {
         &html[start..end]
     }
 
+    /// Remove from every `<tr>` opening tag exactly the attributes 0.2.4 adds
+    /// for treegrid keyboard navigation (issue #51): `aria-level`,
+    /// `aria-expanded`, `data-chorale-active-row`, and `data-chorale-index` on
+    /// group header rows (data rows had `data-chorale-index` in 0.2.3 already).
+    /// What remains must equal the 0.2.3 markup byte for byte.
+    fn strip_treegrid_attrs(html: &str) -> String {
+        fn drop_attr(tag: &mut String, name: &str) {
+            let needle = format!(" {name}=\"");
+            if let Some(at) = tag.find(&needle) {
+                let value_start = at + needle.len();
+                if let Some(len) = tag[value_start..].find('"') {
+                    tag.replace_range(at..=value_start + len, "");
+                }
+            }
+        }
+        let mut out = String::with_capacity(html.len());
+        let mut rest = html;
+        while let Some(at) = rest.find("<tr ") {
+            out.push_str(&rest[..at]);
+            let end = rest[at..].find('>').map_or(rest.len(), |e| at + e);
+            let mut tag = rest[at..end].to_owned();
+            drop_attr(&mut tag, "aria-level");
+            drop_attr(&mut tag, "aria-expanded");
+            drop_attr(&mut tag, "data-chorale-active-row");
+            if tag.contains("class=\"chorale-group-header\"") {
+                drop_attr(&mut tag, "data-chorale-index");
+            }
+            out.push_str(&tag);
+            rest = &rest[end..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// The 0.2.4 additions on the default header, in render order.
+    fn header_tree_attrs(level: usize, expanded: bool, index: usize) -> String {
+        format!(
+            " aria-level=\"{level}\" aria-expanded=\"{expanded}\" \
+             data-chorale-index=\"{index}\" data-chorale-active-row=\"false\">"
+        )
+    }
+
+    // Changed on purpose in 0.2.4 (issue #51): header rows gained treegrid
+    // attributes and a row index so the keyboard cursor can stop on them.
+    // Everything else is still the 0.2.3 markup, byte for byte.
     #[test]
     fn group_header_default_markup_matches_0_2_3() {
         for virtualized in [false, true] {
             let (html, _) = render_ssr(true, virtualized, false);
+            let body = tbody(&html);
             assert_eq!(
-                tbody(&html),
+                strip_treegrid_attrs(body),
                 BASELINE_TBODY_0_2_3,
                 "virtualized={virtualized}"
             );
+            // Both collapsed headers carry exactly the new attributes.
+            assert!(
+                body.contains(&header_tree_attrs(1, false, 0)),
+                "virtualized={virtualized}: {body}"
+            );
+            assert!(
+                body.contains(&header_tree_attrs(1, false, 1)),
+                "virtualized={virtualized}: {body}"
+            );
         }
+    }
+
+    #[test]
+    fn strip_treegrid_attrs_only_removes_the_new_attributes() {
+        let header = "<tr class=\"chorale-group-header\" style=\"x\" aria-level=\"1\" \
+                      aria-expanded=\"true\" data-chorale-index=\"0\" \
+                      data-chorale-active-row=\"false\"><td>g</td></tr>";
+        assert_eq!(
+            strip_treegrid_attrs(header),
+            "<tr class=\"chorale-group-header\" style=\"x\"><td>g</td></tr>"
+        );
+        // A data row keeps its 0.2.3 index; only aria-level goes.
+        let data = "<tr class=\"\" data-chorale-index=\"2\" data-chorale-row-selected=\"false\" \
+                    aria-level=\"2\"><td>d</td></tr>";
+        assert_eq!(
+            strip_treegrid_attrs(data),
+            "<tr class=\"\" data-chorale-index=\"2\" data-chorale-row-selected=\"false\"><td>d</td></tr>"
+        );
     }
 
     #[test]
@@ -5470,12 +5879,30 @@ mod tests {
                 BASELINE_EXPANDED_0_2_3,
             ),
         ];
+        // Changed on purpose in 0.2.4: see `group_header_default_markup_matches_0_2_3`.
         let mismatched: Vec<&str> = cases
             .into_iter()
-            .filter(|(_, cfg, baseline)| tbody(&render_ssr_cfg(cfg.clone()).0) != *baseline)
+            .filter(|(_, cfg, baseline)| {
+                strip_treegrid_attrs(tbody(&render_ssr_cfg(cfg.clone()).0)) != *baseline
+            })
             .map(|(name, _, _)| name)
             .collect();
         assert!(mismatched.is_empty(), "differs from 0.2.3: {mismatched:?}");
+        // Nested: depth-1 headers are level 2 and leaf data rows level 3.
+        let body = render_ssr_cfg(SsrCfg {
+            nested: true,
+            ..SsrCfg::default()
+        })
+        .0;
+        let body = tbody(&body);
+        assert!(body.contains(&header_tree_attrs(1, true, 0)), "{body}");
+        assert!(body.contains(&header_tree_attrs(2, true, 1)), "{body}");
+        assert!(
+            body.contains(
+                "data-chorale-index=\"2\" data-chorale-row-selected=\"false\" aria-level=\"3\">"
+            ),
+            "{body}"
+        );
     }
 
     #[test]
@@ -5573,7 +6000,15 @@ mod tests {
             2,
             "{body}"
         );
-        assert_eq!(body.matches("aria-expanded=\"false\"").count(), 2, "{body}");
+        // Each chevron reports the state, and since 0.2.4 (issue #51) so does
+        // each treegrid header row.
+        assert_eq!(
+            body.matches("class=\"chorale-group-toggle\" type=\"button\" aria-expanded=\"false\"")
+                .count(),
+            2,
+            "{body}"
+        );
+        assert_eq!(body.matches("aria-expanded=\"false\"").count(), 4, "{body}");
         assert!(body.contains("class=\"chorale-group-header\""), "{body}");
         // The row toggle's pointer cursor is gone from the <tr>.
         assert!(!body.contains("cursor: pointer; font-weight"), "{body}");
