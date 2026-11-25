@@ -107,6 +107,22 @@ On the group checkbox or the chevron, `Space`, `Enter` and `Tab` stay with
 that control (`Space` ticks the checkbox) and arrow keys move focus back to the
 grid and move the cursor.
 
+### Row model
+
+A grouped table has one visible-row model: `chorale_core::visible_grouped_view`,
+the group header rows and data rows in display order. The Dioxus adapter
+renders row `i` of that list as body row `i` (`data-chorale-group-index="i"` on
+a header, `data-chorale-index="i"` on a data row), and the keyboard cursor's
+`ActiveCell::row_idx` is an index into it. Navigation that crosses rows, such
+as a future "Enter or Tab moves the edit to the next row" (today
+`next_editable_cell` cycles within one row), should walk that list and skip
+header entries rather than re-derive row indexes.
+
+Scroll-follow is keyboard driven: only an arrow, `Page Up` / `Page Down`,
+`Home` / `End` or `Tab` move reveals the active row. Scrolling with the mouse,
+trackpad or scrollbar never snaps the view back to it, including a scroll that
+starts while a reveal is still settling.
+
 Known limitation, unchanged from 0.2.3: range selection (`Shift` + arrows) and
 copy and paste in a grouped table still use ungrouped row positions.
 

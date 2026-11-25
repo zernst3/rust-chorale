@@ -27,8 +27,8 @@ use dioxus::document::{Document, Eval, EvalError, Evaluator};
 use dioxus::prelude::*;
 use dioxus::signals::Owner;
 use dioxus_html::{
-    Code, Key, Location, Modifiers, PlatformEventData, SerializedHtmlEventConverter,
-    SerializedKeyboardData,
+    Code, Key, Location, Modifiers, PlatformEventData, SerializedFocusData,
+    SerializedHtmlEventConverter, SerializedKeyboardData, SerializedScrollData,
 };
 
 // ---------------------------------------------------------------------------
@@ -306,6 +306,30 @@ impl Harness {
             .runtime()
             .handle_event("keydown", Event::new(payload, true), element);
         self.settle();
+    }
+
+    /// Send any event with `data` as its platform payload to `element`.
+    fn fire(&mut self, name: &str, data: Box<dyn Any>, element: ElementId) {
+        let payload: Rc<dyn Any> = Rc::new(PlatformEventData::new(data));
+        self.dom
+            .runtime()
+            .handle_event(name, Event::new(payload, true), element);
+        self.settle();
+    }
+
+    /// The table's scroll container (dynamic id `chorale-scroll-N`).
+    fn scroll_element(&self) -> ElementId {
+        let (_, id) =
+            self.listeners
+                .iter()
+                .find(|(n, id)| {
+                    n == "scroll"
+                        && self.dom_ids.get(id).is_some_and(|v| {
+                            v.starts_with("chorale-scroll-") && !v.ends_with("-kb")
+                        })
+                })
+                .expect("scroll container listener");
+        *id
     }
 
     fn press(&mut self, key: Key) {
@@ -1108,4 +1132,166 @@ fn stale_scroll_follow_task_stops_writing() {
         writes.is_empty(),
         "the stale task for row 87 wrote scrollTop: {writes:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Scroll-follow is keyboard-driven only
+// ---------------------------------------------------------------------------
+
+fn wheel_scroll(scroll_top: f64) -> Box<dyn Any> {
+    Box::new(SerializedScrollData {
+        scroll_top,
+        scroll_left: 0.0,
+        scroll_width: 1000,
+        scroll_height: 4000,
+        client_width: 1000,
+        client_height: 500,
+    })
+}
+
+/// A mouse or trackpad scroll (the container's native scroll event) and a
+/// focus event never run the reveal, so the view does not snap back to the
+/// active row.
+#[test]
+fn scroll_that_is_not_keyboard_driven_keeps_scroll_top() {
+    for virtualized in [false, true] {
+        let cfg = Cfg {
+            virtualized,
+            ..Cfg::default()
+        };
+        let layout = PagedLayout::new(&cfg);
+        let mut h = Harness::with_reply(cfg, layout.reply());
+        h.set_active(1, "name");
+        h.press(Key::ArrowDown);
+        let before = h.eval_count();
+        let sc = h.scroll_element();
+        h.fire("scroll", wheel_scroll(900.0), sc);
+        let kb = h.kb_element();
+        h.fire("focus", Box::new(SerializedFocusData::default()), kb);
+        h.fire("scroll", wheel_scroll(1300.0), sc);
+        let scripts = h.evals_since(before);
+        assert!(
+            !scripts.iter().any(|js| js.contains("chorale:measure-row")
+                || js.contains("chorale:reveal-row")
+                || script_scroll_write(js).is_some()),
+            "virtualized={virtualized}: a non-keyboard scroll ran scroll-follow: {scripts:?}"
+        );
+        assert!(
+            (h.state().scroll_top - 1300.0).abs() < 0.01,
+            "virtualized={virtualized}: scroll_top {}",
+            h.state().scroll_top
+        );
+        assert_eq!(h.active().map(|a| a.row_idx), Some(2));
+    }
+}
+
+/// A wheel scroll that lands while a keyboard reveal is still verifying its
+/// write (the next measurement sees a scrollTop it did not write) ends the
+/// reveal instead of scrolling back.
+#[test]
+fn wheel_scroll_during_reveal_verification_is_not_undone() {
+    let measures = Rc::new(RefCell::new(0_usize));
+    let scroll = Rc::new(RefCell::new(0.0_f64));
+    let reply: Reply = {
+        let measures = measures.clone();
+        let scroll = scroll.clone();
+        Rc::new(move |js: &str| {
+            if let Some(v) = script_scroll_write(js) {
+                *scroll.borrow_mut() = v;
+            }
+            if !js.contains("chorale:measure-row") {
+                return serde_json::Value::Null;
+            }
+            let n = {
+                let mut m = measures.borrow_mut();
+                *m += 1;
+                *m
+            };
+            if n == 2 {
+                // The user wheel-scrolled down between the write and this
+                // verification; row 12 (530..570) is now above the band
+                // [641, 1100], so a reveal would scroll back up to 489.
+                *scroll.borrow_mut() = 600.0;
+            }
+            let st = *scroll.borrow();
+            let top = if n == 1 { 520.0 } else { 530.0 };
+            serde_json::json!([1, top, DATA_H, st, CLIENT_H, THEAD_H, THEAD_H])
+        })
+    };
+    let mut h = Harness::with_reply(
+        Cfg {
+            virtualized: true,
+            ..Cfg::default()
+        },
+        reply,
+    );
+    h.set_active(11, "name");
+    let before = h.eval_count();
+    h.press(Key::ArrowDown);
+    let writes: Vec<f64> = h
+        .evals_since(before)
+        .iter()
+        .filter_map(|js| script_scroll_write(js))
+        .collect();
+    assert_eq!(
+        writes,
+        vec![60.0],
+        "the reveal fought the wheel: {writes:?}"
+    );
+    assert!((*scroll.borrow() - 600.0).abs() < 0.01);
+}
+
+// ---------------------------------------------------------------------------
+// One row model: visible_grouped_view
+// ---------------------------------------------------------------------------
+
+/// Body row `i` is `visible_grouped_view(&state)[i]`: the same list the
+/// cursor indexes. A header carries its label, a data row its item name.
+#[test]
+fn rendered_rows_follow_visible_grouped_view_one_to_one() {
+    for hook in ON_OFF {
+        for virtualized in [false, true] {
+            let mut h = Harness::new(Cfg {
+                hook,
+                virtualized,
+                ..Cfg::default()
+            });
+            // Collapse one group so indexes shift after it.
+            h.set_active(11, "name");
+            h.press(Key::ArrowLeft);
+            let view = view_of(&h.state());
+            let html = h.html();
+            let mut checked = 0;
+            for (i, row) in view.iter().enumerate() {
+                let Some(tag) = h.tr_tag(i) else {
+                    continue; // outside the virtualized window
+                };
+                let tr_start = html.find(&format!("<tr {tag}>")).unwrap();
+                let tr = &html[tr_start..];
+                let tr = &tr[..tr.find("</tr>").unwrap()];
+                match row {
+                    GroupedRow::Header { label, .. } => {
+                        assert!(
+                            tag.contains("data-chorale-group-index"),
+                            "hook={hook} virtualized={virtualized} row {i}: {tag}"
+                        );
+                        assert!(tr.contains(label.as_str()), "row {i}: {tr}");
+                    }
+                    GroupedRow::Data(_, item) => {
+                        assert!(tag.contains("data-chorale-index"), "row {i}: {tag}");
+                        assert!(tr.contains(&format!(">{}<", item.name)), "row {i}: {tr}");
+                    }
+                    _ => panic!("unexpected row kind"),
+                }
+                checked += 1;
+            }
+            assert!(
+                checked >= 12,
+                "hook={hook} virtualized={virtualized}: {checked}"
+            );
+            // The cursor's row is the same entry.
+            let ac = h.active().unwrap();
+            assert!(matches!(view[ac.row_idx], GroupedRow::Header { .. }));
+        }
+    }
 }

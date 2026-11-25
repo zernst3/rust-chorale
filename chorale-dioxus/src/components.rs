@@ -2196,6 +2196,11 @@ fn reveal_row_js(scroll_id: &str, row_idx: usize, scroll_top: Option<f64>) -> St
     )
 }
 
+/// How far the container's `scrollTop` may differ from the value
+/// [`ensure_active_row_visible`] last wrote before it counts as a user
+/// scroll (browsers round written values to device pixels).
+const USER_SCROLL_SLACK_PX: f64 = 1.0;
+
 /// How many times [`ensure_active_row_visible`] measures the active row at
 /// most: a far jump in Virtualized mode needs one measurement to find the row
 /// missing, one after the estimate scroll and one or two to verify a
@@ -2225,7 +2230,14 @@ const REVEAL_ATTEMPTS: usize = 4;
 ///    [`estimated_row_offset`], wait for the render and measure again.
 ///
 /// Steps 2 and 3 repeat until no write is needed, at most
-/// [`REVEAL_ATTEMPTS`] measurements.
+/// [`REVEAL_ATTEMPTS`] measurements. They also stop when the cursor has moved
+/// to another row (a newer key press owns the scroll) or when the container's
+/// `scrollTop` is no longer the value this task wrote (the user scrolled).
+///
+/// Keyboard-driven only: the grid keydown handler is the sole caller, after
+/// an arrow, Page, Home/End or Tab move. Mouse, trackpad and scrollbar
+/// scrolling, focus and effects never reveal the active row, so the view
+/// never snaps back to it mid-scroll.
 /// 4. No container (the eval failed): fall back to the state-only estimate.
 ///
 /// Inline mode is a deliberate no-op: there is no internal scroll container
@@ -2259,6 +2271,10 @@ fn ensure_active_row_visible<TRow: Clone + PartialEq + 'static>(
     };
     let cid = scroll_container_id.to_owned();
     spawn(async move {
+        // The scrollTop this task last wrote. A later measurement that reads a
+        // different value means the user scrolled (wheel, trackpad, scrollbar)
+        // since: the reveal ends instead of snapping the view back.
+        let mut last_written: Option<f64> = None;
         for attempt in 0..REVEAL_ATTEMPTS {
             let mut js = dioxus::document::eval(&measure_row_js(&cid, row_idx, attempt > 0));
             let measured = js
@@ -2276,11 +2292,22 @@ fn ensure_active_row_visible<TRow: Clone + PartialEq + 'static>(
             if !still_active {
                 return;
             }
+            let measured_scroll = match measured {
+                Some(RowMeasurement::Found(g)) => Some(g.scroll_top),
+                Some(RowMeasurement::Missing { scroll_top, .. }) => Some(scroll_top),
+                None => None,
+            };
+            if let (Some(w), Some(now)) = (last_written, measured_scroll) {
+                if (now - w).abs() > USER_SCROLL_SLACK_PX {
+                    return;
+                }
+            }
             match measured {
                 Some(RowMeasurement::Found(g)) => {
                     let target = reveal_scroll_top(g);
                     if let Some(t) = target {
                         handle.set_scroll(t);
+                        last_written = Some(t);
                     }
                     dioxus::document::eval(&reveal_row_js(&cid, row_idx, target));
                     if target.is_none() {
@@ -2311,6 +2338,7 @@ fn ensure_active_row_visible<TRow: Clone + PartialEq + 'static>(
                         return;
                     };
                     handle.set_scroll(t);
+                    last_written = Some(t);
                     dioxus::document::eval(&sync_scroll_js(&cid, t));
                 }
                 None => {
@@ -3460,6 +3488,12 @@ fn chevron_keydown_refocuses(key: &Key, ctrl: bool) -> bool {
 // clamped it at the page size in Virtualized mode. Grouped tables therefore
 // navigate here, in the grouped index space, with header rows as stops (the
 // ARIA treegrid pattern).
+//
+// One row model: the `grouped_view` memo (`visible_grouped_view` of the
+// state) is what the body renders, what clicks index, what the cursor moves
+// over and what Enter/F2 look rows up in. Code that needs "the row at the
+// cursor" in a grouped table reads that list; see the "Row model" section of
+// `visible_grouped_view`'s docs.
 
 /// One cursor move in grouped mode.
 #[derive(Clone, Copy, Debug)]
