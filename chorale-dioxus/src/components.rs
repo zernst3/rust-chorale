@@ -599,6 +599,10 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
             s.filters.clone(),
             s.rows.len(),
             s.grouping.clone(),
+            // set_grouped_pagination keeps page 0 at 0, so without the mode
+            // in the key a runtime switch to Virtualized kept the first
+            // page's grouped view (issue #51).
+            s.grouped_pagination,
             s.collapsed_groups.clone(),
             s.expanded_rows.clone(),
             // data_generation bumps every time update_row mutates row

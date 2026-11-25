@@ -984,3 +984,29 @@ fn scroll_write_is_verified_and_corrected_after_render() {
     assert_eq!(*measures.borrow(), 3, "measure, verify, verify again");
     assert!((h.state().scroll_top - 70.0).abs() < 0.01);
 }
+
+/// Switching to Virtualized at runtime (the test page's select) must
+/// re-derive the grouped view: every group, not the first page's rows.
+#[test]
+fn runtime_switch_to_virtualized_renders_and_reaches_every_group() {
+    let mut h = Harness::new(Cfg::default());
+    let handle = h.handle();
+    h.dom
+        .in_runtime(|| handle.set_grouped_pagination(GroupedPaginationMode::Virtualized));
+    h.settle();
+    let total = GROUPS * (ROWS_PER_GROUP + 1);
+    assert_eq!(view_of(&h.state()).len(), total);
+    h.set_active(0, "name");
+    h.press_mod(Key::End, Modifiers::CONTROL);
+    assert_eq!(
+        h.active().map(|a| a.row_idx),
+        Some(total - 1),
+        "Ctrl+End reaches the last group's last row"
+    );
+    // The last row is rendered once it is the target (bottom of the window).
+    assert!(
+        h.tr_tag(total - 1).is_some(),
+        "row {} is not rendered",
+        total - 1
+    );
+}
