@@ -402,9 +402,43 @@ then **Group header content**. Not available in `leptos-qa-harness`.
    same fixed height and content never grows the row (focus outlines inside
    host content may clip).
 
+**Header rows and scroll-follow (issue #51).** Setup: `dx serve --package
+group-header-hook` (items 14 to 19 of its README). Run steps 8 to 13 with
+"group_header_renderer on" checked and again unchecked. The panel above the
+table shows the active row index and whether that row is fully visible in the
+table and in the window.
+
+8. Click a data cell in the first row of a group, then press `↑`. The cursor
+   lands on the group's header row and the whole row shows the active-cell
+   outline. `↓` returns to the data row in the same column, and `↓` from a
+   group's last data row stops on the next header.
+9. With the cursor on a header row: `←` collapses the group, `→` expands it,
+   `Enter` and `Space` toggle it. The cursor stays on the header. `↓` from a
+   collapsed header goes to the next header.
+10. With the cursor on a header row, press `Tab`: focus moves to the header's
+    first control (the group checkbox with **Selection** on, otherwise the
+    chevron with the hook on). With the hook off and **Selection** off the
+    header has no controls and `Tab` does nothing. An arrow key on the chevron
+    returns focus to the grid.
+11. Scroll-follow, `Paged`: shorten the browser window until the table's
+    bottom edge is below it. Press `↓` 20 times or more across several
+    headers, then `↑`, `Page Down`, `Ctrl+End` and `Ctrl+Home`. After every
+    key the active row is fully visible, below the sticky header and inside
+    the window (the panel says "yes" twice).
+12. Scroll-follow, `Virtualized`: switch **Grouped pagination** and repeat
+    step 11. `Ctrl+End` reaches the last row of the last group (Item 2999)
+    and every `Page Down` (50 rows) keeps the row visible.
+13. Focus a header's select and press arrows, letters, `Enter` and `Space`:
+    the cursor does not move and the group does not toggle (step 6 still
+    holds).
+
 **Edge cases:**
 - Toggle **Group header content** off: headers return to the default look and
   the whole row toggles on click again.
+- Screen reader: the grouped `<table>` has `role="treegrid"`, header rows
+  carry `aria-level` and `aria-expanded`, and data rows carry `aria-level`.
+  Focus stays on the grid container, so the cursor itself is not announced
+  yet (no `aria-activedescendant`).
 
 ---
 

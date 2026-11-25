@@ -2,7 +2,9 @@
 
 Chorale tables are fully keyboard navigable. Both adapters (Dioxus and Leptos)
 share the same key bindings, driven by the same `chorale-core` transitions, so
-everything below applies identically to each.
+everything below applies identically to each, except the group header rows of
+a grouped table, which are keyboard stops in the Dioxus adapter only (see
+[Group header rows](#group-header-rows-grouped-tables-dioxus)).
 
 ## Focus model
 
@@ -81,12 +83,38 @@ column** — it participates in arrow-key navigation exactly like a data column.
 Sub-tables nest arbitrarily: the same `Tab`-in / `Esc`-out model applies at
 every level.
 
+## Group header rows (grouped tables, Dioxus)
+
+In a grouped table every group header row is a stop for the arrow keys, as in
+the ARIA treegrid pattern. The header row under the cursor shows the same
+outline as the active cell (`--chorale-active-cell-outline`). This works with
+and without `group_header_renderer`.
+
+| Key on a header row | Action |
+| --- | --- |
+| `↑` `↓` | Move to the previous / next row, header or data. The column is kept, so arrowing through a header returns to the same column. |
+| `←` | Collapse the group (nothing if it is already collapsed). |
+| `→` | Expand the group (nothing if it is already expanded). |
+| `Enter` or `Space` | Toggle the group. |
+| `Tab` | Move focus into the header's own controls: the group checkbox, the chevron and the host content. Nothing happens when the header has none (built-in header with selection off). |
+| `Shift` + `Tab` | Nothing; the grid stays one tab stop. |
+| `Home` / `End`, `Page Up` / `Page Down`, `Ctrl`/`Cmd` + arrows and `Ctrl`/`Cmd` + `Home` / `End` | Move as for data rows, counting header rows. |
+
+`Enter` or `F2` on a grouped data row edits that row. After every move the
+active row is scrolled fully into view: below the sticky header inside the
+table, and on screen when the page or another ancestor is what scrolls.
+
+The grouped `<table>` has `role="treegrid"`. Header rows carry `aria-level`
+(1 for the outermost group) and `aria-expanded`, and data rows carry
+`aria-level` one deeper than the innermost group.
+
 ## Group headers with a host renderer
 
 When `group_header_renderer` is set, the group chevron is a real
 `<button class="chorale-group-toggle">` and the header row no longer toggles on
-click. The header controls are focusable, reached by click, or `Shift+Tab` from
-below; `Tab` does NOT enter a header from a grid cell. Once focus is inside,
+click. The header controls are focusable, reached by click, by `Tab` with the
+cursor on the header row (see above), or `Shift+Tab` from below; `Tab` does NOT
+enter a header from a data cell. Once focus is inside,
 `Tab` and `Shift+Tab` move natively among the header controls, left to right.
 Each header adds its own tab stops (checkbox, chevron and every focusable host
 element):
