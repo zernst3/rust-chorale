@@ -322,14 +322,16 @@ impl Harness {
         dioxus_ssr::render(&self.dom)
     }
 
-    /// Opening tag of the `<tr>` that renders grouped row `idx`.
+    /// Opening tag of the `<tr>` that renders grouped row `idx` (a data row
+    /// carries `data-chorale-index`, a header `data-chorale-group-index`).
     fn tr_tag(&self, idx: usize) -> Option<String> {
         let html = self.html();
-        let needle = format!("data-chorale-index=\"{idx}\"");
+        let data = format!(" data-chorale-index=\"{idx}\"");
+        let header = format!(" data-chorale-group-index=\"{idx}\"");
         html.split("<tr ")
             .skip(1)
             .map(|t| t.split('>').next().unwrap_or("").to_owned())
-            .find(|t| t.contains(&needle))
+            .find(|t| t.contains(&data) || t.contains(&header))
     }
 
     fn evals_since(&self, from: usize) -> Vec<String> {
@@ -376,7 +378,7 @@ fn up_from_first_data_row_lands_on_header_with_visible_cursor() {
         let tag = h.tr_tag(0);
         assert!(
             tag.is_some(),
-            "hook={hook}: header row 0 carries no data-chorale-index"
+            "hook={hook}: header row 0 carries no row index"
         );
         let tag = tag.unwrap();
         assert!(tag.contains("chorale-group-header"), "hook={hook}: {tag}");
@@ -558,9 +560,9 @@ fn tab_from_header_focuses_its_first_control() {
         let before = h.eval_count();
         h.press(Key::Tab);
         let scripts = h.evals_since(before);
-        let focus = scripts
-            .iter()
-            .find(|js| js.contains("tr[data-chorale-index=\"11\"]") && js.contains(".focus()"));
+        let focus = scripts.iter().find(|js| {
+            js.contains("tr[data-chorale-group-index=\"11\"]") && js.contains(".focus()")
+        });
         assert!(
             focus.is_some(),
             "hook={hook} selection={selection}: no focus script for header 11: {scripts:?}"
@@ -660,4 +662,325 @@ fn grouped_rows_carry_treegrid_aria() {
         assert!(data.contains("aria-level=\"2\""), "hook={hook}: {data}");
         assert!(!data.contains("aria-expanded"), "hook={hook}: {data}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Fix 2: scroll-follow keeps the active row fully visible
+// ---------------------------------------------------------------------------
+
+/// Index `N` from the first `data-chorale-index="N"` in a script.
+fn script_row_index(js: &str) -> Option<usize> {
+    let at = js.find("data-chorale-index=\"")? + "data-chorale-index=\"".len();
+    js[at..].split('"').next()?.parse().ok()
+}
+
+/// Value `X` of the last `scrollTop = X;` write in a script.
+fn script_scroll_write(js: &str) -> Option<f64> {
+    let at = js.rfind("scrollTop = ")? + "scrollTop = ".len();
+    js[at..].split(';').next()?.trim().parse().ok()
+}
+
+const THEAD_H: f64 = 41.0;
+const CLIENT_H: f64 = 500.0;
+const DATA_H: f64 = 40.0;
+const HEADER_H: f64 = 37.0;
+
+/// A Paged-mode browser stand-in: every row of the page is rendered, header
+/// rows are 37px and data rows 40px (`row_height` is 40), under a 41px sticky
+/// `<thead>`. It answers row measurements from that layout and applies the
+/// `scrollTop` writes the table sends.
+#[derive(Clone)]
+struct PagedLayout {
+    headers: Rc<Vec<bool>>,
+    scroll_top: Rc<RefCell<f64>>,
+}
+
+impl PagedLayout {
+    fn new(cfg: &Cfg) -> Self {
+        // The fixture's grouped view, built the same way the app builds it.
+        let mut s = TableState::new(
+            dataset(),
+            vec![ColumnDef::new(ColumnId("group"), "Group", |r: &Item| {
+                CellValue::Text(r.group.clone())
+            })],
+        );
+        s.grouping = vec![ColumnId("group")];
+        if cfg.virtualized {
+            s.grouped_pagination = GroupedPaginationMode::Virtualized;
+        }
+        let headers = visible_grouped_view(&s)
+            .iter()
+            .map(|r| matches!(r, GroupedRow::Header { .. }))
+            .collect();
+        Self {
+            headers: Rc::new(headers),
+            scroll_top: Rc::new(RefCell::new(0.0)),
+        }
+    }
+
+    fn height(&self, idx: usize) -> f64 {
+        if self.headers[idx] {
+            HEADER_H
+        } else {
+            DATA_H
+        }
+    }
+
+    /// Row top in scroll-content coordinates.
+    fn top(&self, idx: usize) -> f64 {
+        THEAD_H + (0..idx).map(|i| self.height(i)).sum::<f64>()
+    }
+
+    fn reply(&self) -> Reply {
+        let me = self.clone();
+        Rc::new(move |js: &str| {
+            if let Some(v) = script_scroll_write(js) {
+                *me.scroll_top.borrow_mut() = v;
+            }
+            if !js.contains("chorale:measure-row") {
+                return serde_json::Value::Null;
+            }
+            let st = *me.scroll_top.borrow();
+            match script_row_index(js) {
+                Some(i) if i < me.headers.len() => {
+                    serde_json::json!([1, me.top(i), me.height(i), st, CLIENT_H, THEAD_H, THEAD_H])
+                }
+                _ => serde_json::json!([0, 0, 0, st, CLIENT_H, THEAD_H, THEAD_H]),
+            }
+        })
+    }
+
+    /// Whether row `idx` lies fully inside the band below the sticky header.
+    fn fully_visible(&self, idx: usize) -> bool {
+        let st = *self.scroll_top.borrow();
+        let top = self.top(idx);
+        top >= st + THEAD_H - 0.5 && top + self.height(idx) <= st + CLIENT_H + 0.5
+    }
+}
+
+#[test]
+fn arrow_keys_keep_active_row_fully_visible_in_paged_mode() {
+    for hook in ON_OFF {
+        let cfg = Cfg {
+            hook,
+            ..Cfg::default()
+        };
+        let layout = PagedLayout::new(&cfg);
+        let mut h = Harness::with_reply(cfg, layout.reply());
+        h.set_active(0, "name");
+        let rows = view_of(&h.state()).len();
+        for _ in 1..rows {
+            h.press(Key::ArrowDown);
+            let i = h.active().unwrap().row_idx;
+            assert!(
+                layout.fully_visible(i),
+                "hook={hook}: Down to row {i}: top {} height {} scroll_top {}",
+                layout.top(i),
+                layout.height(i),
+                layout.scroll_top.borrow()
+            );
+            assert!(
+                (h.state().scroll_top - *layout.scroll_top.borrow()).abs() < 0.01,
+                "hook={hook}: state scroll_top follows the DOM write"
+            );
+        }
+        assert_eq!(h.active().unwrap().row_idx, rows - 1);
+        for _ in 1..rows {
+            h.press(Key::ArrowUp);
+            let i = h.active().unwrap().row_idx;
+            assert!(layout.fully_visible(i), "hook={hook}: Up to row {i}");
+        }
+        for key in [Key::End, Key::PageDown, Key::PageUp, Key::Home] {
+            let ctrl = matches!(key, Key::End | Key::Home);
+            let mods = if ctrl {
+                Modifiers::CONTROL
+            } else {
+                Modifiers::empty()
+            };
+            h.press_mod(key.clone(), mods);
+            let i = h.active().unwrap().row_idx;
+            assert!(layout.fully_visible(i), "hook={hook}: {key:?} to row {i}");
+        }
+    }
+}
+
+#[test]
+fn every_move_reveals_row_in_outer_scrollers() {
+    let cfg = Cfg::default();
+    let layout = PagedLayout::new(&cfg);
+    let mut h = Harness::with_reply(cfg, layout.reply());
+    h.set_active(1, "name");
+    // Row 2 needs no table scroll, but the page around the table may.
+    let before = h.eval_count();
+    h.press(Key::ArrowDown);
+    let scripts = h.evals_since(before);
+    let reveal = scripts
+        .iter()
+        .find(|js| js.contains("chorale:reveal-row"))
+        .unwrap_or_else(|| panic!("no reveal script: {scripts:?}"));
+    assert_eq!(script_row_index(reveal), Some(2), "{reveal}");
+    assert!(reveal.contains("window.scrollBy"), "{reveal}");
+    assert!(reveal.contains("parentElement"), "{reveal}");
+}
+
+/// Virtualized: the target row is not rendered yet, so the table scrolls to
+/// an estimate, waits for the render and measures again.
+#[test]
+fn virtualized_far_jump_estimates_then_corrects_from_measurement() {
+    for (real_top, expected) in [
+        // The re-measure finds the row inside the band: keep the estimate.
+        (3400.0, 3061.0),
+        // The re-measure finds it below the band: correct to it.
+        (3600.0, 3140.0),
+    ] {
+        let measures = Rc::new(RefCell::new(0_usize));
+        let scroll = Rc::new(RefCell::new(0.0_f64));
+        let reply: Reply = {
+            let measures = measures.clone();
+            let scroll = scroll.clone();
+            Rc::new(move |js: &str| {
+                if let Some(v) = script_scroll_write(js) {
+                    *scroll.borrow_mut() = v;
+                }
+                if !js.contains("chorale:measure-row") {
+                    return serde_json::Value::Null;
+                }
+                let n = {
+                    let mut m = measures.borrow_mut();
+                    *m += 1;
+                    *m
+                };
+                let st = *scroll.borrow();
+                if n == 1 {
+                    // Not rendered: the window is still at the top.
+                    serde_json::json!([0, 0, 0, st, CLIENT_H, THEAD_H, THEAD_H])
+                } else {
+                    // Rendered now; later measurements wait for a frame first.
+                    assert!(js.contains("requestAnimationFrame"), "{js}");
+                    serde_json::json!([1, real_top, DATA_H, st, CLIENT_H, THEAD_H, THEAD_H])
+                }
+            })
+        };
+        let mut h = Harness::with_reply(
+            Cfg {
+                virtualized: true,
+                ..Cfg::default()
+            },
+            reply,
+        );
+        h.set_active(0, "name");
+        let before = h.eval_count();
+        h.press_mod(Key::End, Modifiers::CONTROL);
+        let last = view_of(&h.state()).len() - 1;
+        assert_eq!(h.active().unwrap().row_idx, last);
+        // Estimate: thead 41 + 87 rows * 40 = 3521; bottom-align in 500px.
+        let writes: Vec<f64> = h
+            .evals_since(before)
+            .iter()
+            .filter_map(|js| script_scroll_write(js))
+            .collect();
+        assert_eq!(writes.first().copied(), Some(3061.0), "{writes:?}");
+        // Missing, then found; a write is verified by one more measurement.
+        let expected_measures = if real_top > 3500.0 { 3 } else { 2 };
+        assert_eq!(*measures.borrow(), expected_measures);
+        assert!(
+            (h.state().scroll_top - expected).abs() < 0.01,
+            "real top {real_top}: scroll_top {} expected {expected}",
+            h.state().scroll_top
+        );
+        assert_eq!(*scroll.borrow(), expected);
+        let reveal = h
+            .evals_since(before)
+            .into_iter()
+            .rfind(|js| js.contains("chorale:reveal-row"));
+        assert!(
+            reveal.is_some(),
+            "the measured row is revealed in outer scrollers"
+        );
+    }
+}
+
+/// The VIRT-2 row-height loop measures `tr[data-chorale-index]` and shifts
+/// `scrollTop` when a measured height differs from `row_height`. Header rows
+/// (shorter than `row_height` with the default header) must stay out of it,
+/// or it undoes scroll-follow; they carry their own index attribute.
+#[test]
+fn header_rows_stay_out_of_row_height_measurement() {
+    for hook in ON_OFF {
+        for virtualized in [false, true] {
+            let h = Harness::new(Cfg {
+                hook,
+                virtualized,
+                ..Cfg::default()
+            });
+            let html = h.html();
+            let headers: Vec<&str> = html
+                .split("<tr ")
+                .skip(1)
+                .map(|t| t.split('>').next().unwrap_or(""))
+                .filter(|t| t.contains("aria-expanded"))
+                .collect();
+            assert!(!headers.is_empty());
+            for tag in headers {
+                assert!(
+                    !tag.contains("data-chorale-index="),
+                    "hook={hook} virtualized={virtualized}: {tag}"
+                );
+                assert!(
+                    tag.contains("data-chorale-group-index="),
+                    "hook={hook} virtualized={virtualized}: {tag}"
+                );
+            }
+        }
+    }
+}
+
+/// Virtualized with the default header: rows render at heights other than
+/// `row_height`, so after a scroll write the window re-slices and the rows
+/// shift. The table measures again after every write and corrects.
+#[test]
+fn scroll_write_is_verified_and_corrected_after_render() {
+    let measures = Rc::new(RefCell::new(0_usize));
+    let scroll = Rc::new(RefCell::new(0.0_f64));
+    let reply: Reply = {
+        let measures = measures.clone();
+        let scroll = scroll.clone();
+        Rc::new(move |js: &str| {
+            if let Some(v) = script_scroll_write(js) {
+                *scroll.borrow_mut() = v;
+            }
+            if !js.contains("chorale:measure-row") {
+                return serde_json::Value::Null;
+            }
+            let n = {
+                let mut m = measures.borrow_mut();
+                *m += 1;
+                *m
+            };
+            let st = *scroll.borrow();
+            // Row 12 sits at 520 before the write; once the window has
+            // re-sliced it sits 10px lower (a 30px header now counted as 40).
+            let top = if n == 1 { 520.0 } else { 530.0 };
+            serde_json::json!([1, top, DATA_H, st, CLIENT_H, THEAD_H, THEAD_H])
+        })
+    };
+    let mut h = Harness::with_reply(
+        Cfg {
+            virtualized: true,
+            ..Cfg::default()
+        },
+        reply,
+    );
+    h.set_active(11, "name");
+    let before = h.eval_count();
+    h.press(Key::ArrowDown);
+    let writes: Vec<f64> = h
+        .evals_since(before)
+        .iter()
+        .filter_map(|js| script_scroll_write(js))
+        .collect();
+    // First write from the first measurement, then the correction.
+    assert_eq!(writes, vec![60.0, 70.0], "{writes:?}");
+    assert_eq!(*measures.borrow(), 3, "measure, verify, verify again");
+    assert!((h.state().scroll_top - 70.0).abs() < 0.01);
 }

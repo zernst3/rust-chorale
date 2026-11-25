@@ -1961,32 +1961,65 @@ fn compute_window_slice<TRow: Clone>(
     (win, slice)
 }
 
-/// Compute the `scroll_top` required to bring the row at `row_idx` fully
-/// into the virtualized viewport, or `None` when the row is already fully
-/// visible (no scroll needed).
-///
-/// Operates in the same coordinate space as the virtualization window math
-/// (`visible_window` / `visible_window_variable`): row N's top edge sits at
-/// `N * row_height` in fixed mode, or at the sum of the measured heights of
-/// rows `0..N` in variable mode, with `row_height` as the fallback for rows
-/// that have not been measured yet.
-///
-/// Rules (mirroring standard grid keyboard-navigation behavior):
-/// - row top above the viewport  → scroll so the row top is at the viewport top
-/// - row bottom below the viewport → scroll so the row bottom is at the
-///   viewport bottom
-/// - otherwise → `None`
-#[must_use]
-fn scroll_top_to_reveal_row<S: std::hash::BuildHasher>(
-    row_idx: usize,
+/// Geometry of one body row inside the table's scroll container, in CSS px.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct RowGeometry {
+    /// Row top in scroll-content coordinates: the distance from the top of
+    /// the scrolled content (the `<thead>` included) to the row's top edge.
+    top: f64,
+    /// Row height.
+    height: f64,
+    /// The container's current `scrollTop`.
     scroll_top: f64,
-    viewport_height: f64,
+    /// The container's `clientHeight` (visible height, scrollbar excluded).
+    client_height: f64,
+    /// Height of the band at the container top that a sticky `<thead>`
+    /// covers (0 without a sticky header).
+    cover: f64,
+}
+
+/// Sub-pixel slack for [`reveal_scroll_top`]: browsers round `scrollTop` and
+/// report fractional rects, so a row overlapping an edge by less than this is
+/// treated as visible instead of triggering another scroll.
+const REVEAL_SLACK_PX: f64 = 0.5;
+
+/// The `scrollTop` that shows the row of `g` fully, or `None` when it already
+/// is. The visible band is `[scroll_top + cover, scroll_top + client_height]`.
+///
+/// - Row top above the band: put the row top just below the sticky header.
+/// - Row bottom below the band: put the row bottom at the container bottom,
+///   unless the row is taller than the band, then show its top.
+/// - Otherwise `None`.
+fn reveal_scroll_top(g: RowGeometry) -> Option<f64> {
+    let band_top = g.scroll_top + g.cover;
+    let band_bottom = g.scroll_top + g.client_height;
+    let align_top = (g.top - g.cover).max(0.0);
+    if g.top < band_top - REVEAL_SLACK_PX {
+        Some(align_top)
+    } else if g.top + g.height > band_bottom + REVEAL_SLACK_PX {
+        if g.height > g.client_height - g.cover {
+            // Taller than the band: showing its top is the best fit. Already
+            // there means no scroll.
+            ((align_top - g.scroll_top).abs() > REVEAL_SLACK_PX).then_some(align_top)
+        } else {
+            Some((g.top + g.height - g.client_height).max(0.0))
+        }
+    } else {
+        None
+    }
+}
+
+/// Estimated `(top, height)` of body row `row_idx`, measured from the top of
+/// the `<tbody>`, for a row that is not rendered: `row_idx * row_height` in
+/// fixed mode, or the sum of the measured heights of rows `0..row_idx` in
+/// variable mode, with `row_height` for rows not measured yet.
+fn estimated_row_offset<S: std::hash::BuildHasher>(
+    row_idx: usize,
     row_height: f64,
     row_heights: &HashMap<usize, f64, S>,
     variable_row_height: bool,
-    header_h: f64,
-) -> Option<f64> {
-    let (row_top, row_h) = if variable_row_height {
+) -> (f64, f64) {
+    if variable_row_height {
         let mut top = 0.0_f64;
         for i in 0..row_idx {
             top += row_heights.get(&i).copied().unwrap_or(row_height);
@@ -1997,39 +2030,188 @@ fn scroll_top_to_reveal_row<S: std::hash::BuildHasher>(
         #[allow(clippy::cast_precision_loss)]
         let top = row_idx as f64 * row_height;
         (top, row_height)
-    };
-    let row_bottom = row_top + row_h;
-    if row_top < scroll_top {
-        // Above the viewport: align the row top to just below the sticky
-        // header (scroll_top = row_top lands its content origin at header_h).
-        Some(row_top)
-    } else if row_bottom + header_h > scroll_top + viewport_height {
-        // Below the viewport: the sticky <thead> permanently covers the top
-        // `header_h` band, so row content is shifted down by header_h. A row
-        // is cut off at the bottom once `row_bottom + header_h` passes the
-        // container's bottom edge — fire then (when it's the last fully
-        // visible row), matching the chorale-leptos adapter.
-        Some((row_bottom + header_h - viewport_height).max(0.0))
-    } else {
-        None
     }
 }
 
+/// Compute the `scroll_top` required to bring the row at `row_idx` fully
+/// into the virtualized viewport, or `None` when the row is already fully
+/// visible (no scroll needed).
+///
+/// Operates in the same coordinate space as the virtualization window math
+/// (`visible_window` / `visible_window_variable`), see
+/// [`estimated_row_offset`]. `header_h` is the sticky `<thead>` height: it
+/// sits above row 0 in the scrolled content and covers the top `header_h`
+/// band of the container. The decision rules are [`reveal_scroll_top`]'s.
+#[must_use]
+fn scroll_top_to_reveal_row<S: std::hash::BuildHasher>(
+    row_idx: usize,
+    scroll_top: f64,
+    viewport_height: f64,
+    row_height: f64,
+    row_heights: &HashMap<usize, f64, S>,
+    variable_row_height: bool,
+    header_h: f64,
+) -> Option<f64> {
+    let (row_top, row_h) =
+        estimated_row_offset(row_idx, row_height, row_heights, variable_row_height);
+    reveal_scroll_top(RowGeometry {
+        top: row_top + header_h,
+        height: row_h,
+        scroll_top,
+        client_height: viewport_height,
+        cover: header_h,
+    })
+}
+
+/// What [`measure_row_js`] reports.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum RowMeasurement {
+    /// The row is rendered; its geometry.
+    Found(RowGeometry),
+    /// The row is not rendered (outside the virtualized window). The
+    /// container's `scrollTop`, `clientHeight`, sticky-header cover and full
+    /// `<thead>` height, for an estimate.
+    Missing {
+        scroll_top: f64,
+        client_height: f64,
+        cover: f64,
+        thead: f64,
+    },
+}
+
+impl RowMeasurement {
+    /// Decode the `[found, top, height, scrollTop, clientHeight, cover, thead]`
+    /// array [`measure_row_js`] sends; `None` for anything else (no container).
+    fn from_js(v: &[f64]) -> Option<Self> {
+        let &[found, top, height, scroll_top, client_height, cover, thead] = v else {
+            return None;
+        };
+        if ![top, height, scroll_top, client_height, cover, thead]
+            .iter()
+            .all(|x| x.is_finite())
+        {
+            return None;
+        }
+        Some(if found > 0.5 {
+            Self::Found(RowGeometry {
+                top,
+                height,
+                scroll_top,
+                client_height,
+                cover,
+            })
+        } else {
+            Self::Missing {
+                scroll_top,
+                client_height,
+                cover,
+                thead,
+            }
+        })
+    }
+}
+
+/// JS that measures body row `row_idx` of the table whose scroll container
+/// is `scroll_id` and sends what [`RowMeasurement::from_js`] decodes. With
+/// `wait_for_render` it first waits two animation frames, so a render queued
+/// by an earlier scroll write has reached the DOM.
+///
+/// The cover is how far sticky `<th>` cells reach below the container's top
+/// edge, so a non-sticky filter row (which scrolls away) is not counted. The
+/// `chorale:measure-row` marker lets tests recognize the script.
+fn measure_row_js(scroll_id: &str, row_idx: usize, wait_for_render: bool) -> String {
+    let sel = body_row_selector(row_idx);
+    let wait = if wait_for_render {
+        "await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));"
+    } else {
+        ""
+    };
+    format!(
+        "/*chorale:measure-row*/ {wait}\
+         const el = document.getElementById('{scroll_id}');\
+         if (!el) {{ dioxus.send([]); }} else {{\
+         const top0 = el.getBoundingClientRect().top + el.clientTop;\
+         const head = el.querySelector(':scope > table > thead');\
+         let cover = 0;\
+         if (head) head.querySelectorAll('th').forEach(th => {{\
+           if (getComputedStyle(th).position === 'sticky') \
+             cover = Math.max(cover, th.getBoundingClientRect().bottom - top0);\
+         }});\
+         const thead = head ? head.getBoundingClientRect().height : 0;\
+         const tr = el.querySelector('{sel}');\
+         if (tr) {{ const r = tr.getBoundingClientRect();\
+           dioxus.send([1, r.top - top0 + el.scrollTop, r.height, el.scrollTop, el.clientHeight, cover, thead]); }}\
+         else dioxus.send([0, 0, 0, el.scrollTop, el.clientHeight, cover, thead]); }}"
+    )
+}
+
+/// JS that sets the container's `scrollTop` (when `scroll_top` is `Some`) and
+/// then reveals body row `row_idx` in every scrolling ancestor and in the
+/// window, so the row is on screen even when the page, not the table, is
+/// what scrolls (a table taller than the window in Paged mode).
+///
+/// Vertical only: `scrollIntoView` would also scroll horizontally and reset
+/// the grid's horizontal scroll position. The `chorale:reveal-row` marker
+/// lets tests recognize the script.
+fn reveal_row_js(scroll_id: &str, row_idx: usize, scroll_top: Option<f64>) -> String {
+    let sel = body_row_selector(row_idx);
+    let write = match scroll_top {
+        Some(t) if t.is_finite() => format!("el.scrollTop = {t};"),
+        _ => String::new(),
+    };
+    format!(
+        "/*chorale:reveal-row*/ const el = document.getElementById('{scroll_id}');\
+         if (el) {{ {write}\
+         const tr = el.querySelector('{sel}');\
+         if (tr) {{\
+           for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {{\
+             const oy = getComputedStyle(p).overflowY;\
+             if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && p.scrollHeight > p.clientHeight) {{\
+               const r = tr.getBoundingClientRect(); const pr = p.getBoundingClientRect();\
+               const top = pr.top + p.clientTop; const bottom = top + p.clientHeight;\
+               if (r.top < top) p.scrollTop -= top - r.top;\
+               else if (r.bottom > bottom) p.scrollTop += Math.min(r.bottom - bottom, r.top - top);\
+             }}\
+           }}\
+           const r = tr.getBoundingClientRect();\
+           const vh = window.innerHeight || document.documentElement.clientHeight;\
+           if (r.top < 0) window.scrollBy(0, r.top);\
+           else if (r.bottom > vh) window.scrollBy(0, Math.min(r.bottom - vh, r.top));\
+         }} }}"
+    )
+}
+
+/// How many times [`ensure_active_row_visible`] measures the active row at
+/// most: a far jump in Virtualized mode needs one measurement to find the row
+/// missing, one after the estimate scroll, and one or two to verify a
+/// correction. Every measurement after the first waits for a render.
+const REVEAL_ATTEMPTS: usize = 4;
+
 /// After a keyboard-navigation transition lands a new `active_cell`, scroll
-/// the virtualized container so the active row sits inside the viewport.
+/// so the active row is fully visible: inside the table's scroll container
+/// (below the sticky `<thead>`), and on screen when the page or another
+/// ancestor is the scroller (issue #51).
 ///
-/// The sticky `<thead>` permanently covers the top `header_h` band of the
-/// container, so the down-scroll trigger must account for it (otherwise it
-/// fires ~one header late — when the row is already half off-screen). web-sys
-/// is unavailable in this adapter, so `header_h` is measured via an async
-/// `eval` round-trip (the parallel to chorale-leptos's synchronous
-/// `offset_height` read); the round-trip also ensures a post-layout read.
+/// The row is measured in the DOM rather than assumed to sit at
+/// `row_idx * row_height`: group header rows and host header content differ
+/// in height from data rows, so the fixed-height math let the active row
+/// leave the view for a few presses. web-sys is unavailable in this adapter,
+/// so measurement is an async `eval` round-trip, which also guarantees a
+/// post-layout read.
 ///
-/// Then two synchronized writes, in this order:
-/// 1. `handle.set_scroll(..)` updates `TableState.scroll_top` so the next
-///    render computes the visible window from the post-scroll position.
-/// 2. A `document.getElementById(..).scrollTop = ..` eval moves the actual
-///    DOM scroll container; the native `onscroll` re-set is a no-op.
+/// 1. Measure the row ([`measure_row_js`]).
+/// 2. Rendered: compute the target with [`reveal_scroll_top`]; write it to
+///    `TableState.scroll_top` (so the next render computes the window from the
+///    post-scroll position) and to the DOM, then reveal the row in outer
+///    scrollers ([`reveal_row_js`]). After a write, measure again: a
+///    virtualized window re-slices on scroll, and rows whose rendered height
+///    differs from `row_height` (the default group header) shift the row.
+/// 3. Not rendered (virtualized, far jump): scroll to the estimate from
+///    [`estimated_row_offset`], wait for the render and measure again.
+///
+/// Steps 2 and 3 repeat until no write is needed, at most
+/// [`REVEAL_ATTEMPTS`] measurements.
+/// 4. No container (the eval failed): fall back to the state-only estimate.
 ///
 /// Inline mode is a deliberate no-op: there is no internal scroll container
 /// (`overflow: visible; height: auto`), the parent owns scrolling and this
@@ -2043,9 +2225,9 @@ fn ensure_active_row_visible<TRow: Clone + PartialEq + 'static>(
     if inline {
         return;
     }
-    // Snapshot the geometry inputs synchronously (pure state math — the target
-    // row may not be rendered under virtualization).
-    let (row_idx, scroll_top, viewport_height, row_height, row_heights) = {
+    // Snapshot the estimate inputs synchronously. A grouped body is sliced
+    // with the fixed row height whatever `variable_row_height` says.
+    let (row_idx, scroll_top, viewport_height, row_height, row_heights, variable) = {
         let sig = handle.signal();
         let s = sig.peek();
         let Some(ac) = s.active_cell else {
@@ -2057,30 +2239,71 @@ fn ensure_active_row_visible<TRow: Clone + PartialEq + 'static>(
             s.viewport_height,
             s.row_height,
             s.row_heights.clone(),
+            variable_row_height && s.grouping.is_empty(),
         )
     };
     let cid = scroll_container_id.to_owned();
     spawn(async move {
-        let mut js = dioxus::document::eval(&format!(
-            "const el = document.getElementById('{cid}'); \
-             const th = el ? el.querySelector(':scope > table > thead') : null; \
-             dioxus.send(th ? th.getBoundingClientRect().height : 0);"
-        ));
-        let header_h = js.recv::<f64>().await.unwrap_or(0.0);
-        if let Some(new_scroll) = scroll_top_to_reveal_row(
-            row_idx,
-            scroll_top,
-            viewport_height,
-            row_height,
-            &row_heights,
-            variable_row_height,
-            header_h,
-        ) {
-            handle.set_scroll(new_scroll);
-            dioxus::document::eval(&format!(
-                "var el = document.getElementById('{cid}'); \
-                 if (el) el.scrollTop = {new_scroll};"
-            ));
+        for attempt in 0..REVEAL_ATTEMPTS {
+            let mut js = dioxus::document::eval(&measure_row_js(&cid, row_idx, attempt > 0));
+            let measured = js
+                .recv::<Vec<f64>>()
+                .await
+                .ok()
+                .and_then(|v| RowMeasurement::from_js(&v));
+            match measured {
+                Some(RowMeasurement::Found(g)) => {
+                    let target = reveal_scroll_top(g);
+                    if let Some(t) = target {
+                        handle.set_scroll(t);
+                    }
+                    dioxus::document::eval(&reveal_row_js(&cid, row_idx, target));
+                    if target.is_none() {
+                        return;
+                    }
+                    // A scroll write re-slices a virtualized window; rows
+                    // rendered at heights other than row_height (the default
+                    // group header) then shift. Measure again to verify.
+                }
+                Some(RowMeasurement::Missing {
+                    scroll_top,
+                    client_height,
+                    cover,
+                    thead,
+                }) => {
+                    let (row_top, height) =
+                        estimated_row_offset(row_idx, row_height, &row_heights, variable);
+                    let target = reveal_scroll_top(RowGeometry {
+                        top: thead + row_top,
+                        height,
+                        scroll_top,
+                        client_height,
+                        cover,
+                    });
+                    let Some(t) = target else {
+                        // The estimate says the row is in view, yet it is
+                        // not rendered: nothing to scroll to.
+                        return;
+                    };
+                    handle.set_scroll(t);
+                    dioxus::document::eval(&sync_scroll_js(&cid, t));
+                }
+                None => {
+                    if let Some(t) = scroll_top_to_reveal_row(
+                        row_idx,
+                        scroll_top,
+                        viewport_height,
+                        row_height,
+                        &row_heights,
+                        variable,
+                        0.0,
+                    ) {
+                        handle.set_scroll(t);
+                        dioxus::document::eval(&sync_scroll_js(&cid, t));
+                    }
+                    return;
+                }
+            }
         }
     });
 }
@@ -3437,18 +3660,30 @@ fn grouped_keydown<TRow: Clone + PartialEq + 'static>(
     }
 }
 
-/// Move focus to the first focusable control inside grouped row `row_idx` of
-/// this table (the group checkbox, the chevron or host content). The
+/// CSS selector (for a `querySelector` on the table's scroll container) of
+/// body row `row_idx`: a data row or detail panel carries
+/// `data-chorale-index`, a group header row `data-chorale-group-index`. The
 /// `:scope > table > tbody > tr` chain keeps the lookup inside this table's
-/// own rows, not a nested child's.
+/// own rows, not a nested child table's. It contains double quotes only, so
+/// it can sit inside a single-quoted JS string.
+fn body_row_selector(row_idx: usize) -> String {
+    format!(
+        ":scope > table > tbody > tr[data-chorale-index=\"{row_idx}\"], \
+         :scope > table > tbody > tr[data-chorale-group-index=\"{row_idx}\"]"
+    )
+}
+
+/// Move focus to the first focusable control inside grouped row `row_idx` of
+/// this table (the group checkbox, the chevron or host content).
 fn focus_header_controls(scroll_id: &str, row_idx: usize) {
     dioxus::document::eval(&focus_header_controls_js(scroll_id, row_idx));
 }
 
 fn focus_header_controls_js(scroll_id: &str, row_idx: usize) -> String {
+    let sel = body_row_selector(row_idx);
     format!(
         "var sc=document.getElementById('{scroll_id}');\
-         var row=sc?sc.querySelector(':scope > table > tbody > tr[data-chorale-index=\"{row_idx}\"]'):null;\
+         var row=sc?sc.querySelector('{sel}'):null;\
          var c=row?row.querySelector('input:not([disabled]),button:not([disabled]),select:not([disabled]),\
          textarea:not([disabled]),a[href],[tabindex]:not([tabindex=\"-1\"])'):null;\
          if(c)c.focus();"
@@ -3732,7 +3967,7 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
                 style: "{tr_style}",
                 "aria-level": "{aria_level}",
                 "aria-expanded": "{expanded}",
-                "data-chorale-index": "{row_index}",
+                "data-chorale-group-index": "{row_index}",
                 "data-chorale-active-row": "{is_active}",
                 if selection_enabled {
                     td {
@@ -3814,9 +4049,13 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
             // Treegrid state and the keyboard cursor (issue #51). The cursor
             // outline is a stylesheet rule keyed on `data-chorale-active-row`:
             // Dioxus 0.7 drops some inline-style changes on a <tr> (see data_tr).
+            // The row index is `data-chorale-group-index`, not
+            // `data-chorale-index`: the VIRT-2 height loop measures every
+            // `tr[data-chorale-index]` and would shift scrollTop for a header
+            // shorter than row_height.
             "aria-level": "{aria_level}",
             "aria-expanded": "{expanded}",
-            "data-chorale-index": "{row_index}",
+            "data-chorale-group-index": "{row_index}",
             "data-chorale-active-row": "{is_active}",
             onclick: move |_| { handle.toggle_group(key.clone()); },
             if selection_enabled {
@@ -4832,6 +5071,83 @@ mod tests {
         assert!(!slice.is_empty());
     }
 
+    // ---- reveal_scroll_top (measured geometry, issue #51) --------------------
+
+    fn geom(top: f64, height: f64, scroll_top: f64) -> super::RowGeometry {
+        // A 500px container under a 41px sticky header.
+        super::RowGeometry {
+            top,
+            height,
+            scroll_top,
+            client_height: 500.0,
+            cover: 41.0,
+        }
+    }
+
+    #[test]
+    fn reveal_measured_none_when_fully_visible() {
+        // Band [scroll_top + cover, scroll_top + client_height] = [141, 600].
+        assert_eq!(super::reveal_scroll_top(geom(141.0, 40.0, 100.0)), None);
+        assert_eq!(super::reveal_scroll_top(geom(560.0, 40.0, 100.0)), None);
+    }
+
+    #[test]
+    fn reveal_measured_scrolls_down_to_row_bottom() {
+        // Row 561..601 straddles the bottom edge at 600 by 1px.
+        assert_eq!(
+            super::reveal_scroll_top(geom(561.0, 40.0, 100.0)),
+            Some(101.0)
+        );
+        // Header rows shorter than row_height: a 37px row at 1000.
+        assert_eq!(
+            super::reveal_scroll_top(geom(1000.0, 37.0, 0.0)),
+            Some(537.0)
+        );
+    }
+
+    #[test]
+    fn reveal_measured_scrolls_up_below_sticky_header() {
+        // Row top at 120 is under the sticky header (band starts at 141).
+        assert_eq!(
+            super::reveal_scroll_top(geom(120.0, 40.0, 100.0)),
+            Some(79.0)
+        );
+        // Never negative.
+        assert_eq!(super::reveal_scroll_top(geom(20.0, 40.0, 10.0)), Some(0.0));
+    }
+
+    #[test]
+    fn reveal_measured_without_sticky_header_uses_full_height() {
+        let g = super::RowGeometry {
+            cover: 0.0,
+            ..geom(95.0, 40.0, 100.0)
+        };
+        assert_eq!(super::reveal_scroll_top(g), Some(95.0));
+        let g = super::RowGeometry {
+            cover: 0.0,
+            ..geom(100.0, 40.0, 100.0)
+        };
+        assert_eq!(super::reveal_scroll_top(g), None);
+    }
+
+    #[test]
+    fn reveal_measured_row_taller_than_band_aligns_top() {
+        // A 600px row cannot fit in the 459px band: show its top.
+        assert_eq!(
+            super::reveal_scroll_top(geom(900.0, 600.0, 0.0)),
+            Some(859.0)
+        );
+        // Already showing its top: stay.
+        assert_eq!(super::reveal_scroll_top(geom(900.0, 600.0, 859.0)), None);
+    }
+
+    #[test]
+    fn reveal_measured_ignores_subpixel_overlap() {
+        // Fractional rects after a scroll write must not cause a re-scroll.
+        assert_eq!(super::reveal_scroll_top(geom(560.3, 40.0, 100.0)), None);
+        assert_eq!(super::reveal_scroll_top(geom(140.7, 40.0, 100.0)), None);
+    }
+
     // ---- scroll_top_to_reveal_row -------------------------------------------
 
     /// Row fully inside the viewport → no scroll adjustment.
@@ -5761,8 +6077,7 @@ mod tests {
 
     /// Remove from every `<tr>` opening tag exactly the attributes 0.2.4 adds
     /// for treegrid keyboard navigation (issue #51): `aria-level`,
-    /// `aria-expanded`, `data-chorale-active-row`, and `data-chorale-index` on
-    /// group header rows (data rows had `data-chorale-index` in 0.2.3 already).
+    /// `aria-expanded`, `data-chorale-active-row` and `data-chorale-group-index`.
     /// What remains must equal the 0.2.3 markup byte for byte.
     fn strip_treegrid_attrs(html: &str) -> String {
         fn drop_attr(tag: &mut String, name: &str) {
@@ -5783,9 +6098,7 @@ mod tests {
             drop_attr(&mut tag, "aria-level");
             drop_attr(&mut tag, "aria-expanded");
             drop_attr(&mut tag, "data-chorale-active-row");
-            if tag.contains("class=\"chorale-group-header\"") {
-                drop_attr(&mut tag, "data-chorale-index");
-            }
+            drop_attr(&mut tag, "data-chorale-group-index");
             out.push_str(&tag);
             rest = &rest[end..];
         }
@@ -5797,7 +6110,7 @@ mod tests {
     fn header_tree_attrs(level: usize, expanded: bool, index: usize) -> String {
         format!(
             " aria-level=\"{level}\" aria-expanded=\"{expanded}\" \
-             data-chorale-index=\"{index}\" data-chorale-active-row=\"false\">"
+             data-chorale-group-index=\"{index}\" data-chorale-active-row=\"false\">"
         )
     }
 
@@ -5829,7 +6142,7 @@ mod tests {
     #[test]
     fn strip_treegrid_attrs_only_removes_the_new_attributes() {
         let header = "<tr class=\"chorale-group-header\" style=\"x\" aria-level=\"1\" \
-                      aria-expanded=\"true\" data-chorale-index=\"0\" \
+                      aria-expanded=\"true\" data-chorale-group-index=\"0\" \
                       data-chorale-active-row=\"false\"><td>g</td></tr>";
         assert_eq!(
             strip_treegrid_attrs(header),
