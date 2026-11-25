@@ -97,7 +97,7 @@ pub const THEME_ATTRIBUTE: &str = "data-chorale-theme";
 /// | `--chorale-accent` | accent blue: sort badges, drag outlines, editor borders, active page, ghost buttons, group chevrons |
 /// | `--chorale-accent-contrast` | text on accent-filled controls |
 /// | `--chorale-accent-strong` | strong accent (selection-toolbar bottom border) |
-/// | `--chorale-active-cell-outline` | active-cell outline and the fill handle |
+/// | `--chorale-active-cell-outline` | active-cell outline, the fill handle and the outline of a group header row under the keyboard cursor |
 /// | `--chorale-range-bg` | range-selection / active-cell wash |
 /// | `--chorale-input-bg` | filter/editor input background |
 /// | `--chorale-input-border` | filter/editor input border |
@@ -113,6 +113,13 @@ pub const THEME_ATTRIBUTE: &str = "data-chorale-theme";
 ///
 /// Each block also sets [`color-scheme`], so native widgets (checkboxes,
 /// selects, scrollbars) follow the active theme without bespoke styling.
+///
+/// Two unscoped rules follow the token blocks, so they also apply under
+/// `Theme::Custom`: the selected-row background
+/// (`tr[data-chorale-row-selected="true"]`) and the keyboard cursor on a group
+/// header row (`tr[data-chorale-active-row="true"]`, a 2px outline in
+/// `--chorale-active-cell-outline`, set by the Dioxus adapter). Override
+/// either with a more specific selector of your own.
 ///
 /// The pre-existing `--chorale-frozen-divider-shadow` escape hatch (a full
 /// `box-shadow` value consumers may override) is intentionally *not* defined

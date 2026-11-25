@@ -455,16 +455,27 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     /// signals and callbacks. Build it with `use_callback` so its identity is
     /// stable across renders. Focus outlines inside host content may clip in
     /// virtualized mode. The header controls are focusable, reached by click,
-    /// or Shift+Tab from below, then Tab moves among the header controls
-    /// (selection checkbox, chevron, host controls); Tab from a grid cell does
-    /// not enter the header, and each header adds its own tab stops. After a
+    /// by Tab while the keyboard cursor is on the header row, or Shift+Tab
+    /// from below, then Tab moves among the header controls (selection
+    /// checkbox, chevron, host controls); Tab from a data cell does not enter
+    /// the header, and each header adds its own tab stops. After a
     /// click on a button inside the host content, focus stays there and every
     /// key goes to it until a data cell is clicked. In this mode the host
     /// replaces the column aggregates in the header too, so the host renders
     /// its own. The class names `chorale-group-toggle` and
     /// `chorale-group-header-content` are a styling contract and will not
-    /// change in a patch release. Default `None` renders exactly what 0.2.3
-    /// did.
+    /// change in a patch release. Default `None` renders what 0.2.3 did,
+    /// plus the treegrid attributes every grouped table now has.
+    ///
+    /// Keyboard (both `Some` and `None`): every group header row is an arrow
+    /// key stop (ARIA treegrid). With the cursor on a header row, Left
+    /// collapses the group, Right expands it, Enter and Space toggle it and
+    /// Tab moves focus to the header's first control. The header row under
+    /// the cursor carries `data-chorale-active-row="true"` and the shipped
+    /// stylesheet outlines it with `--chorale-active-cell-outline`. The
+    /// grouped `<table>` has `role="treegrid"`; header rows carry
+    /// `aria-level`, `aria-expanded` and `data-chorale-group-index`, grouped
+    /// data rows `aria-level`. See `docs/keyboard-navigation.md`.
     #[props(default)]
     group_header_renderer: Option<Callback<GroupHeaderContext, Element>>,
     /// Fired with the row's [`RowId`] when a data row receives a plain

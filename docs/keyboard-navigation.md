@@ -100,6 +100,9 @@ and without `group_header_renderer`.
 | `Shift` + `Tab` | Nothing; the grid stays one tab stop. |
 | `Home` / `End`, `Page Up` / `Page Down`, `Ctrl`/`Cmd` + arrows and `Ctrl`/`Cmd` + `Home` / `End` | Move as for data rows, counting header rows. |
 
+The Leptos adapter is unchanged and keeps the 0.2.3 behavior: in a grouped
+table its cursor can still land on a header row with no outline drawn.
+
 `Enter` or `F2` on a grouped data row edits that row. After every move the
 active row is scrolled fully into view: below the sticky header inside the
 table, and on screen when the page or another ancestor is what scrolls.

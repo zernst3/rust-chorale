@@ -282,7 +282,8 @@ impl<TRow: Clone + 'static> UseTableHandle<TRow> {
     ///
     /// Resets `page` to 0, `scroll_top` to 0 and clears the `row_heights`
     /// cache (it is keyed by visible-row index, which the mode changes);
-    /// leaves `collapsed_groups` and the grouping columns as they were.
+    /// leaves `collapsed_groups` and the grouping columns as they were. The
+    /// `Table` re-derives its grouped view on the change, including on page 0.
     pub fn set_grouped_pagination(&self, mode: chorale_core::GroupedPaginationMode) {
         self.dispatch(|s| with_grouped_pagination(s, mode));
     }

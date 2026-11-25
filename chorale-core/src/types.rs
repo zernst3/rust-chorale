@@ -178,6 +178,12 @@ impl std::fmt::Display for GroupKey {
 /// visible row on the current page). It is not a stable `RowId`; if the filter
 /// or sort changes, the adapter is responsible for clamping the index to the
 /// new visible row count.
+///
+/// In a grouped table the Dioxus adapter indexes the rows of
+/// `visible_grouped_view`, group header rows included, and a header row can
+/// hold the cursor; `column_id` is then the column the cursor returns to on
+/// the next data row. The core `move_active_cell*` transitions count
+/// `visible_view` rows and do not know about header rows.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ActiveCell {

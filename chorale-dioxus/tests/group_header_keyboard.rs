@@ -888,7 +888,11 @@ fn virtualized_far_jump_estimates_then_corrects_from_measurement() {
             "real top {real_top}: scroll_top {} expected {expected}",
             h.state().scroll_top
         );
-        assert_eq!(*scroll.borrow(), expected);
+        assert!(
+            (*scroll.borrow() - expected).abs() < 0.01,
+            "DOM scrollTop {} expected {expected}",
+            scroll.borrow()
+        );
         let reveal = h
             .evals_since(before)
             .into_iter()

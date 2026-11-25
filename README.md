@@ -335,7 +335,8 @@ items land via opt-in props or transitions; nothing was removed.
   keys, `Shift`/`Ctrl`/`Cmd`+arrow, `Home`/`End`, `Page Up`/`Down`,
   `Enter`/`F2` to edit, and `Ctrl`/`Cmd`+`C`/`V`. The expand chevron is a
   navigable column: arrow onto it, `Enter` to expand/collapse, `Tab` to descend
-  into the open sub-table, `Esc` to return. See the
+  into the open sub-table, `Esc` to return. In a grouped Dioxus table the group
+  header rows are arrow-key stops (ARIA treegrid). See the
   [Keyboard navigation](#keyboard-navigation) section.
 
 ### `chorale-derive`
@@ -359,6 +360,16 @@ column: move `←` Left onto the chevron, press `Enter` to expand or collapse th
 row, and press `Tab` (while the chevron is highlighted) to descend into the
 sub-table. `Esc` returns to the parent. Tabbing from a data cell does **not**
 enter the sub-table — the chevron is the single, predictable doorway.
+
+In a **grouped** table (Dioxus adapter) each group header row is an arrow-key
+stop, as in the ARIA treegrid pattern: the header under the cursor shows the
+active-cell outline, `←` collapses the group, `→` expands it, `Enter` and
+`Space` toggle it, and `Tab` moves focus into the header's own controls. The
+grouped `<table>` has `role="treegrid"` with `aria-level` and `aria-expanded`
+on its rows, and the active row is scrolled fully into view after every move.
+The Leptos adapter is unchanged and keeps the 0.2.3 behavior: in a grouped
+table its cursor can still land on a header row with no outline drawn, and the
+group rows have no treegrid attributes.
 
 See [docs/keyboard-navigation.md](docs/keyboard-navigation.md) for the complete
 key reference.
