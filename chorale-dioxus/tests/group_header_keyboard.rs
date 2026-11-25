@@ -1014,3 +1014,98 @@ fn runtime_switch_to_virtualized_renders_and_reaches_every_group() {
         total - 1
     );
 }
+
+/// Review finding: with the built-in header and selection on, Tab from a
+/// header focuses its group checkbox. Keys pressed there must behave like on
+/// the chevron: Space and Tab stay with the checkbox (the browser ticks it or
+/// moves focus on), arrows go back to the grid.
+#[test]
+fn builtin_header_checkbox_keeps_space_and_tab() {
+    let mut h = Harness::new(Cfg {
+        selection: true,
+        ..Cfg::default()
+    });
+    h.set_active(11, "name");
+    h.press(Key::Tab);
+    let checkbox = *h
+        .dom_ids
+        .iter()
+        .find(|(_, v)| v.starts_with("chorale-grp-cb-Group_1"))
+        .map(|(id, _)| id)
+        .expect("group checkbox of Group 1");
+    let before = h.eval_count();
+    h.press_on(checkbox, Key::Character(" ".into()), Modifiers::empty());
+    assert!(
+        !header_collapsed(&h.state(), 11),
+        "Space on the checkbox must not toggle the group"
+    );
+    h.press_on(checkbox, Key::Tab, Modifiers::empty());
+    let scripts = h.evals_since(before);
+    assert!(
+        !scripts.iter().any(|js| js.contains(".focus()")),
+        "Tab on the checkbox must not refocus it: {scripts:?}"
+    );
+    // An arrow key returns focus to the grid and moves the cursor.
+    let before = h.eval_count();
+    h.press_on(checkbox, Key::ArrowDown, Modifiers::empty());
+    let kb_id = h.dom_ids[&h.kb_element()].clone();
+    assert!(
+        h.evals_since(before)
+            .iter()
+            .any(|js| js.contains(&format!("getElementById('{kb_id}')")) && js.contains(".focus()")),
+        "arrow on the checkbox refocuses the grid"
+    );
+    assert_eq!(h.active().map(|a| a.row_idx), Some(12));
+}
+
+/// Review finding: a scroll-follow task whose row is no longer the active
+/// row (a newer key press moved the cursor) must stop writing `scrollTop`.
+#[test]
+fn stale_scroll_follow_task_stops_writing() {
+    let slot: Rc<RefCell<Option<UseTableHandle<Item>>>> = Rc::new(RefCell::new(None));
+    let scroll = Rc::new(RefCell::new(0.0_f64));
+    let reply: Reply = {
+        let slot = slot.clone();
+        let scroll = scroll.clone();
+        Rc::new(move |js: &str| {
+            if let Some(v) = script_scroll_write(js) {
+                *scroll.borrow_mut() = v;
+            }
+            if !js.contains("chorale:measure-row") {
+                return serde_json::Value::Null;
+            }
+            // While the task for row 87 measures, the cursor moves on (as a
+            // second Page Down would), and the row is not rendered yet.
+            if script_row_index(js) == Some(87) {
+                if let Some(h) = *slot.borrow() {
+                    let mut sig = h.signal();
+                    let mut s = sig.peek().clone();
+                    s.active_cell = Some(ActiveCell::new(3, ColumnId("name")));
+                    sig.set(s);
+                }
+            }
+            let st = *scroll.borrow();
+            serde_json::json!([0, 0, 0, st, CLIENT_H, THEAD_H, THEAD_H])
+        })
+    };
+    let mut h = Harness::with_reply(
+        Cfg {
+            virtualized: true,
+            ..Cfg::default()
+        },
+        reply,
+    );
+    *slot.borrow_mut() = Some(h.handle());
+    h.set_active(0, "name");
+    let before = h.eval_count();
+    h.press_mod(Key::End, Modifiers::CONTROL);
+    let writes: Vec<f64> = h
+        .evals_since(before)
+        .iter()
+        .filter_map(|js| script_scroll_write(js))
+        .collect();
+    assert!(
+        writes.is_empty(),
+        "the stale task for row 87 wrote scrollTop: {writes:?}"
+    );
+}

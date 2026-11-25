@@ -2179,7 +2179,7 @@ fn reveal_row_js(scroll_id: &str, row_idx: usize, scroll_top: Option<f64>) -> St
          if (el) {{ {write}\
          const tr = el.querySelector('{sel}');\
          if (tr) {{\
-           for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {{\
+           for (let p = el.parentElement; p && p !== document.documentElement; p = p.parentElement) {{\
              const oy = getComputedStyle(p).overflowY;\
              if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && p.scrollHeight > p.clientHeight) {{\
                const r = tr.getBoundingClientRect(); const pr = p.getBoundingClientRect();\
@@ -2198,7 +2198,7 @@ fn reveal_row_js(scroll_id: &str, row_idx: usize, scroll_top: Option<f64>) -> St
 
 /// How many times [`ensure_active_row_visible`] measures the active row at
 /// most: a far jump in Virtualized mode needs one measurement to find the row
-/// missing, one after the estimate scroll, and one or two to verify a
+/// missing, one after the estimate scroll and one or two to verify a
 /// correction. Every measurement after the first waits for a render.
 const REVEAL_ATTEMPTS: usize = 4;
 
@@ -2266,6 +2266,16 @@ fn ensure_active_row_visible<TRow: Clone + PartialEq + 'static>(
                 .await
                 .ok()
                 .and_then(|v| RowMeasurement::from_js(&v));
+            // A newer key press moved the cursor: its own task follows it,
+            // so this one stops instead of fighting it over scrollTop.
+            let still_active = handle
+                .signal()
+                .peek()
+                .active_cell
+                .is_some_and(|ac| ac.row_idx == row_idx);
+            if !still_active {
+                return;
+            }
             match measured {
                 Some(RowMeasurement::Found(g)) => {
                     let target = reveal_scroll_top(g);
@@ -3491,6 +3501,10 @@ fn grouped_move_target(
     let last_col = cols.len() - 1;
     let Some(ac) = current else {
         let (r, c) = match mv {
+            // Like move_active_cell_page: start at row 0, then page.
+            GroupedMove::Page(NavDirection::Down, n) => (n.min(last_row), 0),
+            GroupedMove::Page(NavDirection::Up, _) => (0, 0),
+            GroupedMove::Page(..) => return None,
             GroupedMove::Step(NavDirection::Up | NavDirection::Left) | GroupedMove::Last => {
                 (last_row, last_col)
             }
@@ -3782,6 +3796,7 @@ fn render_grouped_row<TRow: Clone + PartialEq + 'static>(
             aggregates,
             row_index,
             active_cell.is_some_and(|ac| ac.row_idx == row_index),
+            kb_id,
             visible_cols,
             cell_renderers,
             effective_col_count,
@@ -3861,6 +3876,8 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
     // is on it.
     row_index: usize,
     is_active: bool,
+    // DOM id of the table's keyboard container.
+    kb_id: &str,
     visible_cols: &[ColumnDef<TRow>],
     cell_renderers: &CellRenderers,
     col_count: usize,
@@ -3897,6 +3914,7 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
             .collect::<String>()
     );
     let cb_id_mount = cb_id.clone();
+    let kb_id_cb = kb_id.to_owned();
     // Per-column aggregate summary. Core computes each group's aggregates (one
     // per column, in effective column order); render them here for any column
     // that declares an aggregator. The value is formatted through the SAME
@@ -4091,6 +4109,20 @@ fn group_header_tr<TRow: Clone + PartialEq + 'static>(
                         },
                         // Don't let the checkbox click bubble to the row's collapse toggle.
                         onclick: move |e| { e.stop_propagation(); },
+                        // Tab from the header row can focus this checkbox (issue #51).
+                        // Like the chevron: Space, Enter and Tab stay with it; grid
+                        // keys first move focus back to the keyboard container.
+                        onkeydown: move |e: KeyboardEvent| {
+                            if chevron_keydown_stops(&e.key()) {
+                                e.stop_propagation();
+                            } else {
+                                let m = e.modifiers();
+                                let ctrl = m.contains(Modifiers::CONTROL) || m.contains(Modifiers::META);
+                                if chevron_keydown_refocuses(&e.key(), ctrl) {
+                                    refocus_keyboard_container(&kb_id_cb);
+                                }
+                            }
+                        },
                         onchange: move |_| { handle.toggle_select_group(key_for_select.clone()); },
                     }
                 }
@@ -5084,6 +5116,35 @@ mod tests {
         let (win, slice) = compute_window_slice(&state, &view, false);
         assert!(win.end_index < view.len());
         assert!(!slice.is_empty());
+    }
+
+    // ---- grouped_move_target --------------------------------------------------
+
+    #[test]
+    fn grouped_page_move_without_active_cell_pages_from_row_zero() {
+        // Same as core move_active_cell_page: start at row 0, then page.
+        let cols = [ColumnId("a"), ColumnId("b")];
+        let down = super::grouped_move_target(
+            None,
+            100,
+            &cols,
+            super::GroupedMove::Page(chorale_core::NavDirection::Down, 50),
+        );
+        assert_eq!(down, Some(chorale_core::ActiveCell::new(50, ColumnId("a"))));
+        let up = super::grouped_move_target(
+            None,
+            100,
+            &cols,
+            super::GroupedMove::Page(chorale_core::NavDirection::Up, 50),
+        );
+        assert_eq!(up, Some(chorale_core::ActiveCell::new(0, ColumnId("a"))));
+        let short = super::grouped_move_target(
+            None,
+            10,
+            &cols,
+            super::GroupedMove::Page(chorale_core::NavDirection::Down, 50),
+        );
+        assert_eq!(short, Some(chorale_core::ActiveCell::new(9, ColumnId("a"))));
     }
 
     // ---- reveal_scroll_top (measured geometry, issue #51) --------------------
@@ -6377,8 +6438,15 @@ mod tests {
         };
         let (_, default_listeners) = render_ssr_cfg(cfg(false));
         let (_, host_listeners) = render_ssr_cfg(cfg(true));
-        // Two headers, each: wrapper span + chevron + selection checkbox.
-        assert_eq!(keydowns(&host_listeners), keydowns(&default_listeners) + 6);
+        // Since 0.2.4 (issue #51) the built-in header's checkbox has a keydown
+        // listener too (Tab from the header row can focus it): one per header.
+        let (_, default_no_selection) = render_ssr(true, false, false);
+        assert_eq!(
+            keydowns(&default_listeners),
+            keydowns(&default_no_selection) + 2
+        );
+        // Two headers, each: wrapper span + chevron on top of the checkbox.
+        assert_eq!(keydowns(&host_listeners), keydowns(&default_listeners) + 4);
     }
 
     #[test]

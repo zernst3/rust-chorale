@@ -97,11 +97,18 @@ and without `group_header_renderer`.
 | `→` | Expand the group (nothing if it is already expanded). |
 | `Enter` or `Space` | Toggle the group. |
 | `Tab` | Move focus into the header's own controls: the group checkbox, the chevron and the host content. Nothing happens when the header has none (built-in header with selection off). |
-| `Shift` + `Tab` | Nothing; the grid stays one tab stop. |
+| `Shift` + `Tab` | Nothing; the cursor stays on the header. |
 | `Home` / `End`, `Page Up` / `Page Down`, `Ctrl`/`Cmd` + arrows and `Ctrl`/`Cmd` + `Home` / `End` | Move as for data rows, counting header rows. |
 
 The Leptos adapter is unchanged and keeps the 0.2.3 behavior: in a grouped
 table its cursor can still land on a header row with no outline drawn.
+
+On the group checkbox or the chevron, `Space`, `Enter` and `Tab` stay with
+that control (`Space` ticks the checkbox) and arrow keys move focus back to the
+grid and move the cursor.
+
+Known limitation, unchanged from 0.2.3: range selection (`Shift` + arrows) and
+copy and paste in a grouped table still use ungrouped row positions.
 
 `Enter` or `F2` on a grouped data row edits that row. After every move the
 active row is scrolled fully into view: below the sticky header inside the
