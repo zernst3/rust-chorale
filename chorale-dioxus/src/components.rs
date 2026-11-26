@@ -415,6 +415,9 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     /// hand-off discontinuities (master/detail panels, sidebars, modals).
     /// The consumer should keep the dataset small enough that rendering every
     /// row at once is acceptable (typically <500 rows).
+    ///
+    /// Keyboard scroll-follow does not run in this mode: the host's scroller
+    /// owns scrolling.
     #[props(default = false)]
     inline: bool,
     /// Optional synchronous validator called before a cell edit is
@@ -470,12 +473,19 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     /// Keyboard (both `Some` and `None`): every group header row is an arrow
     /// key stop (ARIA treegrid). With the cursor on a header row, Left
     /// collapses the group, Right expands it, Enter and Space toggle it and
-    /// Tab moves focus to the header's first control. The header row under
-    /// the cursor carries `data-chorale-active-row="true"` and the shipped
-    /// stylesheet outlines it with `--chorale-active-cell-outline`. The
-    /// grouped `<table>` has `role="treegrid"`; header rows carry
-    /// `aria-level`, `aria-expanded` and `data-chorale-group-index`, grouped
-    /// data rows `aria-level`. See `docs/keyboard-navigation.md`.
+    /// Tab moves focus to the header's first control (with none, and for
+    /// Shift+Tab, the browser moves focus out of the grid). Arrow keys on the
+    /// group checkbox or the chevron put the cursor on that header and return
+    /// focus to the grid; Space, Enter and Tab stay with the control. The
+    /// header row under the cursor carries `data-chorale-active-row="true"`
+    /// and the shipped stylesheet outlines it with
+    /// `--chorale-active-cell-outline` (restyle with a more specific
+    /// selector). The grouped `<table>` has `role="treegrid"` and
+    /// `aria-rowcount`; rows carry `aria-rowindex` and an `id`, header rows
+    /// also `aria-level`, `aria-expanded` and `data-chorale-group-index`,
+    /// grouped data rows `aria-level`. The keyboard container is a
+    /// `role="group"` whose `aria-activedescendant` names the active row or
+    /// cell. See `docs/keyboard-navigation.md`.
     #[props(default)]
     group_header_renderer: Option<Callback<GroupHeaderContext, Element>>,
     /// Fired with the row's [`RowId`] when a data row receives a plain
@@ -507,9 +517,19 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     /// The parent can use this to call `handle.start_edit(row_id, col_id)`.
     on_tab_to_editable: Option<EventHandler<ActiveCell>>,
     /// Fired after Ctrl+C successfully writes the selected range to the system clipboard.
+    ///
+    /// In a grouped table the range's rows are indexes into
+    /// `visible_grouped_view` (header rows included), and the copied text holds
+    /// the data rows inside the range only.
     on_copy: Option<EventHandler<ClipboardCopyEvent>>,
     /// Fired after Ctrl+V reads from the system clipboard and adjusts the active range.
     /// The host should apply the per-cell writes from `evt.tsv` via its persistence layer.
+    ///
+    /// In a grouped table the range's rows are indexes into
+    /// `visible_grouped_view`: the pasted lines go to consecutive data rows
+    /// from the range's first row, skipping header rows (so the range can
+    /// span a header the host must skip). A paste starting on a header row
+    /// does nothing and fires no event.
     on_paste: Option<EventHandler<ClipboardPasteEvent>>,
     /// CSS `z-index` applied to frozen column cells (header, filter row, and body).
     /// Raise if custom cell renderers use `z-index` internally.

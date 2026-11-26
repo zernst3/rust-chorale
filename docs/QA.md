@@ -403,10 +403,10 @@ then **Group header content**. Not available in `leptos-qa-harness`.
    host content may clip).
 
 **Header rows and scroll-follow (issue #51).** Setup: `dx serve --package
-group-header-hook` (items 14 to 19 of its README). Run steps 8 to 13 with
-"group_header_renderer on" checked and again unchecked. The panel above the
-table shows the active row index and whether that row is fully visible in the
-table and in the window.
+group-header-hook` (items 14 to 23 of its README). Run steps 8 to 17 with
+"group_header_renderer on" checked and again unchecked, unless a step says
+otherwise. The panel above the table shows the active row index and whether
+that row is fully visible in the table and in the window.
 
 8. Click a data cell in the first row of a group, then press `↑`. The cursor
    lands on the group's header row and the whole row shows the active-cell
@@ -416,10 +416,10 @@ table and in the window.
    `Enter` and `Space` toggle it. The cursor stays on the header. `↓` from a
    collapsed header goes to the next header.
 10. With the cursor on a header row, press `Tab`: focus moves to the header's
-    first control (the group checkbox with **Selection** on, otherwise the
-    chevron with the hook on). With the hook off and **Selection** off the
-    header has no controls and `Tab` does nothing. An arrow key on the chevron
-    returns focus to the grid.
+    first control (the group checkbox with **Selection** on, the chevron with
+    the hook on and **Selection** off). With the hook off and **Selection**
+    off the header has no controls and focus leaves the grid. An arrow key on
+    the chevron returns focus to the grid.
 11. Scroll-follow, `Paged`: shorten the browser window until the table's
     bottom edge is below it. Press `↓` 20 times or more across several
     headers, then `↑`, `Page Down`, `Ctrl+End` and `Ctrl+Home`. After every
@@ -427,18 +427,35 @@ table and in the window.
     the window (the panel says "yes" twice).
 12. Scroll-follow, `Virtualized`: switch **Grouped pagination** and repeat
     step 11. `Ctrl+End` reaches the last row of the last group (Item 2999)
-    and every `Page Down` (50 rows) keeps the row visible.
-13. Focus a header's select and press arrows, letters, `Enter` and `Space`:
-    the cursor does not move and the group does not toggle (step 6 still
-    holds).
+    and every `Page Down` (50 rows, headers included) keeps the row visible.
+13. Hook on only: focus a header's select and press arrows, letters, `Enter`
+    and `Space`: the cursor does not move and the group does not toggle (step
+    6 still holds).
+14. Accessibility: with the cursor on a header row, the focused keyboard
+    container's `aria-activedescendant` names that row (Chrome DevTools,
+    Accessibility pane, shows a row with `aria-expanded`); on a data row it
+    names the active cell (a gridcell). A screen reader reads each new row or
+    cell as the cursor moves.
+15. `Tab` in the last column and `Shift+Tab` in the first column move focus
+    out of the grid; so does `Shift+Tab` on a header row.
+16. Hook on, **Selection** on: `Tab` from a header row to its checkbox, then
+    `←`: the group collapses, the cursor is on that header and focus is back
+    on the grid. `Space` on the checkbox ticks it and leaves the group as it
+    was. The chevron behaves the same.
+17. `Virtualized`: scroll down past row 49 with the mouse and click a data
+    cell: the active row index is that row's (above 49). Collapse the
+    cursor's group with its chevron: the cursor moves to that header.
 
 **Edge cases:**
 - Toggle **Group header content** off: headers return to the default look and
   the whole row toggles on click again.
-- Screen reader: the grouped `<table>` has `role="treegrid"`, header rows
-  carry `aria-level` and `aria-expanded`, and data rows carry `aria-level`.
-  Focus stays on the grid container, so the cursor itself is not announced
-  yet (no `aria-activedescendant`).
+- Screen reader: the grouped `<table>` has `role="treegrid"` and
+  `aria-rowcount`; rows carry `aria-rowindex` and `aria-level`, header rows
+  also `aria-expanded`. Focus stays on the grid container, whose
+  `aria-activedescendant` names the active row or cell; while virtualization
+  has that row unmounted, nothing is named.
+- Ungrouped tables: arrow keys keep the active row on screen too, which can
+  scroll the page, and `Tab` in the last column leaves the grid.
 
 ---
 
