@@ -355,3 +355,167 @@ fn wheel_scroll_during_reveal_verification_is_not_undone() {
     );
     assert!((*scroll.borrow() - 600.0).abs() < 0.01);
 }
+
+// ---------------------------------------------------------------------------
+// EM review of #52 (A.4, A.6, A.9)
+// ---------------------------------------------------------------------------
+
+/// A.4: a window (or ancestor) scroll during the verification frames ends
+/// the reveal too, not only a scroll of the table's own container. The
+/// reveal script reports the outer scroll offset it left; a later
+/// measurement that reads a different one means the user scrolled.
+#[test]
+fn window_scroll_during_reveal_verification_is_not_undone() {
+    let measures = Rc::new(RefCell::new(0_usize));
+    let scroll = Rc::new(RefCell::new(0.0_f64));
+    let reply: Reply = {
+        let measures = measures.clone();
+        let scroll = scroll.clone();
+        Rc::new(move |js: &str| {
+            if let Some(v) = script_scroll_write(js) {
+                *scroll.borrow_mut() = v;
+            }
+            if js.contains("chorale:reveal-row") {
+                // Outer offset (window.scrollY plus ancestor scrollTops)
+                // after the reveal.
+                return serde_json::json!(100.0);
+            }
+            if !js.contains("chorale:measure-row") {
+                return serde_json::Value::Null;
+            }
+            let n = {
+                let mut m = measures.borrow_mut();
+                *m += 1;
+                *m
+            };
+            let st = *scroll.borrow();
+            if n == 1 {
+                serde_json::json!([1, 520.0, DATA_H, st, CLIENT_H, THEAD_H, THEAD_H, 0.0])
+            } else {
+                // The container is where the reveal left it, but the user
+                // scrolled the window by 250px since; the row also shifted.
+                serde_json::json!([1, 530.0, DATA_H, st, CLIENT_H, THEAD_H, THEAD_H, 350.0])
+            }
+        })
+    };
+    let mut h = Harness::with_reply(
+        Cfg {
+            virtualized: true,
+            ..Cfg::default()
+        },
+        reply,
+    );
+    h.set_active(11, "name");
+    let before = h.eval_count();
+    h.press(Key::ArrowDown);
+    let writes: Vec<f64> = h
+        .evals_since(before)
+        .iter()
+        .filter_map(|js| script_scroll_write(js))
+        .collect();
+    assert_eq!(
+        writes,
+        vec![60.0],
+        "the reveal fought a window scroll: {writes:?}"
+    );
+    let reveals = h
+        .evals_since(before)
+        .iter()
+        .filter(|js| js.contains("chorale:reveal-row"))
+        .count();
+    assert_eq!(reveals, 1, "no second outer reveal after the user scrolled");
+}
+
+/// A layout stand-in for an ungrouped table: every row is 40px.
+fn uniform_reply(rows: usize, scroll: Rc<RefCell<f64>>) -> Reply {
+    Rc::new(move |js: &str| {
+        if let Some(v) = script_scroll_write(js) {
+            *scroll.borrow_mut() = v;
+        }
+        if !js.contains("chorale:measure-row") {
+            return serde_json::Value::Null;
+        }
+        let st = *scroll.borrow();
+        match script_row_index(js) {
+            Some(i) if i < rows => {
+                #[allow(clippy::cast_precision_loss)]
+                let top = THEAD_H + i as f64 * DATA_H;
+                serde_json::json!([1, top, DATA_H, st, CLIENT_H, THEAD_H, THEAD_H, 0.0])
+            }
+            _ => serde_json::json!([0, 0, 0, st, CLIENT_H, THEAD_H, THEAD_H, 0.0]),
+        }
+    })
+}
+
+/// A.6: ungrouped tables get the same scroll-follow (Paged page of 50 and a
+/// large page that virtualizes), including the outer reveal.
+#[test]
+fn ungrouped_tables_keep_the_active_row_fully_visible() {
+    for page_size in [50_usize, 80] {
+        let scroll = Rc::new(RefCell::new(0.0_f64));
+        let mut h = Harness::with_reply(
+            Cfg {
+                ungrouped: true,
+                page_size: Some(page_size),
+                ..Cfg::default()
+            },
+            uniform_reply(page_size, scroll.clone()),
+        );
+        h.set_active(0, "name");
+        for _ in 1..page_size {
+            let before = h.eval_count();
+            h.press(Key::ArrowDown);
+            let i = h.active().unwrap().row_idx;
+            let st = *scroll.borrow();
+            #[allow(clippy::cast_precision_loss)]
+            let top = THEAD_H + i as f64 * DATA_H;
+            assert!(
+                top >= st + THEAD_H - 0.5 && top + DATA_H <= st + CLIENT_H + 0.5,
+                "page_size={page_size}: row {i} top {top} scroll_top {st}"
+            );
+            assert!(
+                h.evals_since(before)
+                    .iter()
+                    .any(|js| js.contains("chorale:reveal-row") && js.contains("window.scrollBy")),
+                "page_size={page_size}: row {i} is revealed in outer scrollers too"
+            );
+        }
+        h.press_mod(Key::Home, Modifiers::CONTROL);
+        assert!((*scroll.borrow()).abs() < 0.01, "page_size={page_size}");
+    }
+}
+
+/// A.9: a Tab move keeps the row revealed (grouped and ungrouped), and so
+/// does Space on a grouped data row (the review scoped Space to grouped
+/// tables; ungrouped Space is unchanged).
+#[test]
+fn tab_and_space_reveal_the_active_row() {
+    for grouped in [true, false] {
+        let cfg = Cfg {
+            ungrouped: !grouped,
+            ..Cfg::default()
+        };
+        let layout = PagedLayout::new(&cfg);
+        let reply = if grouped {
+            layout.reply()
+        } else {
+            uniform_reply(50, Rc::new(RefCell::new(0.0)))
+        };
+        let mut h = Harness::with_reply(cfg, reply);
+        h.set_active(13, "group");
+        let mut keys = vec![(Key::Tab, Modifiers::empty())];
+        if grouped {
+            keys.push((Key::Character(" ".into()), Modifiers::empty()));
+        }
+        for (key, mods) in keys {
+            let before = h.eval_count();
+            h.press_mod(key.clone(), mods);
+            assert!(
+                h.evals_since(before)
+                    .iter()
+                    .any(|js| js.contains("chorale:measure-row")),
+                "grouped={grouped}: {key:?} does not reveal the row"
+            );
+        }
+    }
+}

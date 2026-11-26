@@ -53,6 +53,14 @@ pub struct Cfg {
     pub virtualized: bool,
     /// Give the name column a text editor (for Enter-to-edit checks).
     pub editable: bool,
+    /// Set a detail renderer (adds the detail-expander column).
+    pub detail: bool,
+    /// No grouping at all.
+    pub ungrouped: bool,
+    /// Override `page_size` (default 50).
+    pub page_size: Option<usize>,
+    /// Initial `scroll_top` (so a virtualized window starts away from the top).
+    pub initial_scroll: f64,
 }
 
 /// Props for the fixture app. `slot` hands the table handle back to the test.
@@ -101,10 +109,16 @@ pub fn app(props: Props) -> Element {
             name,
         ];
         let mut s = TableState::new(dataset(), columns);
-        s.grouping = vec![ColumnId("group")];
+        if !cfg.ungrouped {
+            s.grouping = vec![ColumnId("group")];
+        }
         if cfg.virtualized {
             s.grouped_pagination = GroupedPaginationMode::Virtualized;
         }
+        if let Some(n) = cfg.page_size {
+            s.page_size = n;
+        }
+        s.scroll_top = cfg.initial_scroll;
         s
     });
     *props.slot.borrow_mut() = Some(table);
@@ -114,11 +128,13 @@ pub fn app(props: Props) -> Element {
             select { aria_label: "Group action", option { "Keep" } }
         }
     });
+    let detail_cb = Callback::new(|item: Item| rsx! { p { "detail {item.name}" } });
     rsx! {
         Table::<Item> {
             handle: table,
             selection_enabled: props.cfg.selection,
             group_header_renderer: if props.cfg.hook { Some(header_cb) } else { None },
+            detail_renderer: if props.cfg.detail { Some(detail_cb) } else { None },
         }
     }
 }
@@ -331,6 +347,90 @@ impl Harness {
                 })
                 .expect("scroll container listener");
         *id
+    }
+
+    /// Like `press_on`, and report whether the browser default stays enabled
+    /// (`true` means the handler did not call `prevent_default`).
+    pub fn press_default(&mut self, element: ElementId, key: Key, modifiers: Modifiers) -> bool {
+        let data = SerializedKeyboardData::new(
+            key,
+            Code::Unidentified,
+            Location::Standard,
+            false,
+            modifiers,
+            false,
+        );
+        let payload: Rc<dyn Any> = Rc::new(PlatformEventData::new(Box::new(data)));
+        let event = Event::new(payload, true);
+        let probe = event.clone();
+        self.dom.runtime().handle_event("keydown", event, element);
+        self.settle();
+        probe.default_action_enabled()
+    }
+
+    /// Element ids of the rendered data cells (`<td>`s with a click
+    /// listener and the fixed data-cell style), in document order. Valid
+    /// right after `Harness::new` (first render); `cells_per_row` cells each.
+    pub fn data_cells(&self) -> Vec<ElementId> {
+        self.listeners
+            .iter()
+            .filter(|(n, id)| {
+                n == "click"
+                    && self
+                        .styles
+                        .get(id)
+                        .is_some_and(|s| s.starts_with("position: relative; padding: 0.5rem 1rem;"))
+            })
+            .map(|(_, id)| *id)
+            .collect()
+    }
+
+    /// Plain left click on `element`.
+    pub fn click(&mut self, element: ElementId, modifiers: Modifiers) {
+        use dioxus_html::geometry::{ClientPoint, ElementPoint, PagePoint, ScreenPoint};
+        let data = SerializedMouseData::new(
+            Some(dioxus_html::input_data::MouseButton::Primary),
+            dioxus_html::input_data::MouseButtonSet::empty(),
+            dioxus_html::geometry::Coordinates::new(
+                ScreenPoint::origin(),
+                ClientPoint::origin(),
+                ElementPoint::origin(),
+                PagePoint::origin(),
+            ),
+            modifiers,
+        );
+        self.fire("click", Box::new(data), element);
+    }
+
+    /// Opening tag of the keyboard container `<div>`.
+    pub fn kb_tag(&self) -> String {
+        let html = self.html();
+        html.split("<div ")
+            .skip(1)
+            .map(|t| t.split('>').next().unwrap_or("").to_owned())
+            .find(|t| t.contains("-kb\""))
+            .unwrap_or_default()
+    }
+
+    /// Value of attribute `name` in an opening tag.
+    pub fn attr(tag: &str, name: &str) -> Option<String> {
+        let needle = format!(" {name}=\"");
+        let at = tag.find(&needle)? + needle.len();
+        Some(tag[at..].split('"').next()?.to_owned())
+    }
+
+    /// Indexes of the grouped rows rendered right now, in document order.
+    pub fn rendered_rows(&self) -> Vec<usize> {
+        self.html()
+            .split("<tr ")
+            .skip(1)
+            .filter_map(|t| {
+                let tag = t.split('>').next().unwrap_or("");
+                Self::attr(tag, "data-chorale-index")
+                    .or_else(|| Self::attr(tag, "data-chorale-group-index"))
+                    .and_then(|v| v.parse().ok())
+            })
+            .collect()
     }
 
     pub fn press(&mut self, key: Key) {
