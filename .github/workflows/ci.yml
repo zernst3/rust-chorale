@@ -45,3 +45,85 @@ jobs:
           # Promote intra-doc link errors so docs.rs renders cleanly post-publish.
           RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links -D warnings"
         run: cargo doc --workspace --no-deps --all-features
+
+  # Issue #53: every library crate declares `rust-version`, but the job above
+  # only ever builds with stable, so the declared minimum was never checked.
+  # This job builds and tests each library crate with exactly the toolchain
+  # its Cargo.toml declares. Examples and the QA harnesses are not built here:
+  # they are `publish = false`, carry no `rust-version`, and the stable job
+  # above already covers them.
+  #
+  # Cargo.lock is gitignored, and cargo older than 1.84 ignores
+  # `rust-version` when it resolves dependencies, so a plain resolve on the
+  # minimum toolchain pulls the newest crates (some need edition 2024). The
+  # lockfile is therefore resolved with stable cargo's MSRV-aware resolver
+  # (`fallback`), then every build runs `--locked` on the minimum toolchain.
+  # The fallback resolver targets the lowest `rust-version` in the workspace,
+  # so this assumes all library crates share the workspace value.
+  msrv:
+    name: msrv / ${{ matrix.crate }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - crate: chorale-core
+            wasm: true
+          - crate: chorale-derive
+            # Proc-macro crate: runs on the host only, no wasm32 build.
+            wasm: false
+          - crate: chorale-dioxus
+            wasm: true
+          - crate: chorale-leptos
+            wasm: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain (lockfile resolution only)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Read declared rust-version
+        id: msrv
+        env:
+          CRATE: ${{ matrix.crate }}
+        run: |
+          set -euo pipefail
+          version=$(cargo +stable metadata --no-deps --format-version 1 \
+            | jq -r --arg c "$CRATE" '.packages[] | select(.name == $c) | .rust_version // empty')
+          if [[ -z "$version" ]]; then
+            echo "::error::$CRATE declares no rust-version"
+            exit 1
+          fi
+          echo "$CRATE declares rust-version $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install declared minimum toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+          targets: ${{ matrix.wasm && 'wasm32-unknown-unknown' || '' }}
+
+      - name: Resolve an MSRV-compatible lockfile
+        env:
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
+        run: cargo +stable generate-lockfile
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-${{ matrix.crate }}
+
+      # Default features first, so a failure in an optional feature does not
+      # hide whether the default build and its tests work.
+      - name: cargo build (default features)
+        run: cargo +${{ steps.msrv.outputs.version }} build --locked -p ${{ matrix.crate }}
+
+      - name: cargo test (default features)
+        run: cargo +${{ steps.msrv.outputs.version }} test --locked -p ${{ matrix.crate }}
+
+      - name: cargo check wasm32 (default features)
+        if: matrix.wasm
+        run: cargo +${{ steps.msrv.outputs.version }} check --locked -p ${{ matrix.crate }} --target wasm32-unknown-unknown
+
+      - name: cargo build (all features)
+        run: cargo +${{ steps.msrv.outputs.version }} build --locked -p ${{ matrix.crate }} --all-features
