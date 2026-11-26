@@ -418,8 +418,10 @@ that row is fully visible in the table and in the window.
 10. With the cursor on a header row, press `Tab`: focus moves to the header's
     first control (the group checkbox with **Selection** on, the chevron with
     the hook on and **Selection** off). With the hook off and **Selection**
-    off the header has no controls and focus leaves the grid. An arrow key on
-    the chevron returns focus to the grid.
+    off the header has no controls and focus moves to the next focusable
+    element (a row checkbox or pagination button inside the table, or the
+    next element on the page). An arrow key on the chevron returns focus to
+    the grid.
 11. Scroll-follow, `Paged`: shorten the browser window until the table's
     bottom edge is below it. Press `↓` 20 times or more across several
     headers, then `↑`, `Page Down`, `Ctrl+End` and `Ctrl+Home`. After every
@@ -436,8 +438,13 @@ that row is fully visible in the table and in the window.
     Accessibility pane, shows a row with `aria-expanded`); on a data row it
     names the active cell (a gridcell). A screen reader reads each new row or
     cell as the cursor moves.
-15. `Tab` in the last column and `Shift+Tab` in the first column move focus
-    out of the grid; so does `Shift+Tab` on a header row.
+15. `Tab` in the last column and `Shift+Tab` in the first column, and
+    `Shift+Tab` on a header row, hand focus to the browser: it moves to the
+    next (previous) focusable element, which can be a control inside the
+    table. With **Selection** on and the cursor on a header, `Tab` goes to the
+    group checkbox, then on through the row checkboxes without ever jumping
+    back to the header. `Space` on a row checkbox ticks it; `Enter` on the
+    `Next` page button changes page and starts no edit.
 16. Hook on, **Selection** on: `Tab` from a header row to its checkbox, then
     `←`: the group collapses, the cursor is on that header and focus is back
     on the grid. `Space` on the checkbox ticks it and leaves the group as it
@@ -455,7 +462,14 @@ that row is fully visible in the table and in the window.
   `aria-activedescendant` names the active row or cell; while virtualization
   has that row unmounted, nothing is named.
 - Ungrouped tables: arrow keys keep the active row on screen too, which can
-  scroll the page, and `Tab` in the last column leaves the grid.
+  scroll the page, and `Tab` in the last column hands focus to the browser.
+- Outer scrollers: automated tests check the reveal in the window and in an
+  ancestor scroller only through the script text, so this hand test must
+  cover it. Shorten the window (step 11) and, if you have one, put the table
+  in a narrow scrolling host: after every arrow the active row is on screen in
+  each.
+- `scroll-behavior: smooth` on the page or the table: steps 11 and 12 still
+  hold (reveal writes are instant).
 
 ---
 

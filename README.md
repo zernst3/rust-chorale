@@ -371,8 +371,10 @@ grouped `<table>` is an ARIA treegrid (`aria-level`, `aria-expanded`,
 which names the active row or cell through `aria-activedescendant`. In Dioxus
 tables, grouped or not, the active row is scrolled fully into view after every
 keyboard move, which can scroll the page; mouse scrolling is never pulled
-back. Where `Tab` cannot move the cursor, the browser moves focus out of the
-grid.
+back. Where `Tab` cannot move the cursor, the browser moves focus to the next
+focusable element, which can be another control in the table. `Space`, `Enter`
+and `Tab` on the table's own controls (filters, checkboxes, pagination) keep
+their native meaning.
 The Leptos adapter is unchanged and keeps the 0.2.3 behavior: in a grouped
 table its cursor can still land on a header row with no outline drawn, and the
 group rows have no treegrid attributes.

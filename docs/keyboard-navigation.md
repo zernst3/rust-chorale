@@ -9,7 +9,9 @@ exceptions:
   [Group header rows](#group-header-rows-grouped-tables-dioxus));
 - scroll-follow, which keeps the active row on screen (see
   [Scroll-follow](#scroll-follow-dioxus)) in ungrouped tables too;
-- `Tab` leaving the grid at the last or first column.
+- `Tab` at the last or first column handing focus to the browser;
+- `Space`, `Enter` and `Tab` keeping their native meaning on the table's own
+  controls (see [Controls inside the table](#controls-inside-the-table-dioxus)).
 
 ## Focus model
 
@@ -36,7 +38,7 @@ selects that cell instead.
 | `Home` / `End` | First / last column of the current row. |
 | `Ctrl`/`Cmd` + `Home` / `End` | First / last cell of the whole table. |
 | `Page Up` / `Page Down` | Move up / down by one page of rows. |
-| `Tab` / `Shift` + `Tab` | Move to the next / previous cell. In the last / first column the browser moves focus out of the grid, which is one Tab stop (Dioxus). |
+| `Tab` / `Shift` + `Tab` | Move to the next / previous cell. In the last / first column the browser moves focus to the next / previous focusable element, which can be another control in the table (Dioxus). |
 | `Ctrl`/`Cmd` + `A` | Select all cells. |
 | `Ctrl`/`Cmd` + `C` | Copy the selection (TSV). |
 | `Ctrl`/`Cmd` + `V` | Paste into the selection. |
@@ -102,8 +104,8 @@ and without `group_header_renderer`.
 | `→` | Expand the group (nothing if it is already expanded). |
 | `Enter` or `Space` | Toggle the group. |
 | `F2` | Nothing (a header has no cell to edit). |
-| `Tab` | Move focus into the header's own controls: the group checkbox, the chevron and the host content. When the header has none (built-in header with selection off) the browser moves focus out of the grid. |
-| `Shift` + `Tab` | The browser moves focus out of the grid; the cursor stays on the header. |
+| `Tab` | Move focus into the header's own controls: the group checkbox, the chevron and the host content. When the header has none (built-in header with selection off) the browser moves focus to the next focusable element. |
+| `Shift` + `Tab` | The browser moves focus to the previous focusable element; the cursor stays on the header. |
 | `Home` / `End`, `Page Up` / `Page Down`, `Ctrl`/`Cmd` + arrows and `Ctrl`/`Cmd` + `Home` / `End` | Move as for data rows, counting header rows (`Page Up` / `Page Down` move by `page_size` rows, headers included). |
 
 On a header's group checkbox (hook on or off) or its chevron, `Space`, `Enter`
@@ -116,7 +118,7 @@ header row lands on the checkbox first.
 On a grouped data row, `Enter` or `F2` edits that row, `Enter` on the
 detail-expander column toggles that row's panel, and `Space` does nothing (it
 no longer scrolls the page). `Shift` + arrows extend the range over grouped
-rows. `Ctrl`/`Cmd` + `C` copies the data rows under the range and
+rows, and `Ctrl`/`Cmd` + `A` spans every grouped row. `Ctrl`/`Cmd` + `C` copies the data rows under the range and
 `Ctrl`/`Cmd` + `V` pastes onto consecutive data rows from a data row; a header
 row is never a copy, paste or fill target. When a group is collapsed or
 expanded by mouse or by the host, the cursor stays on its row, or moves to its
@@ -148,6 +150,19 @@ innermost group. Focus stays on the table's keyboard container, a
 data cell, so assistive technology follows the cursor. While virtualization
 has the active row unmounted, nothing is named.
 
+## Controls inside the table (Dioxus)
+
+The table contains focusable controls of its own: the filter inputs, the
+select-all and row checkboxes, the column toolbar, the selection toolbar and
+the footer's pagination, page input and export buttons. On them, `Space`,
+`Enter` and `Tab` do what the control does natively (type a space, tick the
+box, press the button, move focus on) and never reach the grid's key handler,
+so they never start an edit, toggle a group or move the cursor.
+
+Controls that a custom cell renderer puts inside a cell are host content: stop
+`keydown` propagation in them for the keys they handle, or the grid acts on
+those keys too.
+
 ## Scroll-follow (Dioxus)
 
 After an arrow, `Page Up` / `Page Down`, `Home` / `End` or `Tab` move, and
@@ -160,7 +175,13 @@ bar laid over the page can still cover the row.
 Scroll-follow is keyboard driven only. Scrolling with the mouse, trackpad or
 scrollbar never snaps the view back to the active row, including a scroll of
 the table, an ancestor or the window that starts while a reveal is still
-settling.
+settling. Scroll positions the table writes itself (the variable-row-height
+anchor) do not count as a user scroll.
+
+Reveal writes are instant (`behavior: 'instant'`), so they also work under
+`scroll-behavior: smooth`. A browser that ignores `'instant'` and animates the
+write is not supported: the reveal would read the animation as a user scroll
+and stop early.
 
 Exception: in Inline mode (`inline: true`) the table has no scroll container
 of its own and leaves scrolling to the host.
