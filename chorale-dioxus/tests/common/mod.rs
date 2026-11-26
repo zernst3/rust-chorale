@@ -61,6 +61,10 @@ pub struct Cfg {
     pub page_size: Option<usize>,
     /// Initial `scroll_top` (so a virtualized window starts away from the top).
     pub initial_scroll: f64,
+    /// A text filter on the name column, with the filter row shown.
+    pub filter: bool,
+    /// `variable_row_height` on the table.
+    pub variable: bool,
 }
 
 /// Props for the fixture app. `slot` hands the table handle back to the test.
@@ -102,6 +106,11 @@ pub fn app(props: Props) -> Element {
         } else {
             name
         };
+        let name = if cfg.filter {
+            name.filter(chorale_core::FilterKind::Text)
+        } else {
+            name
+        };
         let columns = vec![
             ColumnDef::new(ColumnId("group"), "Group", |r: &Item| {
                 CellValue::Text(r.group.clone())
@@ -135,6 +144,8 @@ pub fn app(props: Props) -> Element {
             selection_enabled: props.cfg.selection,
             group_header_renderer: if props.cfg.hook { Some(header_cb) } else { None },
             detail_renderer: if props.cfg.detail { Some(detail_cb) } else { None },
+            filter_enabled: props.cfg.filter,
+            variable_row_height: props.cfg.variable,
         }
     }
 }
@@ -147,23 +158,50 @@ pub fn app(props: Props) -> Element {
 pub type Reply = Rc<dyn Fn(&str) -> serde_json::Value>;
 
 pub struct FakeEval {
-    pub value: serde_json::Value,
+    /// Computed from `reply` when the script answers (after any yield), so
+    /// the answer reflects writes made in between, as in a browser.
+    pub value: Option<serde_json::Value>,
+    pub reply: Reply,
+    pub js: String,
+    /// Scripts that wait for animation frames answer only after this many
+    /// harness "frames" (settle cycles), so renders, effects and their eval
+    /// round trips (microtasks in a browser, much shorter than two frames)
+    /// run first.
+    pub pending_frames: u8,
+    /// Wakers of evals waiting for a frame; the harness wakes them once per
+    /// settle cycle.
+    pub frame_wakers: Rc<RefCell<Vec<std::task::Waker>>>,
 }
 
 impl Evaluator for FakeEval {
     fn send(&self, _data: serde_json::Value) -> Result<(), EvalError> {
         Ok(())
     }
-    fn poll_recv(&mut self, _: &mut Context<'_>) -> Poll<Result<serde_json::Value, EvalError>> {
-        Poll::Ready(Ok(self.value.clone()))
+    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Result<serde_json::Value, EvalError>> {
+        if self.pending_frames > 0 {
+            self.pending_frames -= 1;
+            self.frame_wakers.borrow_mut().push(cx.waker().clone());
+            return Poll::Pending;
+        }
+        Poll::Ready(Ok(self.answer()))
     }
     fn poll_join(&mut self, _: &mut Context<'_>) -> Poll<Result<serde_json::Value, EvalError>> {
-        Poll::Ready(Ok(self.value.clone()))
+        Poll::Ready(Ok(self.answer()))
+    }
+}
+
+impl FakeEval {
+    fn answer(&mut self) -> serde_json::Value {
+        if self.value.is_none() {
+            self.value = Some((self.reply)(&self.js));
+        }
+        self.value.clone().unwrap_or(serde_json::Value::Null)
     }
 }
 
 pub struct FakeDocument {
     pub log: Rc<RefCell<Vec<String>>>,
+    pub frame_wakers: Rc<RefCell<Vec<std::task::Waker>>>,
     pub reply: Reply,
     // Keeps every eval's storage alive; dropping an owner ends its eval.
     pub owners: RefCell<Vec<Owner>>,
@@ -171,10 +209,19 @@ pub struct FakeDocument {
 
 impl Document for FakeDocument {
     fn eval(&self, js: String) -> Eval {
-        let value = (self.reply)(&js);
-        self.log.borrow_mut().push(js);
+        let waits_for_frames = js.contains("requestAnimationFrame");
+        self.log.borrow_mut().push(js.clone());
+        // Scripts that are never awaited (fire-and-forget writes) still take
+        // effect on the model right away.
+        let value = (!waits_for_frames).then(|| (self.reply)(&js));
         let owner = Owner::default();
-        let boxed: Box<dyn Evaluator> = Box::new(FakeEval { value });
+        let boxed: Box<dyn Evaluator> = Box::new(FakeEval {
+            value,
+            reply: self.reply.clone(),
+            js,
+            pending_frames: if waits_for_frames { 2 } else { 0 },
+            frame_wakers: self.frame_wakers.clone(),
+        });
         let eval = Eval::new(owner.insert(boxed));
         self.owners.borrow_mut().push(owner);
         eval
@@ -187,6 +234,8 @@ impl Document for FakeDocument {
 
 pub struct Harness {
     pub dom: VirtualDom,
+    /// Evals waiting for an animation frame (see `FakeEval`).
+    pub frame_wakers: Rc<RefCell<Vec<std::task::Waker>>>,
     pub slot: Rc<RefCell<Option<UseTableHandle<Item>>>>,
     pub evals: Rc<RefCell<Vec<String>>>,
     /// Element id -> value of its dynamic `id` attribute.
@@ -217,14 +266,17 @@ impl Harness {
                 slot: slot.clone(),
             },
         );
+        let frame_wakers = Rc::new(RefCell::new(Vec::new()));
         let doc: Rc<dyn Document> = Rc::new(FakeDocument {
             log: evals.clone(),
+            frame_wakers: frame_wakers.clone(),
             reply,
             owners: RefCell::new(Vec::new()),
         });
         dom.provide_root_context(doc);
         let mut h = Self {
             dom,
+            frame_wakers,
             slot,
             evals,
             dom_ids: HashMap::new(),
@@ -264,11 +316,20 @@ impl Harness {
     }
 
     /// Run spawned tasks and re-render until nothing is left to do.
+    /// Run spawned tasks and re-render until nothing is left to do. Each
+    /// cycle ends a "frame": evals waiting for an animation frame are woken
+    /// after the renders, effects and tasks of that cycle have run.
     pub fn settle(&mut self) {
-        for _ in 0..20 {
-            self.dom.process_events();
-            let muts = self.dom.render_immediate_to_vec();
-            self.record(&muts);
+        for _ in 0..40 {
+            for _ in 0..8 {
+                self.dom.process_events();
+                let muts = self.dom.render_immediate_to_vec();
+                self.record(&muts);
+            }
+            let wakers: Vec<std::task::Waker> = self.frame_wakers.borrow_mut().drain(..).collect();
+            for w in wakers {
+                w.wake();
+            }
         }
     }
 
@@ -385,6 +446,25 @@ impl Harness {
             .collect()
     }
 
+    /// Element ids of `change` listeners on elements without a dynamic id:
+    /// the select-all checkbox (first, with selection on) and the row
+    /// checkboxes, in document order. Valid right after `Harness::new`.
+    pub fn plain_checkboxes(&self) -> Vec<ElementId> {
+        self.listeners
+            .iter()
+            .filter(|(n, id)| n == "change" && !self.dom_ids.contains_key(id))
+            .map(|(_, id)| *id)
+            .collect()
+    }
+
+    /// Element id of the first listener named `name`.
+    pub fn first_listener(&self, name: &str) -> Option<ElementId> {
+        self.listeners
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, id)| *id)
+    }
+
     /// Plain left click on `element`.
     pub fn click(&mut self, element: ElementId, modifiers: Modifiers) {
         use dioxus_html::geometry::{ClientPoint, ElementPoint, PagePoint, ScreenPoint};
@@ -496,9 +576,14 @@ pub fn script_row_index(js: &str) -> Option<usize> {
 }
 
 /// Value `X` of the last `scrollTop = X;` write in a script.
+/// Accepts every form the table writes: `scrollTop = X;`, `scrollTop=X;`
+/// and `scrollTo({ top: X, ... })`.
 pub fn script_scroll_write(js: &str) -> Option<f64> {
-    let at = js.rfind("scrollTop = ")? + "scrollTop = ".len();
-    js[at..].split(';').next()?.trim().parse().ok()
+    ["scrollTop = ", "scrollTop=", "scrollTo({ top: "]
+        .iter()
+        .filter_map(|pat| js.rfind(pat).map(|at| at + pat.len()))
+        .max()
+        .and_then(|at| js[at..].split([';', ',', '}']).next()?.trim().parse().ok())
 }
 
 pub const THEAD_H: f64 = 41.0;

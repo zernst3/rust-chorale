@@ -695,3 +695,125 @@ fn space_on_a_grouped_data_row_is_prevented() {
     assert!(!h.press_default(kb, Key::Character(" ".into()), Modifiers::empty()));
     assert_eq!(h.active(), Some(ActiveCell::new(13, ColumnId("name"))));
 }
+
+// ---------------------------------------------------------------------------
+// EM review round 2 of #52 (H1, H2, M1): keys on controls the grid contains
+// ---------------------------------------------------------------------------
+
+/// H1: with selection on and the cursor on a header, Tab from a row checkbox
+/// moves on natively; it must not bubble to the grid and jump back to the
+/// header's controls (a Tab trap).
+#[test]
+fn tab_on_a_row_checkbox_moves_on_instead_of_jumping_back() {
+    let mut h = Harness::new(Cfg {
+        selection: true,
+        ..Cfg::default()
+    });
+    h.set_active(11, "name");
+    let boxes = h.plain_checkboxes();
+    // boxes[0] is the select-all checkbox; boxes[1] is the first row's.
+    let row_box = boxes[1];
+    let before = h.eval_count();
+    let default = h.press_default(row_box, Key::Tab, Modifiers::empty());
+    let refocus = h
+        .evals_since(before)
+        .into_iter()
+        .find(|js| js.contains("data-chorale-group-index") && js.contains(".focus()"));
+    assert_eq!(
+        refocus, None,
+        "Tab on a row checkbox jumped back to the header"
+    );
+    assert!(default, "Tab on a row checkbox keeps its native focus move");
+    assert_eq!(h.active(), Some(ActiveCell::new(11, ColumnId("name"))));
+}
+
+/// H2: Space, Enter and Tab on a filter input, the select-all and row
+/// checkboxes and a pagination button keep their native meaning: no
+/// `prevent_default`, no cell edit, no group toggle, no cursor move.
+#[test]
+fn space_enter_and_tab_on_table_controls_keep_their_native_meaning() {
+    for (what, header_cursor) in [("data row", false), ("header row", true)] {
+        let mut h = Harness::new(Cfg {
+            selection: true,
+            filter: true,
+            editable: true,
+            ..Cfg::default()
+        });
+        let (row, col) = if header_cursor {
+            (11, "name")
+        } else {
+            (13, "name")
+        };
+        let boxes = h.plain_checkboxes();
+        let filter = h.first_listener("input").expect("filter input");
+        let next_page = h
+            .listeners
+            .iter()
+            .rev()
+            .filter(|(n, id)| {
+                n == "click"
+                    && h.styles
+                        .get(id)
+                        .is_some_and(|s| s.starts_with("padding:0.25rem 0.6rem"))
+            })
+            .map(|(_, id)| *id)
+            .next()
+            .expect("pagination button");
+        let controls = [
+            ("filter input", filter),
+            ("select-all checkbox", boxes[0]),
+            ("row checkbox", boxes[1]),
+            ("pagination button", next_page),
+        ];
+        for (name, el) in controls {
+            for key in [Key::Character(" ".into()), Key::Enter, Key::Tab] {
+                h.set_active(row, col);
+                let default = h.press_default(el, key.clone(), Modifiers::empty());
+                let s = h.state();
+                assert!(
+                    default,
+                    "{what}: {key:?} on the {name} must keep its browser default"
+                );
+                assert!(
+                    s.editing.is_none(),
+                    "{what}: {key:?} on the {name} started an edit"
+                );
+                assert!(
+                    s.collapsed_groups.is_empty(),
+                    "{what}: {key:?} on the {name} toggled a group"
+                );
+                assert_eq!(
+                    s.active_cell,
+                    Some(ActiveCell::new(row, ColumnId(col))),
+                    "{what}: {key:?} on the {name} moved the cursor"
+                );
+            }
+        }
+    }
+}
+
+/// M1: Ctrl+A selects every grouped row, header rows included in the span.
+#[test]
+fn ctrl_a_selects_every_grouped_row() {
+    for virtualized in [false, true] {
+        let mut h = Harness::new(Cfg {
+            virtualized,
+            ..Cfg::default()
+        });
+        h.set_active(3, "name");
+        h.press_mod(Key::Character("a".into()), Modifiers::CONTROL);
+        let s = h.state();
+        let last = view_of(&s).len() - 1;
+        let r = s.range_selection.last().cloned().expect("range");
+        assert_eq!(
+            r.anchor,
+            (0, ColumnId("group")),
+            "virtualized={virtualized}"
+        );
+        assert_eq!(
+            r.focus,
+            (last, ColumnId("name")),
+            "virtualized={virtualized}"
+        );
+    }
+}

@@ -51,6 +51,11 @@ use crate::hooks::UseTableHandle;
 ///
 /// This is also the cleaner Dioxus idiom — long-lived `Arc` closures that
 /// capture signals are discouraged. For row-aware needs use [`RowCellRenderer`].
+///
+/// Keyboard: a control the renderer puts in a cell (a button, input or
+/// select) is host content. Stop `keydown` propagation in it for the keys it
+/// handles, or the grid's key handler acts on them too (moves the cursor,
+/// starts an edit, prevents the default).
 pub type CellRenderer = Arc<dyn Fn(&CellValue) -> Element + Send + Sync + 'static>;
 
 /// Per-process counter for scroll-container DOM ids. Each mounted `<Table>`
@@ -86,7 +91,9 @@ impl PartialEq for CellRenderers {
 /// fields on the row: composite cells (avatar + name), action columns that
 /// need the row's id, link cells that build an href from a sibling field.
 /// Build with `Arc::new(|row: &MyRow, val: &CellValue| rsx! { ... })` and
-/// register via [`RowCellRenderers::new`].
+/// register via [`RowCellRenderers::new`]. Controls it renders follow the
+/// keyboard rule on [`CellRenderer`]: stop `keydown` propagation for the keys
+/// they handle.
 pub type RowCellRenderer<TRow> = Arc<dyn Fn(&TRow, &CellValue) -> Element + Send + Sync + 'static>;
 
 /// Per-column map of row-aware cell renderers; default is empty.
@@ -474,7 +481,8 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     /// key stop (ARIA treegrid). With the cursor on a header row, Left
     /// collapses the group, Right expands it, Enter and Space toggle it and
     /// Tab moves focus to the header's first control (with none, and for
-    /// Shift+Tab, the browser moves focus out of the grid). Arrow keys on the
+    /// Shift+Tab, the browser moves focus to the next or previous focusable
+    /// element, which can be another control in the table). Arrow keys on the
     /// group checkbox or the chevron put the cursor on that header and return
     /// focus to the grid; Space, Enter and Tab stay with the control. The
     /// header row under the cursor carries `data-chorale-active-row="true"`
@@ -515,6 +523,10 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     on_column_order_change: Option<EventHandler<Vec<ColumnId>>>,
     /// Fired when the Tab key moves focus to a cell whose column has `EditorKind` configured.
     /// The parent can use this to call `handle.start_edit(row_id, col_id)`.
+    ///
+    /// In a grouped table `ActiveCell::row_idx` is an index into
+    /// `visible_grouped_view` (header rows included); resolve the row through
+    /// that list, not `visible_view`.
     on_tab_to_editable: Option<EventHandler<ActiveCell>>,
     /// Fired after Ctrl+C successfully writes the selected range to the system clipboard.
     ///
@@ -663,6 +675,13 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     // and snaps the native scrollTop to match — without it, the browser
     // would keep showing the previous page's scroll position and the user
     // would see blank `bottom_pad` until they manually scrolled.
+    // The last scrollTop this table wrote itself (page effect, VIRT-2 anchor,
+    // keyboard reveal). Keyboard scroll-follow treats any other value it
+    // reads as a user scroll; a value written here is not (issue #51 review
+    // round 2, variable row heights).
+    let programmatic_scroll: ProgrammaticScroll =
+        use_hook(|| std::rc::Rc::new(std::cell::Cell::new(None)));
+    let programmatic_page = programmatic_scroll.clone();
     let page_memo = use_memo(move || sig.read().page);
     let scroll_id_for_effect = scroll_id.clone();
     let prev_page = use_hook(|| std::rc::Rc::new(std::cell::Cell::new(None::<usize>)));
@@ -676,6 +695,7 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
         let target = page_scroll_target(prev_page.get(), page, saved);
         prev_page.set(Some(page));
         if let Some(top) = target {
+            programmatic_page.set(Some(top));
             dioxus::document::eval(&sync_scroll_js(&scroll_id_for_effect, top));
         }
     });
@@ -888,11 +908,13 @@ pub fn Table<TRow: Clone + PartialEq + 'static>(
     });
     {
         let scroll_id_meas = scroll_id.clone();
+        let programmatic_effect = programmatic_scroll.clone();
         use_effect(move || {
             // Register the meas_trigger subscription (see comment above).
             let _ = meas_trigger.read();
             let cid = scroll_id_meas.clone();
             let mut sig2 = handle.signal();
+            let programmatic_meas = programmatic_effect.clone();
             spawn(async move {
                 // Direct-child chain rather than a descendant selector:
                 // `#{cid} > table > tbody > tr[data-chorale-index]`. When a
@@ -968,6 +990,7 @@ dioxus.send(parts.join('\n'));"
                         sig2.set(new_state);
 
                         if scroll_delta.abs() > 0.5 {
+                            programmatic_meas.set(Some(new_scroll));
                             let cid_scroll = cid.clone();
                             spawn(async move {
                                 let _ = dioxus::document::eval(&format!(
@@ -1395,6 +1418,7 @@ dioxus.send(parts.join('\n'));"
             onkeydown: {
                 let scroll_id_kb = scroll_id.clone();
                 let kb_id_kb = kb_id.clone();
+                let programmatic_kb = programmatic_scroll.clone();
                 move |e: KeyboardEvent| {
                 // A nested child table's keydown bubbles to this (parent)
                 // container too; without stopping it, both tables would
@@ -1427,14 +1451,14 @@ dioxus.send(parts.join('\n'));"
                         GroupedKeyOutcome::Moved => {
                             e.prevent_default();
                             ensure_active_row_visible(
-                                handle, &scroll_id_kb, variable_row_height, inline,
+                                handle, &scroll_id_kb, variable_row_height, inline, &programmatic_kb,
                             );
                             return;
                         }
                         GroupedKeyOutcome::TabMoved(ac) => {
                             e.prevent_default();
                             ensure_active_row_visible(
-                                handle, &scroll_id_kb, variable_row_height, inline,
+                                handle, &scroll_id_kb, variable_row_height, inline, &programmatic_kb,
                             );
                             if let Some(cb) = on_tab_to_editable {
                                 let editable = handle.signal().peek().columns.iter()
@@ -1489,13 +1513,13 @@ dioxus.send(parts.join('\n'));"
                         let new_s = move_active_cell_to_edge(&*sig_w.peek(), dir);
                         sig_w.set(new_s);
                         ensure_active_row_visible(
-                            handle, &scroll_id_kb, variable_row_height, inline,
+                            handle, &scroll_id_kb, variable_row_height, inline, &programmatic_kb,
                         );
                     } else {
                         let new_s = move_active_cell(&*sig_w.peek(), dir);
                         sig_w.set(new_s);
                         ensure_active_row_visible(
-                            handle, &scroll_id_kb, variable_row_height, inline,
+                            handle, &scroll_id_kb, variable_row_height, inline, &programmatic_kb,
                         );
                     }
                 } else {
@@ -1510,7 +1534,7 @@ dioxus.send(parts.join('\n'));"
                             };
                             sig_w.set(new_s);
                             ensure_active_row_visible(
-                                handle, &scroll_id_kb, variable_row_height, inline,
+                                handle, &scroll_id_kb, variable_row_height, inline, &programmatic_kb,
                             );
                         }
                         Key::End => {
@@ -1523,7 +1547,7 @@ dioxus.send(parts.join('\n'));"
                             };
                             sig_w.set(new_s);
                             ensure_active_row_visible(
-                                handle, &scroll_id_kb, variable_row_height, inline,
+                                handle, &scroll_id_kb, variable_row_height, inline, &programmatic_kb,
                             );
                         }
                         Key::PageUp => {
@@ -1533,7 +1557,7 @@ dioxus.send(parts.join('\n'));"
                             let new_s = move_active_cell_page(&*sig_w.peek(), NavDirection::Up, page_sz);
                             sig_w.set(new_s);
                             ensure_active_row_visible(
-                                handle, &scroll_id_kb, variable_row_height, inline,
+                                handle, &scroll_id_kb, variable_row_height, inline, &programmatic_kb,
                             );
                         }
                         Key::PageDown => {
@@ -1543,7 +1567,7 @@ dioxus.send(parts.join('\n'));"
                             let new_s = move_active_cell_page(&*sig_w.peek(), NavDirection::Down, page_sz);
                             sig_w.set(new_s);
                             ensure_active_row_visible(
-                                handle, &scroll_id_kb, variable_row_height, inline,
+                                handle, &scroll_id_kb, variable_row_height, inline, &programmatic_kb,
                             );
                         }
                         Key::Escape => {
@@ -1597,7 +1621,13 @@ dioxus.send(parts.join('\n'));"
                         Key::Character(ref ch) if ch.to_lowercase() == "a" && ctrl => {
                             e.prevent_default();
                             let mut sig_w = handle.signal();
-                            let new_s = select_all_range(&*sig_w.peek());
+                            // Grouped: span every grouped row (core counts
+                            // the ungrouped rows of one page).
+                            let new_s = if is_grouped {
+                                grouped_select_all(&sig_w.peek(), grouped_view.peek().len(), &grouped_nav_cols)
+                            } else {
+                                select_all_range(&*sig_w.peek())
+                            };
                             sig_w.set(new_s);
                         }
                         Key::Character(ref ch) if ch.to_lowercase() == "c" && ctrl => {
@@ -1694,15 +1724,15 @@ dioxus.send(parts.join('\n'));"
                                 let old_ac = sig_w.peek().active_cell;
                                 let new_s = move_active_cell(&*sig_w.peek(), tab_dir);
                                 let new_ac = new_s.active_cell;
-                                // Last or first column: the grid is one Tab
-                                // stop, so let the browser move focus out.
+                                // Last or first column: let the browser move
+                                // focus to the next (previous) element.
                                 if old_ac.is_some() && new_ac == old_ac {
                                     return;
                                 }
                                 e.prevent_default();
                                 sig_w.set(new_s);
                                 ensure_active_row_visible(
-                                    handle, &scroll_id_kb, variable_row_height, inline,
+                                    handle, &scroll_id_kb, variable_row_height, inline, &programmatic_kb,
                                 );
                                 if let (Some(ac), Some(cb)) = (new_ac, on_tab_to_editable) {
                                     let s = sig_w.peek();
@@ -1734,6 +1764,7 @@ dioxus.send(parts.join('\n'));"
                     // Structural only: the slot content supplies its own
                     // visual treatment (kept consistent with the leptos adapter).
                     class: "chorale-selection-toolbar",
+                    onkeydown: move |e: KeyboardEvent| keep_native_control_keys(&e),
                     style: "width: 100%; box-sizing: border-box;",
                     {toolbar}
                 }
@@ -1800,6 +1831,7 @@ dioxus.send(parts.join('\n'));"
                     "aria-rowcount": is_grouped.then(|| (thead_rows + grouped_view_read.len()).to_string()),
 
                     thead {
+                        onkeydown: move |e: KeyboardEvent| keep_native_control_keys(&e),
                         tr {
                             style: "background: var(--chorale-header-bg, #f8f9fa);",
                             "aria-rowindex": is_grouped.then_some("1"),
@@ -1974,6 +2006,7 @@ dioxus.send(parts.join('\n'));"
                 }
             } else if !is_virtualized_grouped {
                 div {
+                    onkeydown: move |e: KeyboardEvent| keep_native_control_keys(&e),
                     style: "padding: 0.5rem 1rem; display: flex; align-items: center; \
                             flex-wrap: wrap; gap: 0.25rem; border-top: 1px solid var(--chorale-border, #ddd); \
                             background: var(--chorale-toolbar-bg, #fafafa); font-size: 0.875rem; color: var(--chorale-text-muted, #555);",
@@ -2311,7 +2344,7 @@ fn measure_row_js(scroll_id: &str, row_idx: usize, wait_for_render: bool) -> Str
 fn reveal_row_js(scroll_id: &str, row_idx: usize, scroll_top: Option<f64>) -> String {
     let sel = body_row_selector(row_idx);
     let write = match scroll_top {
-        Some(t) if t.is_finite() => format!("el.scrollTop = {t};"),
+        Some(t) if t.is_finite() => format!("el.scrollTo({{ top: {t}, behavior: 'instant' }});"),
         _ => String::new(),
     };
     format!(
@@ -2324,18 +2357,38 @@ fn reveal_row_js(scroll_id: &str, row_idx: usize, scroll_top: Option<f64>) -> St
              if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && p.scrollHeight > p.clientHeight) {{\
                const r = tr.getBoundingClientRect(); const pr = p.getBoundingClientRect();\
                const top = pr.top + p.clientTop; const bottom = top + p.clientHeight;\
-               if (r.top < top) p.scrollTop -= top - r.top;\
-               else if (r.bottom > bottom) p.scrollTop += Math.min(r.bottom - bottom, r.top - top);\
+               if (r.top < top) p.scrollBy({{ top: r.top - top, behavior: 'instant' }});\
+               else if (r.bottom > bottom) p.scrollBy({{ top: Math.min(r.bottom - bottom, r.top - top), behavior: 'instant' }});\
              }}\
            }}\
            const r = tr.getBoundingClientRect();\
            const vh = window.innerHeight || document.documentElement.clientHeight;\
-           if (r.top < 0) window.scrollBy(0, r.top);\
-           else if (r.bottom > vh) window.scrollBy(0, Math.min(r.bottom - vh, r.top));\
+           if (r.top < 0) window.scrollBy({{ top: r.top, behavior: 'instant' }});\
+           else if (r.bottom > vh) window.scrollBy({{ top: Math.min(r.bottom - vh, r.top), behavior: 'instant' }});\
          }}\
          let outer = window.scrollY || 0;\
          for (let p = el.parentElement; p && p !== document.documentElement; p = p.parentElement) outer += p.scrollTop;\
          dioxus.send(outer); }} else dioxus.send(0);"
+    )
+}
+
+/// The last `scrollTop` a table wrote to its own scroll container (shared by
+/// the page effect, the VIRT-2 anchor write and keyboard scroll-follow).
+type ProgrammaticScroll = std::rc::Rc<std::cell::Cell<Option<f64>>>;
+
+/// JS that sets the container's `scrollTop` to `scroll_top` instantly, even
+/// under `scroll-behavior: smooth` (an animated write would read back as a
+/// value in between, which scroll-follow would take for a user scroll). The
+/// `chorale:scroll-to` marker lets tests recognize the script.
+fn instant_scroll_js(scroll_id: &str, scroll_top: f64) -> String {
+    let scroll_top = if scroll_top.is_finite() {
+        scroll_top
+    } else {
+        0.0
+    };
+    format!(
+        "/*chorale:scroll-to*/ const el = document.getElementById('{scroll_id}'); \
+         if (el) el.scrollTo({{ top: {scroll_top}, behavior: 'instant' }});"
     )
 }
 
@@ -2391,6 +2444,7 @@ fn ensure_active_row_visible<TRow: Clone + PartialEq + 'static>(
     scroll_container_id: &str,
     variable_row_height: bool,
     inline: bool,
+    programmatic: &ProgrammaticScroll,
 ) {
     if inline {
         return;
@@ -2413,6 +2467,7 @@ fn ensure_active_row_visible<TRow: Clone + PartialEq + 'static>(
         )
     };
     let cid = scroll_container_id.to_owned();
+    let programmatic = programmatic.clone();
     spawn(async move {
         // The scrollTop this task last wrote. A later measurement that reads a
         // different value means the user scrolled (wheel, trackpad, scrollbar)
@@ -2449,7 +2504,16 @@ fn ensure_active_row_visible<TRow: Clone + PartialEq + 'static>(
             };
             if let (Some(w), Some(now)) = (last_written, measured_scroll) {
                 if (now - w).abs() > USER_SCROLL_SLACK_PX {
-                    return;
+                    // Another write by this table (the VIRT-2 anchor after a
+                    // row-height measurement) is not a user scroll: carry on
+                    // from where it left the view.
+                    let ours = programmatic
+                        .get()
+                        .is_some_and(|p| (now - p).abs() <= USER_SCROLL_SLACK_PX);
+                    if !ours {
+                        return;
+                    }
+                    last_written = Some(now);
                 }
             }
             match measured {
@@ -2458,6 +2522,7 @@ fn ensure_active_row_visible<TRow: Clone + PartialEq + 'static>(
                     if let Some(t) = target {
                         handle.set_scroll(t);
                         last_written = Some(t);
+                        programmatic.set(Some(t));
                     }
                     let mut reveal = dioxus::document::eval(&reveal_row_js(&cid, row_idx, target));
                     if target.is_none() {
@@ -2490,7 +2555,8 @@ fn ensure_active_row_visible<TRow: Clone + PartialEq + 'static>(
                     };
                     handle.set_scroll(t);
                     last_written = Some(t);
-                    dioxus::document::eval(&sync_scroll_js(&cid, t));
+                    programmatic.set(Some(t));
+                    dioxus::document::eval(&instant_scroll_js(&cid, t));
                 }
                 None => {
                     if let Some(t) = scroll_top_to_reveal_row(
@@ -2503,7 +2569,8 @@ fn ensure_active_row_visible<TRow: Clone + PartialEq + 'static>(
                         0.0,
                     ) {
                         handle.set_scroll(t);
-                        dioxus::document::eval(&sync_scroll_js(&cid, t));
+                        programmatic.set(Some(t));
+                        dioxus::document::eval(&instant_scroll_js(&cid, t));
                     }
                     return;
                 }
@@ -2816,6 +2883,7 @@ fn column_visibility_toolbar<TRow: Clone + PartialEq + 'static>(
     let col_vis_label = labels.column_visibility_label.clone();
     rsx! {
         div {
+            onkeydown: move |e: KeyboardEvent| keep_native_control_keys(&e),
             style: "padding: 0.5rem 1rem; background: var(--chorale-group-header-bg, #f0f4ff); border-bottom: 1px solid var(--chorale-border, #ddd); \
                     display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; \
                     font-size: 0.8rem; color: var(--chorale-text, #444);",
@@ -3526,6 +3594,8 @@ fn data_tr<TRow: Clone + PartialEq + 'static>(
                 td {
                     style: "padding: 0.25rem 0.5rem; width: 2.5rem; text-align: center; \
                             box-shadow: inset 0 -1px 0 {separator_color};",
+                    // Space ticks the row checkbox and Tab moves on natively.
+                    onkeydown: move |e: KeyboardEvent| keep_native_control_keys(&e),
                     input {
                         r#type: "checkbox",
                         checked: is_selected,
@@ -3608,6 +3678,20 @@ fn sync_scroll_js(scroll_id: &str, scroll_top: f64) -> String {
     format!(
         "const el = document.getElementById('{scroll_id}'); if (el) el.scrollTop = {scroll_top};"
     )
+}
+
+/// Keydown filter for focusable controls the grid contains but does not own:
+/// the `<thead>` (filter inputs, the select-all checkbox, header buttons), the
+/// row selection checkboxes, the toolbars and the footer (pagination, page
+/// input, export buttons). `Space`, `Enter` and `Tab` keep their native
+/// meaning there (type a space, tick a checkbox, press a button, move focus
+/// on), so they never reach the grid's key handler, which would prevent them
+/// and act on the cursor instead (issue #51 review round 2).
+fn keep_native_control_keys(e: &KeyboardEvent) {
+    let key = e.key();
+    if matches!(key, Key::Enter | Key::Tab) || matches!(&key, Key::Character(c) if c == " ") {
+        e.stop_propagation();
+    }
 }
 
 /// Whether the group chevron button swallows this key. Only the keys that
@@ -3761,8 +3845,8 @@ enum GroupedKeyOutcome {
 /// Header rows are treegrid rows: Left collapses, Right expands, Enter and
 /// Space toggle, Tab moves focus into the header's own controls. Where Tab or
 /// Shift+Tab cannot move (Shift+Tab on a header, a header without controls,
-/// the last or first column) the browser default moves focus out of the grid,
-/// which is one Tab stop. Every move, including Shift+Arrow range extension,
+/// the last or first column) the browser default moves focus to the next or
+/// previous focusable element. Every move, including Shift+Arrow range extension,
 /// stays in the grouped index space. Space on a data row is prevented (no
 /// page scroll). Escape and Ctrl+A keep their ungrouped handling; Ctrl+C and
 /// Ctrl+V resolve rows through the grouped view in the keydown handler.
@@ -3827,8 +3911,8 @@ fn grouped_keydown<TRow: Clone + PartialEq + 'static>(
             }
             Key::F2 => return GroupedKeyOutcome::Handled,
             Key::Tab => {
-                // The grid is one Tab stop: with no header controls to enter,
-                // and for Shift+Tab, the browser moves focus out of the grid.
+                // With no header controls to enter, and for Shift+Tab, the
+                // browser moves focus to the next (previous) focusable element.
                 if shift || !header_has_controls {
                     return GroupedKeyOutcome::BrowserDefault;
                 }
@@ -3931,7 +4015,7 @@ fn grouped_keydown<TRow: Clone + PartialEq + 'static>(
         return GroupedKeyOutcome::Handled;
     };
     // Tab or Shift+Tab that cannot move (last or first column): the grid is
-    // one Tab stop, so the browser moves focus out of it.
+    // one Tab stop, so the browser moves focus on to the next element.
     if matches!(key, Key::Tab) && active == Some(target) {
         return GroupedKeyOutcome::BrowserDefault;
     }
@@ -4104,6 +4188,28 @@ fn grouped_fill_targets<TRow: Clone>(
         .into_iter()
         .filter_map(|(k, c, v)| data_rows.get(k).map(|g| (*g, c, v)))
         .collect()
+}
+
+/// Ctrl+A in a grouped table: like core `select_all`, but over all `rows`
+/// rows of the grouped view (header rows included in the span; copy and
+/// paste skip them).
+fn grouped_select_all<TRow: Clone>(
+    state: &TableState<TRow>,
+    rows: usize,
+    cols: &[ColumnId],
+) -> TableState<TRow> {
+    let (Some(first), Some(last)) = (cols.first(), cols.last()) else {
+        return state.clone();
+    };
+    if rows == 0 {
+        return state.clone();
+    }
+    let mut s = state.clone();
+    s.range_selection = vec![chorale_core::RangeSelection::new(
+        (0, *first),
+        (rows - 1, *last),
+    )];
+    s
 }
 
 /// A click on a grouped data cell: like core `start_range_selection` /

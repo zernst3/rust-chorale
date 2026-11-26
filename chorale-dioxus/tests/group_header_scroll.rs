@@ -519,3 +519,125 @@ fn tab_and_space_reveal_the_active_row() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// EM review round 2 of #52 (M2, smooth scrolling)
+// ---------------------------------------------------------------------------
+
+/// M2: with variable row heights the VIRT-2 loop also writes `scrollTop`: it
+/// anchors the view when measured heights replace the estimates of newly
+/// rendered rows. A reveal must not read that programmatic write as a user
+/// scroll and give up.
+///
+/// Page Down from row 0 to row 79 (not rendered): the reveal scrolls to the
+/// estimate (every row 40px). The render shows rows 60 to 79, which are really
+/// 60px tall; VIRT-2 records them and anchors the view (+180px for rows 60 to
+/// 68 above the old scroll position). The row now sits lower than estimated,
+/// so the reveal's next measurement must correct to it.
+#[test]
+fn variable_height_page_down_reveal_survives_the_anchor_write() {
+    // The real layout once the tall rows are measured.
+    let real_h = |i: usize| if i >= 60 { 60.0 } else { DATA_H };
+    let top = move |i: usize| THEAD_H + (0..i).map(real_h).sum::<f64>();
+    let scroll = Rc::new(RefCell::new(0.0_f64));
+    // Armed right before Page Down, so mount-time writes do not count.
+    let armed = Rc::new(RefCell::new(false));
+    let wrote = Rc::new(RefCell::new(false));
+    let recorded = Rc::new(RefCell::new(false));
+    let measures = Rc::new(RefCell::new(0_usize));
+    let reply: Reply = {
+        let (scroll, armed, wrote, recorded, measures) = (
+            scroll.clone(),
+            armed.clone(),
+            wrote.clone(),
+            recorded.clone(),
+            measures.clone(),
+        );
+        Rc::new(move |js: &str| {
+            if let Some(v) = script_scroll_write(js) {
+                *scroll.borrow_mut() = v;
+                // Any write but VIRT-2's own anchor write.
+                if *armed.borrow() && !js.contains("if(el){el.scrollTop=") {
+                    *wrote.borrow_mut() = true;
+                }
+            }
+            if js.contains("chorale:reveal-row") {
+                return serde_json::json!(0.0);
+            }
+            if js.contains("parts.join") {
+                // The VIRT-2 measurement: after the reveal's first scroll, rows
+                // 60 to 79 are rendered and measured at their real height.
+                if !*wrote.borrow() {
+                    return serde_json::Value::String(String::new());
+                }
+                *recorded.borrow_mut() = true;
+                let parts: Vec<String> = (60..80).map(|i| format!("{i}:60")).collect();
+                return serde_json::Value::String(parts.join("\n"));
+            }
+            if !js.contains("chorale:measure-row") {
+                return serde_json::Value::Null;
+            }
+            *measures.borrow_mut() += 1;
+            let st = *scroll.borrow();
+            let i = script_row_index(js).unwrap_or(0);
+            if *recorded.borrow() {
+                serde_json::json!([1, top(i), 60.0, st, CLIENT_H, THEAD_H, THEAD_H, 0.0])
+            } else {
+                // Not rendered yet.
+                serde_json::json!([0, 0, 0, st, CLIENT_H, THEAD_H, THEAD_H, 0.0])
+            }
+        })
+    };
+    let mut h = Harness::with_reply(
+        Cfg {
+            ungrouped: true,
+            variable: true,
+            page_size: Some(80),
+            ..Cfg::default()
+        },
+        reply,
+    );
+    h.set_active(0, "name");
+    *armed.borrow_mut() = true;
+    h.press(Key::PageDown);
+    let i = h.active().unwrap().row_idx;
+    assert_eq!(i, 79);
+    let st = *scroll.borrow();
+    assert!(*recorded.borrow(), "the VIRT-2 anchor write happened");
+    assert!(
+        top(i) >= st + THEAD_H - 0.5 && top(i) + 60.0 <= st + CLIENT_H + 0.5,
+        "row {i} (top {}) left hidden at scroll_top {st} after {} measurements",
+        top(i),
+        measures.borrow()
+    );
+}
+
+/// Smooth scrolling: `scroll-behavior: smooth` on a scroller would animate a
+/// plain `scrollTop` write, and the next measurement would read a value in
+/// between as a user scroll. Every reveal write asks for an instant scroll.
+#[test]
+fn reveal_writes_bypass_smooth_scrolling() {
+    let cfg = Cfg::default();
+    let layout = PagedLayout::new(&cfg);
+    let mut h = Harness::with_reply(cfg, layout.reply());
+    h.set_active(0, "name");
+    let before = h.eval_count();
+    for _ in 0..15 {
+        h.press(Key::ArrowDown);
+    }
+    let reveals: Vec<String> = h
+        .evals_since(before)
+        .into_iter()
+        .filter(|js| js.contains("chorale:reveal-row") || js.contains("chorale:scroll-to"))
+        .collect();
+    assert!(reveals.iter().any(|js| script_scroll_write(js).is_some()));
+    for js in &reveals {
+        assert!(!js.contains("scrollTop ="), "plain scrollTop write: {js}");
+        assert!(!js.contains("scrollBy(0,"), "plain scrollBy: {js}");
+        assert!(
+            !js.contains("scrollTop -=") && !js.contains("scrollTop +="),
+            "{js}"
+        );
+        assert!(js.contains("behavior: 'instant'"), "{js}");
+    }
+}
