@@ -52,6 +52,32 @@ async fn sleep_ms(ms: u32) {
     .await;
 }
 
+/// Where the active row is, read from the DOM after layout: whether it is a
+/// header, whether it is fully visible below the sticky header inside the
+/// table's scroll container, and whether it is fully inside the browser
+/// window. `None` when the row is not rendered.
+async fn active_row_visibility(row_idx: usize) -> Option<String> {
+    dioxus::document::eval(&format!(
+        r#"await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+           await new Promise(r => setTimeout(r, 120));
+           const el = document.querySelector('[id^="chorale-scroll-"]:not([id$="-kb"])');
+           if (!el) return null;
+           const tr = el.querySelector(':scope > table > tbody > tr[data-chorale-index="{row_idx}"], :scope > table > tbody > tr[data-chorale-group-index="{row_idx}"]');
+           if (!tr) return null;
+           const r = tr.getBoundingClientRect();
+           const th = el.querySelector(':scope > table > thead th');
+           const top = th ? th.getBoundingClientRect().bottom : el.getBoundingClientRect().top;
+           const bottom = el.getBoundingClientRect().top + el.clientTop + el.clientHeight;
+           const inTable = r.top >= top - 0.5 && r.bottom <= bottom + 0.5;
+           const inWindow = r.top >= -0.5 && r.bottom <= window.innerHeight + 0.5;
+           const kind = tr.hasAttribute('data-chorale-group-index') ? 'header' : 'data row';
+           return kind + ', fully visible in table: ' + (inTable ? 'yes' : 'NO') + ', in window: ' + (inWindow ? 'yes' : 'NO');"#
+    ))
+    .await
+    .ok()
+    .and_then(|v| v.as_str().map(str::to_owned))
+}
+
 /// The table's scroll container `scrollTop` as the DOM reports it (not the
 /// state value), or `None` when the container is not mounted.
 async fn dom_scroll_top() -> Option<f64> {
@@ -77,6 +103,7 @@ fn App() -> Element {
     let mut mounted = use_signal(|| true);
     let mut focus_desc = use_signal(|| "(nothing focused)".to_string());
     let mut remount_log = use_signal(String::new);
+    let mut visibility = use_signal(|| "(no active row)".to_string());
 
     // Show the focused element so a tester can see where Tab lands.
     use_future(move || async move {
@@ -125,6 +152,28 @@ fn App() -> Element {
     let state = table.signal();
     let scroll_top = state.read().scroll_top;
     let active = state.read().active_cell.map(|a| a.row_idx);
+
+    // Re-check the active row's visibility after every cursor move and scroll.
+    let active_memo = use_memo(move || {
+        let s = table.signal();
+        let s = s.read();
+        (
+            s.active_cell.map(|a| a.row_idx),
+            s.scroll_top.round() as i64,
+        )
+    });
+    use_effect(move || {
+        let (row, _) = *active_memo.read();
+        spawn(async move {
+            let text = match row {
+                Some(i) => active_row_visibility(i)
+                    .await
+                    .unwrap_or_else(|| "row not rendered".to_string()),
+                None => "(no active row)".to_string(),
+            };
+            visibility.set(text);
+        });
+    });
     let virtualized = state.read().grouped_pagination == GroupedPaginationMode::Virtualized;
 
     rsx! {
@@ -202,6 +251,7 @@ fn App() -> Element {
                 style: "margin: 0.5rem 0; padding: 0.5rem; background: #eef2ff; font-family: monospace; font-size: 0.85rem;",
                 div { "Focused element: {focus_desc}" }
                 div { "Active cell row index: {active:?}" }
+                div { "Active row: {visibility}" }
                 div { "scroll_top: {scroll_top}" }
             }
 

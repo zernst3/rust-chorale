@@ -97,7 +97,7 @@ pub const THEME_ATTRIBUTE: &str = "data-chorale-theme";
 /// | `--chorale-accent` | accent blue: sort badges, drag outlines, editor borders, active page, ghost buttons, group chevrons |
 /// | `--chorale-accent-contrast` | text on accent-filled controls |
 /// | `--chorale-accent-strong` | strong accent (selection-toolbar bottom border) |
-/// | `--chorale-active-cell-outline` | active-cell outline and the fill handle |
+/// | `--chorale-active-cell-outline` | active-cell outline, the fill handle and the outline of a group header row under the keyboard cursor |
 /// | `--chorale-range-bg` | range-selection / active-cell wash |
 /// | `--chorale-input-bg` | filter/editor input background |
 /// | `--chorale-input-border` | filter/editor input border |
@@ -113,6 +113,13 @@ pub const THEME_ATTRIBUTE: &str = "data-chorale-theme";
 ///
 /// Each block also sets [`color-scheme`], so native widgets (checkboxes,
 /// selects, scrollbars) follow the active theme without bespoke styling.
+///
+/// Two unscoped rules follow the token blocks, so they also apply under
+/// `Theme::Custom`: the selected-row background
+/// (`tr[data-chorale-row-selected="true"]`) and the keyboard cursor on a group
+/// header row (`tr[data-chorale-active-row="true"]`, a 2px outline in
+/// `--chorale-active-cell-outline`, set by the Dioxus adapter). Override
+/// either with a more specific selector of your own.
 ///
 /// The pre-existing `--chorale-frozen-divider-shadow` escape hatch (a full
 /// `box-shadow` value consumers may override) is intentionally *not* defined
@@ -215,6 +222,10 @@ const THEME_STYLESHEET: &str = r#".chorale-root[data-chorale-theme="light"] {
 .chorale-root tr[data-chorale-row-selected="true"],
 .chorale-root tr[data-chorale-row-selected="true"] > td {
   background: var(--chorale-row-selected-bg);
+}
+.chorale-root tr[data-chorale-active-row="true"] {
+  outline: 2px solid var(--chorale-active-cell-outline, #0078d4);
+  outline-offset: -2px;
 }
 "#;
 
@@ -341,6 +352,26 @@ mod tests {
         ] {
             assert!(light_block.contains(expected), "missing: {expected}");
         }
+    }
+
+    #[test]
+    fn active_group_header_row_gets_the_active_cell_outline() {
+        // The Dioxus adapter marks the group header row under the keyboard
+        // cursor with `data-chorale-active-row="true"` (issue #51). The rule
+        // keys on the attribute alone, so a custom `group_header_class` keeps
+        // the cursor, and it is not theme-scoped, so it also applies under
+        // `Theme::Custom`.
+        let css = theme_stylesheet();
+        let rule = r#".chorale-root tr[data-chorale-active-row="true"] {"#;
+        let Some(at) = css.find(rule) else {
+            panic!("no active group header rule in:\n{css}");
+        };
+        let body = &css[at..css[at..].find('}').map_or(css.len(), |e| at + e)];
+        assert!(
+            body.contains("outline: 2px solid var(--chorale-active-cell-outline, #0078d4);"),
+            "{body}"
+        );
+        assert!(body.contains("outline-offset: -2px;"), "{body}");
     }
 
     #[test]

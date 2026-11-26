@@ -1,0 +1,643 @@
+//! Scroll-follow keeps the active row fully visible, and only keyboard moves drive it (issue #51).
+//!
+//! See `tests/common/mod.rs` for the harness.
+
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::wildcard_imports)]
+
+mod common;
+
+use common::*;
+
+// ---------------------------------------------------------------------------
+// Fix 2: scroll-follow keeps the active row fully visible
+// ---------------------------------------------------------------------------
+
+#[test]
+fn arrow_keys_keep_active_row_fully_visible_in_paged_mode() {
+    for hook in ON_OFF {
+        let cfg = Cfg {
+            hook,
+            ..Cfg::default()
+        };
+        let layout = PagedLayout::new(&cfg);
+        let mut h = Harness::with_reply(cfg, layout.reply());
+        h.set_active(0, "name");
+        let rows = view_of(&h.state()).len();
+        for _ in 1..rows {
+            h.press(Key::ArrowDown);
+            let i = h.active().unwrap().row_idx;
+            assert!(
+                layout.fully_visible(i),
+                "hook={hook}: Down to row {i}: top {} height {} scroll_top {}",
+                layout.top(i),
+                layout.height(i),
+                layout.scroll_top.borrow()
+            );
+            assert!(
+                (h.state().scroll_top - *layout.scroll_top.borrow()).abs() < 0.01,
+                "hook={hook}: state scroll_top follows the DOM write"
+            );
+        }
+        assert_eq!(h.active().unwrap().row_idx, rows - 1);
+        for _ in 1..rows {
+            h.press(Key::ArrowUp);
+            let i = h.active().unwrap().row_idx;
+            assert!(layout.fully_visible(i), "hook={hook}: Up to row {i}");
+        }
+        for key in [Key::End, Key::PageDown, Key::PageUp, Key::Home] {
+            let ctrl = matches!(key, Key::End | Key::Home);
+            let mods = if ctrl {
+                Modifiers::CONTROL
+            } else {
+                Modifiers::empty()
+            };
+            h.press_mod(key.clone(), mods);
+            let i = h.active().unwrap().row_idx;
+            assert!(layout.fully_visible(i), "hook={hook}: {key:?} to row {i}");
+        }
+    }
+}
+
+#[test]
+fn every_move_reveals_row_in_outer_scrollers() {
+    let cfg = Cfg::default();
+    let layout = PagedLayout::new(&cfg);
+    let mut h = Harness::with_reply(cfg, layout.reply());
+    h.set_active(1, "name");
+    // Row 2 needs no table scroll, but the page around the table may.
+    let before = h.eval_count();
+    h.press(Key::ArrowDown);
+    let scripts = h.evals_since(before);
+    let reveal = scripts
+        .iter()
+        .find(|js| js.contains("chorale:reveal-row"))
+        .unwrap_or_else(|| panic!("no reveal script: {scripts:?}"));
+    assert_eq!(script_row_index(reveal), Some(2), "{reveal}");
+    assert!(reveal.contains("window.scrollBy"), "{reveal}");
+    assert!(reveal.contains("parentElement"), "{reveal}");
+}
+
+/// Virtualized: the target row is not rendered yet, so the table scrolls to
+/// an estimate, waits for the render and measures again.
+#[test]
+fn virtualized_far_jump_estimates_then_corrects_from_measurement() {
+    for (real_top, expected) in [
+        // The re-measure finds the row inside the band: keep the estimate.
+        (3400.0, 3061.0),
+        // The re-measure finds it below the band: correct to it.
+        (3600.0, 3140.0),
+    ] {
+        let measures = Rc::new(RefCell::new(0_usize));
+        let scroll = Rc::new(RefCell::new(0.0_f64));
+        let reply: Reply = {
+            let measures = measures.clone();
+            let scroll = scroll.clone();
+            Rc::new(move |js: &str| {
+                if let Some(v) = script_scroll_write(js) {
+                    *scroll.borrow_mut() = v;
+                }
+                if !js.contains("chorale:measure-row") {
+                    return serde_json::Value::Null;
+                }
+                let n = {
+                    let mut m = measures.borrow_mut();
+                    *m += 1;
+                    *m
+                };
+                let st = *scroll.borrow();
+                if n == 1 {
+                    // Not rendered: the window is still at the top.
+                    serde_json::json!([0, 0, 0, st, CLIENT_H, THEAD_H, THEAD_H])
+                } else {
+                    // Rendered now; later measurements wait for a frame first.
+                    assert!(js.contains("requestAnimationFrame"), "{js}");
+                    serde_json::json!([1, real_top, DATA_H, st, CLIENT_H, THEAD_H, THEAD_H])
+                }
+            })
+        };
+        let mut h = Harness::with_reply(
+            Cfg {
+                virtualized: true,
+                ..Cfg::default()
+            },
+            reply,
+        );
+        h.set_active(0, "name");
+        let before = h.eval_count();
+        h.press_mod(Key::End, Modifiers::CONTROL);
+        let last = view_of(&h.state()).len() - 1;
+        assert_eq!(h.active().unwrap().row_idx, last);
+        // Estimate: thead 41 + 87 rows * 40 = 3521; bottom-align in 500px.
+        let writes: Vec<f64> = h
+            .evals_since(before)
+            .iter()
+            .filter_map(|js| script_scroll_write(js))
+            .collect();
+        assert_eq!(writes.first().copied(), Some(3061.0), "{writes:?}");
+        // Missing, then found; a write is verified by one more measurement.
+        let expected_measures = if real_top > 3500.0 { 3 } else { 2 };
+        assert_eq!(*measures.borrow(), expected_measures);
+        assert!(
+            (h.state().scroll_top - expected).abs() < 0.01,
+            "real top {real_top}: scroll_top {} expected {expected}",
+            h.state().scroll_top
+        );
+        assert!(
+            (*scroll.borrow() - expected).abs() < 0.01,
+            "DOM scrollTop {} expected {expected}",
+            scroll.borrow()
+        );
+        let reveal = h
+            .evals_since(before)
+            .into_iter()
+            .rfind(|js| js.contains("chorale:reveal-row"));
+        assert!(
+            reveal.is_some(),
+            "the measured row is revealed in outer scrollers"
+        );
+    }
+}
+
+/// Virtualized with the default header: rows render at heights other than
+/// `row_height`, so after a scroll write the window re-slices and the rows
+/// shift. The table measures again after every write and corrects.
+#[test]
+fn scroll_write_is_verified_and_corrected_after_render() {
+    let measures = Rc::new(RefCell::new(0_usize));
+    let scroll = Rc::new(RefCell::new(0.0_f64));
+    let reply: Reply = {
+        let measures = measures.clone();
+        let scroll = scroll.clone();
+        Rc::new(move |js: &str| {
+            if let Some(v) = script_scroll_write(js) {
+                *scroll.borrow_mut() = v;
+            }
+            if !js.contains("chorale:measure-row") {
+                return serde_json::Value::Null;
+            }
+            let n = {
+                let mut m = measures.borrow_mut();
+                *m += 1;
+                *m
+            };
+            let st = *scroll.borrow();
+            // Row 12 sits at 520 before the write; once the window has
+            // re-sliced it sits 10px lower (a 30px header now counted as 40).
+            let top = if n == 1 { 520.0 } else { 530.0 };
+            serde_json::json!([1, top, DATA_H, st, CLIENT_H, THEAD_H, THEAD_H])
+        })
+    };
+    let mut h = Harness::with_reply(
+        Cfg {
+            virtualized: true,
+            ..Cfg::default()
+        },
+        reply,
+    );
+    h.set_active(11, "name");
+    let before = h.eval_count();
+    h.press(Key::ArrowDown);
+    let writes: Vec<f64> = h
+        .evals_since(before)
+        .iter()
+        .filter_map(|js| script_scroll_write(js))
+        .collect();
+    // First write from the first measurement, then the correction.
+    assert_eq!(writes, vec![60.0, 70.0], "{writes:?}");
+    assert_eq!(*measures.borrow(), 3, "measure, verify, verify again");
+    assert!((h.state().scroll_top - 70.0).abs() < 0.01);
+}
+
+/// Review finding: a scroll-follow task whose row is no longer the active
+/// row (a newer key press moved the cursor) must stop writing `scrollTop`.
+#[test]
+fn stale_scroll_follow_task_stops_writing() {
+    let slot: Rc<RefCell<Option<UseTableHandle<Item>>>> = Rc::new(RefCell::new(None));
+    let scroll = Rc::new(RefCell::new(0.0_f64));
+    let reply: Reply = {
+        let slot = slot.clone();
+        let scroll = scroll.clone();
+        Rc::new(move |js: &str| {
+            if let Some(v) = script_scroll_write(js) {
+                *scroll.borrow_mut() = v;
+            }
+            if !js.contains("chorale:measure-row") {
+                return serde_json::Value::Null;
+            }
+            // While the task for row 87 measures, the cursor moves on (as a
+            // second Page Down would), and the row is not rendered yet.
+            if script_row_index(js) == Some(87) {
+                if let Some(h) = *slot.borrow() {
+                    let mut sig = h.signal();
+                    let mut s = sig.peek().clone();
+                    s.active_cell = Some(ActiveCell::new(3, ColumnId("name")));
+                    sig.set(s);
+                }
+            }
+            let st = *scroll.borrow();
+            serde_json::json!([0, 0, 0, st, CLIENT_H, THEAD_H, THEAD_H])
+        })
+    };
+    let mut h = Harness::with_reply(
+        Cfg {
+            virtualized: true,
+            ..Cfg::default()
+        },
+        reply,
+    );
+    *slot.borrow_mut() = Some(h.handle());
+    h.set_active(0, "name");
+    let before = h.eval_count();
+    h.press_mod(Key::End, Modifiers::CONTROL);
+    let writes: Vec<f64> = h
+        .evals_since(before)
+        .iter()
+        .filter_map(|js| script_scroll_write(js))
+        .collect();
+    assert!(
+        writes.is_empty(),
+        "the stale task for row 87 wrote scrollTop: {writes:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Scroll-follow is keyboard-driven only
+// ---------------------------------------------------------------------------
+
+/// A mouse or trackpad scroll (the container's native scroll event) and a
+/// focus event never run the reveal, so the view does not snap back to the
+/// active row.
+#[test]
+fn scroll_that_is_not_keyboard_driven_keeps_scroll_top() {
+    for virtualized in [false, true] {
+        let cfg = Cfg {
+            virtualized,
+            ..Cfg::default()
+        };
+        let layout = PagedLayout::new(&cfg);
+        let mut h = Harness::with_reply(cfg, layout.reply());
+        h.set_active(1, "name");
+        h.press(Key::ArrowDown);
+        let before = h.eval_count();
+        let sc = h.scroll_element();
+        h.fire("scroll", wheel_scroll(900.0), sc);
+        let kb = h.kb_element();
+        h.fire("focus", Box::new(SerializedFocusData::default()), kb);
+        h.fire("scroll", wheel_scroll(1300.0), sc);
+        let scripts = h.evals_since(before);
+        assert!(
+            !scripts.iter().any(|js| js.contains("chorale:measure-row")
+                || js.contains("chorale:reveal-row")
+                || script_scroll_write(js).is_some()),
+            "virtualized={virtualized}: a non-keyboard scroll ran scroll-follow: {scripts:?}"
+        );
+        assert!(
+            (h.state().scroll_top - 1300.0).abs() < 0.01,
+            "virtualized={virtualized}: scroll_top {}",
+            h.state().scroll_top
+        );
+        assert_eq!(h.active().map(|a| a.row_idx), Some(2));
+    }
+}
+
+/// A wheel scroll that lands while a keyboard reveal is still verifying its
+/// write (the next measurement sees a scrollTop it did not write) ends the
+/// reveal instead of scrolling back.
+#[test]
+fn wheel_scroll_during_reveal_verification_is_not_undone() {
+    let measures = Rc::new(RefCell::new(0_usize));
+    let scroll = Rc::new(RefCell::new(0.0_f64));
+    let reply: Reply = {
+        let measures = measures.clone();
+        let scroll = scroll.clone();
+        Rc::new(move |js: &str| {
+            if let Some(v) = script_scroll_write(js) {
+                *scroll.borrow_mut() = v;
+            }
+            if !js.contains("chorale:measure-row") {
+                return serde_json::Value::Null;
+            }
+            let n = {
+                let mut m = measures.borrow_mut();
+                *m += 1;
+                *m
+            };
+            if n == 2 {
+                // The user wheel-scrolled down between the write and this
+                // verification; row 12 (530..570) is now above the band
+                // [641, 1100], so a reveal would scroll back up to 489.
+                *scroll.borrow_mut() = 600.0;
+            }
+            let st = *scroll.borrow();
+            let top = if n == 1 { 520.0 } else { 530.0 };
+            serde_json::json!([1, top, DATA_H, st, CLIENT_H, THEAD_H, THEAD_H])
+        })
+    };
+    let mut h = Harness::with_reply(
+        Cfg {
+            virtualized: true,
+            ..Cfg::default()
+        },
+        reply,
+    );
+    h.set_active(11, "name");
+    let before = h.eval_count();
+    h.press(Key::ArrowDown);
+    let writes: Vec<f64> = h
+        .evals_since(before)
+        .iter()
+        .filter_map(|js| script_scroll_write(js))
+        .collect();
+    assert_eq!(
+        writes,
+        vec![60.0],
+        "the reveal fought the wheel: {writes:?}"
+    );
+    assert!((*scroll.borrow() - 600.0).abs() < 0.01);
+}
+
+// ---------------------------------------------------------------------------
+// EM review of #52 (A.4, A.6, A.9)
+// ---------------------------------------------------------------------------
+
+/// A.4: a window (or ancestor) scroll during the verification frames ends
+/// the reveal too, not only a scroll of the table's own container. The
+/// reveal script reports the outer scroll offset it left; a later
+/// measurement that reads a different one means the user scrolled.
+#[test]
+fn window_scroll_during_reveal_verification_is_not_undone() {
+    let measures = Rc::new(RefCell::new(0_usize));
+    let scroll = Rc::new(RefCell::new(0.0_f64));
+    let reply: Reply = {
+        let measures = measures.clone();
+        let scroll = scroll.clone();
+        Rc::new(move |js: &str| {
+            if let Some(v) = script_scroll_write(js) {
+                *scroll.borrow_mut() = v;
+            }
+            if js.contains("chorale:reveal-row") {
+                // Outer offset (window.scrollY plus ancestor scrollTops)
+                // after the reveal.
+                return serde_json::json!(100.0);
+            }
+            if !js.contains("chorale:measure-row") {
+                return serde_json::Value::Null;
+            }
+            let n = {
+                let mut m = measures.borrow_mut();
+                *m += 1;
+                *m
+            };
+            let st = *scroll.borrow();
+            if n == 1 {
+                serde_json::json!([1, 520.0, DATA_H, st, CLIENT_H, THEAD_H, THEAD_H, 0.0])
+            } else {
+                // The container is where the reveal left it, but the user
+                // scrolled the window by 250px since; the row also shifted.
+                serde_json::json!([1, 530.0, DATA_H, st, CLIENT_H, THEAD_H, THEAD_H, 350.0])
+            }
+        })
+    };
+    let mut h = Harness::with_reply(
+        Cfg {
+            virtualized: true,
+            ..Cfg::default()
+        },
+        reply,
+    );
+    h.set_active(11, "name");
+    let before = h.eval_count();
+    h.press(Key::ArrowDown);
+    let writes: Vec<f64> = h
+        .evals_since(before)
+        .iter()
+        .filter_map(|js| script_scroll_write(js))
+        .collect();
+    assert_eq!(
+        writes,
+        vec![60.0],
+        "the reveal fought a window scroll: {writes:?}"
+    );
+    let reveals = h
+        .evals_since(before)
+        .iter()
+        .filter(|js| js.contains("chorale:reveal-row"))
+        .count();
+    assert_eq!(reveals, 1, "no second outer reveal after the user scrolled");
+}
+
+/// A layout stand-in for an ungrouped table: every row is 40px.
+fn uniform_reply(rows: usize, scroll: Rc<RefCell<f64>>) -> Reply {
+    Rc::new(move |js: &str| {
+        if let Some(v) = script_scroll_write(js) {
+            *scroll.borrow_mut() = v;
+        }
+        if !js.contains("chorale:measure-row") {
+            return serde_json::Value::Null;
+        }
+        let st = *scroll.borrow();
+        match script_row_index(js) {
+            Some(i) if i < rows => {
+                #[allow(clippy::cast_precision_loss)]
+                let top = THEAD_H + i as f64 * DATA_H;
+                serde_json::json!([1, top, DATA_H, st, CLIENT_H, THEAD_H, THEAD_H, 0.0])
+            }
+            _ => serde_json::json!([0, 0, 0, st, CLIENT_H, THEAD_H, THEAD_H, 0.0]),
+        }
+    })
+}
+
+/// A.6: ungrouped tables get the same scroll-follow (Paged page of 50 and a
+/// large page that virtualizes), including the outer reveal.
+#[test]
+fn ungrouped_tables_keep_the_active_row_fully_visible() {
+    for page_size in [50_usize, 80] {
+        let scroll = Rc::new(RefCell::new(0.0_f64));
+        let mut h = Harness::with_reply(
+            Cfg {
+                ungrouped: true,
+                page_size: Some(page_size),
+                ..Cfg::default()
+            },
+            uniform_reply(page_size, scroll.clone()),
+        );
+        h.set_active(0, "name");
+        for _ in 1..page_size {
+            let before = h.eval_count();
+            h.press(Key::ArrowDown);
+            let i = h.active().unwrap().row_idx;
+            let st = *scroll.borrow();
+            #[allow(clippy::cast_precision_loss)]
+            let top = THEAD_H + i as f64 * DATA_H;
+            assert!(
+                top >= st + THEAD_H - 0.5 && top + DATA_H <= st + CLIENT_H + 0.5,
+                "page_size={page_size}: row {i} top {top} scroll_top {st}"
+            );
+            assert!(
+                h.evals_since(before)
+                    .iter()
+                    .any(|js| js.contains("chorale:reveal-row") && js.contains("window.scrollBy")),
+                "page_size={page_size}: row {i} is revealed in outer scrollers too"
+            );
+        }
+        h.press_mod(Key::Home, Modifiers::CONTROL);
+        assert!((*scroll.borrow()).abs() < 0.01, "page_size={page_size}");
+    }
+}
+
+/// A.9: a Tab move keeps the row revealed (grouped and ungrouped), and so
+/// does Space on a grouped data row (the review scoped Space to grouped
+/// tables; ungrouped Space is unchanged).
+#[test]
+fn tab_and_space_reveal_the_active_row() {
+    for grouped in [true, false] {
+        let cfg = Cfg {
+            ungrouped: !grouped,
+            ..Cfg::default()
+        };
+        let layout = PagedLayout::new(&cfg);
+        let reply = if grouped {
+            layout.reply()
+        } else {
+            uniform_reply(50, Rc::new(RefCell::new(0.0)))
+        };
+        let mut h = Harness::with_reply(cfg, reply);
+        h.set_active(13, "group");
+        let mut keys = vec![(Key::Tab, Modifiers::empty())];
+        if grouped {
+            keys.push((Key::Character(" ".into()), Modifiers::empty()));
+        }
+        for (key, mods) in keys {
+            let before = h.eval_count();
+            h.press_mod(key.clone(), mods);
+            assert!(
+                h.evals_since(before)
+                    .iter()
+                    .any(|js| js.contains("chorale:measure-row")),
+                "grouped={grouped}: {key:?} does not reveal the row"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EM review round 2 of #52 (M2, smooth scrolling)
+// ---------------------------------------------------------------------------
+
+/// M2: with variable row heights the VIRT-2 loop also writes `scrollTop`: it
+/// anchors the view when measured heights replace the estimates of newly
+/// rendered rows. A reveal must not read that programmatic write as a user
+/// scroll and give up.
+///
+/// Page Down from row 0 to row 79 (not rendered): the reveal scrolls to the
+/// estimate (every row 40px). The render shows rows 60 to 79, which are really
+/// 60px tall; VIRT-2 records them and anchors the view (+180px for rows 60 to
+/// 68 above the old scroll position). The row now sits lower than estimated,
+/// so the reveal's next measurement must correct to it.
+#[test]
+fn variable_height_page_down_reveal_survives_the_anchor_write() {
+    // The real layout once the tall rows are measured.
+    let real_h = |i: usize| if i >= 60 { 60.0 } else { DATA_H };
+    let top = move |i: usize| THEAD_H + (0..i).map(real_h).sum::<f64>();
+    let scroll = Rc::new(RefCell::new(0.0_f64));
+    // Armed right before Page Down, so mount-time writes do not count.
+    let armed = Rc::new(RefCell::new(false));
+    let wrote = Rc::new(RefCell::new(false));
+    let recorded = Rc::new(RefCell::new(false));
+    let measures = Rc::new(RefCell::new(0_usize));
+    let reply: Reply = {
+        let (scroll, armed, wrote, recorded, measures) = (
+            scroll.clone(),
+            armed.clone(),
+            wrote.clone(),
+            recorded.clone(),
+            measures.clone(),
+        );
+        Rc::new(move |js: &str| {
+            if let Some(v) = script_scroll_write(js) {
+                *scroll.borrow_mut() = v;
+                // Any write but VIRT-2's own anchor write.
+                if *armed.borrow() && !js.contains("if(el){el.scrollTop=") {
+                    *wrote.borrow_mut() = true;
+                }
+            }
+            if js.contains("chorale:reveal-row") {
+                return serde_json::json!(0.0);
+            }
+            if js.contains("parts.join") {
+                // The VIRT-2 measurement: after the reveal's first scroll, rows
+                // 60 to 79 are rendered and measured at their real height.
+                if !*wrote.borrow() {
+                    return serde_json::Value::String(String::new());
+                }
+                *recorded.borrow_mut() = true;
+                let parts: Vec<String> = (60..80).map(|i| format!("{i}:60")).collect();
+                return serde_json::Value::String(parts.join("\n"));
+            }
+            if !js.contains("chorale:measure-row") {
+                return serde_json::Value::Null;
+            }
+            *measures.borrow_mut() += 1;
+            let st = *scroll.borrow();
+            let i = script_row_index(js).unwrap_or(0);
+            if *recorded.borrow() {
+                serde_json::json!([1, top(i), 60.0, st, CLIENT_H, THEAD_H, THEAD_H, 0.0])
+            } else {
+                // Not rendered yet.
+                serde_json::json!([0, 0, 0, st, CLIENT_H, THEAD_H, THEAD_H, 0.0])
+            }
+        })
+    };
+    let mut h = Harness::with_reply(
+        Cfg {
+            ungrouped: true,
+            variable: true,
+            page_size: Some(80),
+            ..Cfg::default()
+        },
+        reply,
+    );
+    h.set_active(0, "name");
+    *armed.borrow_mut() = true;
+    h.press(Key::PageDown);
+    let i = h.active().unwrap().row_idx;
+    assert_eq!(i, 79);
+    let st = *scroll.borrow();
+    assert!(*recorded.borrow(), "the VIRT-2 anchor write happened");
+    assert!(
+        top(i) >= st + THEAD_H - 0.5 && top(i) + 60.0 <= st + CLIENT_H + 0.5,
+        "row {i} (top {}) left hidden at scroll_top {st} after {} measurements",
+        top(i),
+        measures.borrow()
+    );
+}
+
+/// Smooth scrolling: `scroll-behavior: smooth` on a scroller would animate a
+/// plain `scrollTop` write, and the next measurement would read a value in
+/// between as a user scroll. Every reveal write asks for an instant scroll.
+#[test]
+fn reveal_writes_bypass_smooth_scrolling() {
+    let cfg = Cfg::default();
+    let layout = PagedLayout::new(&cfg);
+    let mut h = Harness::with_reply(cfg, layout.reply());
+    h.set_active(0, "name");
+    let before = h.eval_count();
+    for _ in 0..15 {
+        h.press(Key::ArrowDown);
+    }
+    let reveals: Vec<String> = h
+        .evals_since(before)
+        .into_iter()
+        .filter(|js| js.contains("chorale:reveal-row") || js.contains("chorale:scroll-to"))
+        .collect();
+    assert!(reveals.iter().any(|js| script_scroll_write(js).is_some()));
+    for js in &reveals {
+        assert!(!js.contains("scrollTop ="), "plain scrollTop write: {js}");
+        assert!(!js.contains("scrollBy(0,"), "plain scrollBy: {js}");
+        assert!(
+            !js.contains("scrollTop -=") && !js.contains("scrollTop +="),
+            "{js}"
+        );
+        assert!(js.contains("behavior: 'instant'"), "{js}");
+    }
+}

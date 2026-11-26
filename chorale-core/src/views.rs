@@ -123,6 +123,16 @@ pub enum RenderRow<TRow: Clone> {
 ///
 /// Collapsed groups (keys in `state.collapsed_groups`) emit a `Header` row
 /// with `is_collapsed: true` and no `Data` children.
+///
+/// # Row model for keyboard navigation
+///
+/// In a grouped table this list is the one visible-row model: the header
+/// and data rows in display order. The Dioxus adapter renders row `i` of it
+/// as body row `i` and its keyboard cursor (`ActiveCell::row_idx`) indexes it,
+/// header rows included. Navigation that crosses rows (for example moving
+/// an edit to the next row, which `next_editable_cell` does not do yet)
+/// should walk this list, skipping `Header` entries where it needs data
+/// rows, rather than re-deriving indexes from `visible_view`.
 #[must_use]
 pub fn visible_grouped_view<TRow: Clone>(state: &TableState<TRow>) -> Vec<GroupedRow<TRow>> {
     let filtered_sorted = filtered_sorted_pairs(state);
